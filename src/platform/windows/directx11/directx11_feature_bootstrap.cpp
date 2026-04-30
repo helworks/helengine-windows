@@ -1,11 +1,11 @@
-#include "platform/windows/directx/directx_feature_bootstrap.hpp"
+#include "platform/windows/directx11/directx11_feature_bootstrap.hpp"
 
 #include "platform/windows/windows_feature_flags.hpp"
 #include "runtime/feature_manifest.hpp"
 
 namespace helengine::windows {
-    /// Registers the DirectX-side slices that correspond to the enabled generated-core features.
-    void DirectXFeatureBootstrap::RegisterEnabledFeatures() {
+    /// Registers the DirectX11-side slices that correspond to the enabled generated-core features.
+    void DirectX11FeatureBootstrap::RegisterEnabledFeatures() {
         std::size_t featureCount = 0;
         const HEFeatureEntry* featureEntries = he_get_feature_entries(&featureCount);
 
@@ -49,28 +49,28 @@ namespace helengine::windows {
         }
     }
 
-    /// Reserves the DirectX registration point for the shared 2D renderer.
-    void DirectXFeatureBootstrap::RegisterRender2D() {
+    /// Reserves the DirectX11 registration point for the shared 2D renderer.
+    void DirectX11FeatureBootstrap::RegisterRender2D() {
         static_assert(WindowsFeatureFlags::Render2DEnabled, "Render2D registration must stay gated by the generated feature define.");
     }
 
-    /// Reserves the DirectX registration point for sprite rendering.
-    void DirectXFeatureBootstrap::RegisterSprites() {
+    /// Reserves the DirectX11 registration point for sprite rendering.
+    void DirectX11FeatureBootstrap::RegisterSprites() {
         static_assert(WindowsFeatureFlags::SpritesEnabled, "Sprite registration must stay gated by the generated feature define.");
     }
 
-    /// Reserves the DirectX registration point for text rendering.
-    void DirectXFeatureBootstrap::RegisterText2D() {
+    /// Reserves the DirectX11 registration point for text rendering.
+    void DirectX11FeatureBootstrap::RegisterText2D() {
         static_assert(WindowsFeatureFlags::Text2DEnabled, "Text registration must stay gated by the generated feature define.");
     }
 
-    /// Reserves the DirectX registration point for shader systems.
-    void DirectXFeatureBootstrap::RegisterShaders() {
+    /// Reserves the DirectX11 registration point for shader systems.
+    void DirectX11FeatureBootstrap::RegisterShaders() {
         static_assert(WindowsFeatureFlags::ShadersEnabled, "Shader registration must stay gated by the generated feature define.");
     }
 
-    /// Reserves the DirectX registration point for the debug overlay.
-    void DirectXFeatureBootstrap::RegisterDebugOverlay() {
+    /// Reserves the DirectX11 registration point for the debug overlay.
+    void DirectX11FeatureBootstrap::RegisterDebugOverlay() {
         static_assert(WindowsFeatureFlags::DebugOverlayEnabled, "Debug overlay registration must stay gated by the generated feature define.");
     }
 }

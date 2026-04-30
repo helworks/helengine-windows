@@ -1,10 +1,10 @@
 #pragma once
 
 namespace helengine::windows {
-    /// Registers the DirectX-side slices that correspond to the enabled generated-core features.
-    class DirectXFeatureBootstrap {
+    /// Registers the DirectX11-side slices that correspond to the enabled generated-core features.
+    class DirectX11FeatureBootstrap {
     public:
-        /// Registers every DirectX subsystem that is still enabled after C++ feature pruning.
+        /// Registers every DirectX11 subsystem that is still enabled after C++ feature pruning.
         static void RegisterEnabledFeatures();
 
     private:

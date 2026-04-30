@@ -1,6 +1,6 @@
-#include "platform/windows/directx/directx_feature_bootstrap.hpp"
+#include "platform/windows/directx11/directx11_feature_bootstrap.hpp"
 
 int main() {
-    helengine::windows::DirectXFeatureBootstrap::RegisterEnabledFeatures();
+    helengine::windows::DirectX11FeatureBootstrap::RegisterEnabledFeatures();
     return 0;
 }
