@@ -4,33 +4,44 @@ project(helengine_windows LANGUAGES CXX)
 
 set(HELENGINE_CORE_CPP_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/generated/helengine.core" CACHE PATH "Path to the generated helengine.core C++ output folder.")
 set(HELENGINE_WINDOWS_RENDER_BACKEND "DirectX11" CACHE STRING "Windows rendering backend to compile.")
+option(HELENGINE_WINDOWS_INCLUDE_GENERATED_CORE "Build the Windows host with generated helengine.core sources." OFF)
 set_property(CACHE HELENGINE_WINDOWS_RENDER_BACKEND PROPERTY STRINGS DirectX11 Vulkan)
 
-if("${HELENGINE_CORE_CPP_ROOT}" STREQUAL "")
-    message(FATAL_ERROR "HELENGINE_CORE_CPP_ROOT must point at the generated helengine.core C++ output folder.")
-endif()
+if(HELENGINE_WINDOWS_INCLUDE_GENERATED_CORE)
+    if("${HELENGINE_CORE_CPP_ROOT}" STREQUAL "")
+        message(FATAL_ERROR "HELENGINE_CORE_CPP_ROOT must point at the generated helengine.core C++ output folder.")
+    endif()
 
-if(NOT EXISTS "${HELENGINE_CORE_CPP_ROOT}/helcpp_config.hpp")
-    message(FATAL_ERROR "HELENGINE_CORE_CPP_ROOT does not contain helcpp_config.hpp. Regenerate helengine.core C++ output first.")
-endif()
+    if(NOT EXISTS "${HELENGINE_CORE_CPP_ROOT}/helcpp_config.hpp")
+        message(FATAL_ERROR "HELENGINE_CORE_CPP_ROOT does not contain helcpp_config.hpp. Regenerate helengine.core C++ output first.")
+    endif()
 
-if(EXISTS "${HELENGINE_CORE_CPP_ROOT}/helengine_windows_handoff.cmake")
-    include("${HELENGINE_CORE_CPP_ROOT}/helengine_windows_handoff.cmake")
-endif()
+    if(EXISTS "${HELENGINE_CORE_CPP_ROOT}/helengine_windows_handoff.cmake")
+        include("${HELENGINE_CORE_CPP_ROOT}/helengine_windows_handoff.cmake")
+    endif()
 
-if(NOT EXISTS "${HELENGINE_CORE_CPP_ROOT}/helengine_core_unity.cpp")
-    message(FATAL_ERROR "HELENGINE_CORE_CPP_ROOT does not contain helengine_core_unity.cpp. Regenerate helengine.core C++ output first.")
+    if(NOT EXISTS "${HELENGINE_CORE_CPP_ROOT}/helengine_core_unity.cpp")
+        message(FATAL_ERROR "HELENGINE_CORE_CPP_ROOT does not contain helengine_core_unity.cpp. Regenerate helengine.core C++ output first.")
+    endif()
 endif()
 
 if(NOT HELENGINE_WINDOWS_RENDER_BACKEND STREQUAL "DirectX11")
     message(FATAL_ERROR "Only the DirectX11 bootstrap scaffold exists today. Add the Vulkan path before selecting that backend.")
 endif()
 
-add_executable(helengine_windows
-    ${HELENGINE_CORE_CPP_ROOT}/helengine_core_unity.cpp
+set(HELENGINE_WINDOWS_SOURCES
     src/main.cpp
-    src/platform/windows/directx11/directx11_feature_bootstrap.cpp
+    src/platform/windows/win32/win32_application.cpp
+    src/platform/windows/win32/win32_window.cpp
+    src/platform/windows/directx11/directx11_bootstrap.cpp
+    src/platform/windows/directx11/directx11_presenter.cpp
 )
+
+if(HELENGINE_WINDOWS_INCLUDE_GENERATED_CORE)
+    list(APPEND HELENGINE_WINDOWS_SOURCES "${HELENGINE_CORE_CPP_ROOT}/helengine_core_unity.cpp")
+endif()
+
+add_executable(helengine_windows ${HELENGINE_WINDOWS_SOURCES})
 
 target_compile_features(helengine_windows PRIVATE cxx_std_20)
 
@@ -39,7 +50,15 @@ target_compile_definitions(helengine_windows PRIVATE
     NOMINMAX
 )
 
-target_include_directories(helengine_windows PRIVATE
-    ${HELENGINE_CORE_CPP_ROOT}
-    ${CMAKE_CURRENT_SOURCE_DIR}/src
+target_include_directories(helengine_windows PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+
+if(HELENGINE_WINDOWS_INCLUDE_GENERATED_CORE)
+    target_include_directories(helengine_windows PRIVATE ${HELENGINE_CORE_CPP_ROOT})
+endif()
+
+target_link_libraries(helengine_windows PRIVATE
+    d3d11
+    dxgi
+    user32
+    gdi32
 )

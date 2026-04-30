@@ -1,6 +1,6 @@
-#include "platform/windows/directx11/directx11_feature_bootstrap.hpp"
+#include "platform/windows/win32/win32_application.hpp"
 
 int main() {
-    helengine::windows::DirectX11FeatureBootstrap::RegisterEnabledFeatures();
-    return 0;
+    helengine::windows::Win32Application application;
+    return application.Run();
 }
