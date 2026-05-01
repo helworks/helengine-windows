@@ -125,7 +125,7 @@ namespace helengine::windows {
         options->RenderList3DInitialCapacity = 64;
 
         EngineRenderManager3D = new Win32RenderManager3D(*Bootstrap);
-        EngineRenderManager2D = new Win32RenderManager2D();
+        EngineRenderManager2D = new Win32RenderManager2D(*Bootstrap);
         EngineInputManager = new Win32InputManager(MainWindow.get());
         EngineInputManager->SetKeyboardActive(true);
 

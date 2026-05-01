@@ -9,9 +9,11 @@
 #include <cstring>
 #include <fstream>
 #include <numbers>
+#include <string>
 #include <stdexcept>
 #include <vector>
 
+#include "MaterialLayoutBuilder.hpp"
 #include "platform/windows/directx11/directx11_bootstrap.hpp"
 
 namespace helengine::windows {
@@ -19,6 +21,9 @@ namespace helengine::windows {
     namespace {
         /// Tracks whether one diagnostic render snapshot has already been written.
         bool HasWrittenRenderSnapshot = false;
+
+        /// Caches uploaded textures so both the texture loader and material binder resolve the same GPU resources.
+        std::unordered_map<std::string, std::unique_ptr<Win32TextureResource>> TextureResources;
 
         /// Packs one mesh vertex into the fixed Windows DirectX11 bridge layout.
         struct Win32VertexPositionNormalUV {
@@ -148,6 +153,15 @@ float4 PSMain() : SV_TARGET {
             std::ofstream stream("C:\\dev\\helengine\\tmp\\win32-render-snapshot.log", std::ios::app);
             stream << line << '\n';
         }
+
+        /// Creates a descriptor for one default mesh vertex input layout.
+        std::vector<D3D11_INPUT_ELEMENT_DESC> BuildDefaultInputElements() {
+            std::vector<D3D11_INPUT_ELEMENT_DESC> elements;
+            elements.push_back({ "POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 0, D3D11_INPUT_PER_VERTEX_DATA, 0 });
+            elements.push_back({ "NORMAL", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 12, D3D11_INPUT_PER_VERTEX_DATA, 0 });
+            elements.push_back({ "TEXCOORD", 0, DXGI_FORMAT_R32G32_FLOAT, 0, 24, D3D11_INPUT_PER_VERTEX_DATA, 0 });
+            return elements;
+        }
     }
 
     /// Creates the native renderer bridge for one DirectX11 bootstrap.
@@ -231,12 +245,30 @@ float4 PSMain() : SV_TARGET {
     /// Builds a runtime material placeholder that keeps the packaged material identity.
     RuntimeMaterial* Win32RenderManager3D::BuildMaterialFromRaw(MaterialAsset* materialAsset, ShaderAsset* shaderAsset) {
         RuntimeMaterial* runtimeMaterial = new RuntimeMaterial();
-        if (materialAsset != nullptr) {
-            runtimeMaterial->set_Id(materialAsset->get_Id());
-        } else if (shaderAsset != nullptr) {
-            runtimeMaterial->set_Id(shaderAsset->get_Id());
+        if (materialAsset == nullptr) {
+            if (shaderAsset != nullptr) {
+                runtimeMaterial->set_Id(shaderAsset->get_Id());
+            }
+            return runtimeMaterial;
         }
 
+        if (shaderAsset == nullptr) {
+            runtimeMaterial->set_Id(materialAsset->get_Id());
+            return runtimeMaterial;
+        }
+
+        std::string materialId = materialAsset->get_Id();
+        if (materialId.empty()) {
+            materialId = shaderAsset->get_Id();
+        }
+
+        runtimeMaterial->set_Id(materialId);
+        MaterialLayout* layout = MaterialLayoutBuilder::Build(materialAsset, shaderAsset);
+        runtimeMaterial->SetLayout(layout);
+        runtimeMaterial->SetRenderState(materialAsset->RenderState);
+        runtimeMaterial->ApplyConstantBufferDefaults(materialAsset->ConstantBuffers);
+
+        MaterialShaderResources[materialId] = std::make_unique<Win32ShaderResource>(BuildShaderResource(materialAsset, shaderAsset));
         return runtimeMaterial;
     }
 
@@ -266,10 +298,9 @@ float4 PSMain() : SV_TARGET {
         ID3D11DeviceContext* context = Bootstrap.GetDeviceContext();
         context->IASetInputLayout(InputLayout.Get());
         context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-        context->VSSetShader(VertexShader.Get(), nullptr, 0);
-        context->PSSetShader(PixelShader.Get(), nullptr, 0);
         ID3D11Buffer* transformBuffer = TransformBuffer.Get();
         context->VSSetConstantBuffers(0, 1, &transformBuffer);
+        context->PSSetConstantBuffers(0, 1, &transformBuffer);
         context->RSSetState(RasterizerState.Get());
         context->OMSetDepthStencilState(DepthStencilState.Get(), 0);
 
@@ -309,6 +340,19 @@ float4 PSMain() : SV_TARGET {
         auto* model = static_cast<Win32RuntimeModel*>(modelBase);
         if (!model->VertexBuffer) {
             return;
+        }
+
+        RuntimeMaterial* runtimeMaterial = drawable->get_Material();
+        RuntimeMaterial* rootMaterial = runtimeMaterial != nullptr ? runtimeMaterial->ResolveRootMaterial() : nullptr;
+        Win32ShaderResource* shaderResource = nullptr;
+        if (rootMaterial != nullptr) {
+            std::string materialId = rootMaterial->get_Id();
+            if (!materialId.empty()) {
+                auto materialResource = MaterialShaderResources.find(materialId);
+                if (materialResource != MaterialShaderResources.end()) {
+                    shaderResource = materialResource->second.get();
+                }
+            }
         }
 
         ID3D11DeviceContext* context = Bootstrap.GetDeviceContext();
@@ -377,6 +421,17 @@ float4 PSMain() : SV_TARGET {
             HasWrittenRenderSnapshot = true;
         }
 
+        if (shaderResource != nullptr && rootMaterial != nullptr) {
+            ApplyMaterial(rootMaterial);
+        } else {
+            context->IASetInputLayout(InputLayout.Get());
+            context->VSSetShader(VertexShader.Get(), nullptr, 0);
+            context->PSSetShader(PixelShader.Get(), nullptr, 0);
+            ID3D11Buffer* transformBuffer = TransformBuffer.Get();
+            context->VSSetConstantBuffers(0, 1, &transformBuffer);
+            context->PSSetConstantBuffers(0, 1, &transformBuffer);
+        }
+
         Win32TransformConstants constants {};
         constants.World = StoreMatrix(transposedWorld);
         constants.WorldViewProjection = StoreMatrix(transposedWorldViewProjection);
@@ -399,6 +454,7 @@ float4 PSMain() : SV_TARGET {
     /// Creates the shaders, input layout, and fixed pipeline state on first use.
     void Win32RenderManager3D::EnsurePipelineState() {
         if (VertexShader && PixelShader && InputLayout && TransformBuffer && RasterizerState && DepthStencilState) {
+            EnsureTextureSamplerState();
             return;
         }
 
@@ -472,6 +528,8 @@ float4 PSMain() : SV_TARGET {
             AppendRenderSnapshotLine("transform buffer created");
         }
 
+        EnsureTextureSamplerState();
+
         D3D11_RASTERIZER_DESC rasterizerDescription {};
         rasterizerDescription.FillMode = D3D11_FILL_SOLID;
         rasterizerDescription.CullMode = D3D11_CULL_NONE;
@@ -534,6 +592,26 @@ float4 PSMain() : SV_TARGET {
         if (!HasWrittenRenderSnapshot) {
             AppendRenderSnapshotLine("diagnostic pipeline created");
         }
+    }
+
+    /// Creates the default sampler used by material texture bindings.
+    void Win32RenderManager3D::EnsureTextureSamplerState() {
+        if (TextureSamplerState) {
+            return;
+        }
+
+        D3D11_SAMPLER_DESC samplerDescription {};
+        samplerDescription.Filter = D3D11_FILTER_MIN_MAG_MIP_LINEAR;
+        samplerDescription.AddressU = D3D11_TEXTURE_ADDRESS_CLAMP;
+        samplerDescription.AddressV = D3D11_TEXTURE_ADDRESS_CLAMP;
+        samplerDescription.AddressW = D3D11_TEXTURE_ADDRESS_CLAMP;
+        samplerDescription.ComparisonFunc = D3D11_COMPARISON_NEVER;
+        samplerDescription.MinLOD = 0.0f;
+        samplerDescription.MaxLOD = D3D11_FLOAT32_MAX;
+
+        ThrowIfFailed(
+            Bootstrap.GetDevice()->CreateSamplerState(&samplerDescription, TextureSamplerState.GetAddressOf()),
+            "ID3D11Device::CreateSamplerState failed for the Windows bridge texture sampler.");
     }
 
     /// Creates the small diagnostic triangle buffer used to prove the native pipeline can draw to the back buffer.
@@ -650,6 +728,317 @@ float4 PSMain() : SV_TARGET {
         context->Draw(3, 0);
     }
 
+    /// Builds a shader resource from one packaged shader asset and material program selection.
+    Win32ShaderResource Win32RenderManager3D::BuildShaderResource(MaterialAsset* materialAsset, ShaderAsset* shaderAsset) {
+        if (materialAsset == nullptr) {
+            throw new ArgumentNullException("materialAsset");
+        }
+
+        if (shaderAsset == nullptr) {
+            throw new ArgumentNullException("shaderAsset");
+        }
+
+        if (String::IsNullOrWhiteSpace(materialAsset->VertexProgram)) {
+            throw new InvalidOperationException("Material assets must define a vertex program name.");
+        }
+
+        if (String::IsNullOrWhiteSpace(materialAsset->PixelProgram)) {
+            throw new InvalidOperationException("Material assets must define a pixel program name.");
+        }
+
+        if (String::IsNullOrWhiteSpace(materialAsset->Variant)) {
+            throw new InvalidOperationException("Material assets must define a shader variant.");
+        }
+
+        ShaderBinaryAsset* vertexBinary = GetShaderBinary(shaderAsset, materialAsset->VertexProgram, ShaderStage::Vertex, materialAsset->Variant);
+        ShaderBinaryAsset* pixelBinary = GetShaderBinary(shaderAsset, materialAsset->PixelProgram, ShaderStage::Pixel, materialAsset->Variant);
+        if (vertexBinary == nullptr || pixelBinary == nullptr) {
+            throw new InvalidOperationException("Material shader binaries could not be resolved.");
+        }
+
+        std::vector<std::string> semanticStorage;
+        std::vector<D3D11_INPUT_ELEMENT_DESC> inputElements = BuildInputElements(shaderAsset, materialAsset->VertexProgram, materialAsset->Variant, semanticStorage);
+        if (inputElements.empty()) {
+            inputElements = BuildDefaultInputElements();
+        }
+
+        Win32ShaderResource shaderResource {};
+        ThrowIfFailed(
+            Bootstrap.GetDevice()->CreateVertexShader(vertexBinary->Bytecode->Data, static_cast<SIZE_T>(vertexBinary->Bytecode->Length), nullptr, shaderResource.VertexShader.GetAddressOf()),
+            "ID3D11Device::CreateVertexShader failed for a packaged material shader.");
+        ThrowIfFailed(
+            Bootstrap.GetDevice()->CreatePixelShader(pixelBinary->Bytecode->Data, static_cast<SIZE_T>(pixelBinary->Bytecode->Length), nullptr, shaderResource.PixelShader.GetAddressOf()),
+            "ID3D11Device::CreatePixelShader failed for a packaged material shader.");
+        ThrowIfFailed(
+            Bootstrap.GetDevice()->CreateInputLayout(
+                inputElements.data(),
+                static_cast<UINT>(inputElements.size()),
+                vertexBinary->Bytecode->Data,
+                static_cast<SIZE_T>(vertexBinary->Bytecode->Length),
+                shaderResource.InputLayout.GetAddressOf()),
+            "ID3D11Device::CreateInputLayout failed for a packaged material shader.");
+        return shaderResource;
+    }
+
+    /// Builds Direct3D input elements from the vertex signature exposed by a shader program.
+    std::vector<D3D11_INPUT_ELEMENT_DESC> Win32RenderManager3D::BuildInputElements(
+        ShaderAsset* shaderAsset,
+        std::string vertexProgram,
+        std::string variant,
+        std::vector<std::string>& semanticStorage) {
+        if (shaderAsset == nullptr) {
+            throw new ArgumentNullException("shaderAsset");
+        }
+
+        if (String::IsNullOrWhiteSpace(vertexProgram)) {
+            throw new InvalidOperationException("Vertex program name must be provided.");
+        }
+
+        if (String::IsNullOrWhiteSpace(variant)) {
+            throw new InvalidOperationException("Shader variant name must be provided.");
+        }
+
+        (void)variant;
+
+        ShaderProgramAsset* vertexProgramAsset = nullptr;
+        if (shaderAsset->Programs != nullptr) {
+            for (int32_t programIndex = 0; programIndex < shaderAsset->Programs->Length; programIndex++) {
+                ShaderProgramAsset* candidate = (*shaderAsset->Programs)[programIndex];
+                if (candidate == nullptr) {
+                    continue;
+                }
+
+                if (candidate->Stage != ShaderStage::Vertex) {
+                    continue;
+                }
+
+                if (!String::Equals(candidate->Name, vertexProgram, StringComparison::Ordinal)) {
+                    continue;
+                }
+
+                vertexProgramAsset = candidate;
+                break;
+            }
+        }
+
+        if (vertexProgramAsset == nullptr || vertexProgramAsset->Inputs == nullptr || vertexProgramAsset->Inputs->Length == 0) {
+            return BuildDefaultInputElements();
+        }
+
+        std::vector<D3D11_INPUT_ELEMENT_DESC> elements;
+        elements.reserve(static_cast<std::size_t>(vertexProgramAsset->Inputs->Length));
+        semanticStorage.reserve(static_cast<std::size_t>(vertexProgramAsset->Inputs->Length));
+
+        UINT byteOffset = 0;
+        for (int32_t inputIndex = 0; inputIndex < vertexProgramAsset->Inputs->Length; inputIndex++) {
+            ShaderVertexElementAsset* element = (*vertexProgramAsset->Inputs)[inputIndex];
+            if (element == nullptr) {
+                throw new InvalidOperationException("Shader program input elements contain a null entry.");
+            }
+
+            semanticStorage.push_back(element->Semantic);
+            D3D11_INPUT_ELEMENT_DESC inputElement {};
+            inputElement.SemanticName = semanticStorage.back().c_str();
+            inputElement.SemanticIndex = static_cast<UINT>(element->Index);
+            inputElement.Format = ResolveVertexElementFormat(element->Format);
+            inputElement.InputSlot = 0;
+            inputElement.AlignedByteOffset = byteOffset;
+            inputElement.InputSlotClass = D3D11_INPUT_PER_VERTEX_DATA;
+            inputElement.InstanceDataStepRate = 0;
+            elements.push_back(inputElement);
+
+            switch (inputElement.Format) {
+                case DXGI_FORMAT_R32_FLOAT:
+                    byteOffset += 4;
+                    break;
+                case DXGI_FORMAT_R32G32_FLOAT:
+                    byteOffset += 8;
+                    break;
+                case DXGI_FORMAT_R32G32B32_FLOAT:
+                    byteOffset += 12;
+                    break;
+                case DXGI_FORMAT_R32G32B32A32_FLOAT:
+                    byteOffset += 16;
+                    break;
+                case DXGI_FORMAT_R8G8B8A8_UNORM:
+                    byteOffset += 4;
+                    break;
+                default:
+                    throw new InvalidOperationException("Unsupported vertex element format.");
+            }
+        }
+
+        return elements;
+    }
+
+    /// Resolves one shader binary for the requested shader program, stage, and variant.
+    ShaderBinaryAsset* Win32RenderManager3D::GetShaderBinary(ShaderAsset* shaderAsset, std::string programName, ShaderStage stage, std::string variant) {
+        if (shaderAsset == nullptr) {
+            throw new ArgumentNullException("shaderAsset");
+        }
+
+        if (shaderAsset->Binaries == nullptr) {
+            throw new InvalidOperationException("Shader assets must include compiled binaries.");
+        }
+
+        for (int32_t binaryIndex = 0; binaryIndex < shaderAsset->Binaries->Length; binaryIndex++) {
+            ShaderBinaryAsset* binary = (*shaderAsset->Binaries)[binaryIndex];
+            if (binary == nullptr) {
+                continue;
+            }
+
+            if (!String::Equals(binary->TargetName, shaderAsset->TargetName, StringComparison::OrdinalIgnoreCase)) {
+                continue;
+            }
+
+            if (!String::Equals(binary->ProgramName, programName, StringComparison::Ordinal)) {
+                continue;
+            }
+
+            if (binary->Stage != stage) {
+                continue;
+            }
+
+            if (!String::Equals(binary->Variant, variant, StringComparison::Ordinal)) {
+                continue;
+            }
+
+            if (binary->Bytecode == nullptr || binary->Bytecode->Length == 0) {
+                throw new InvalidOperationException("Shader binary does not include bytecode.");
+            }
+
+            return binary;
+        }
+
+        throw new InvalidOperationException("Shader binary was not found for the requested program.");
+    }
+
+    /// Resolves the DirectX input format for one shader vertex element format string.
+    DXGI_FORMAT Win32RenderManager3D::ResolveVertexElementFormat(std::string format) const {
+        if (String::Equals(format, "float", StringComparison::OrdinalIgnoreCase) ||
+            String::Equals(format, "float1", StringComparison::OrdinalIgnoreCase)) {
+            return DXGI_FORMAT_R32_FLOAT;
+        }
+
+        if (String::Equals(format, "float2", StringComparison::OrdinalIgnoreCase)) {
+            return DXGI_FORMAT_R32G32_FLOAT;
+        }
+
+        if (String::Equals(format, "float3", StringComparison::OrdinalIgnoreCase)) {
+            return DXGI_FORMAT_R32G32B32_FLOAT;
+        }
+
+        if (String::Equals(format, "float4", StringComparison::OrdinalIgnoreCase)) {
+            return DXGI_FORMAT_R32G32B32A32_FLOAT;
+        }
+
+        if (String::Equals(format, "uint4", StringComparison::OrdinalIgnoreCase)) {
+            return DXGI_FORMAT_R32G32B32A32_UINT;
+        }
+
+        if (String::Equals(format, "int4", StringComparison::OrdinalIgnoreCase)) {
+            return DXGI_FORMAT_R32G32B32A32_SINT;
+        }
+
+        throw new InvalidOperationException(std::string("Unsupported shader vertex element format: ") + format);
+    }
+
+    /// Applies the shader and resource bindings for one runtime material.
+    void Win32RenderManager3D::ApplyMaterial(RuntimeMaterial* material) {
+        if (material == nullptr) {
+            throw new ArgumentNullException("material");
+        }
+
+        RuntimeMaterial* rootMaterial = material->ResolveRootMaterial();
+        if (rootMaterial == nullptr) {
+            throw new InvalidOperationException("Runtime materials must resolve to a root material.");
+        }
+
+        std::string materialId = rootMaterial->get_Id();
+        if (materialId.empty()) {
+            throw new InvalidOperationException("Runtime materials must have an identifier before rendering.");
+        }
+
+        auto shaderResourceIt = MaterialShaderResources.find(materialId);
+        if (shaderResourceIt == MaterialShaderResources.end() || shaderResourceIt->second == nullptr) {
+            throw new InvalidOperationException(std::string("No shader resource was cached for runtime material '") + materialId + std::string("'."));
+        }
+
+        ID3D11DeviceContext* context = Bootstrap.GetDeviceContext();
+        Win32ShaderResource* shaderResource = shaderResourceIt->second.get();
+        context->IASetInputLayout(shaderResource->InputLayout.Get());
+        context->VSSetShader(shaderResource->VertexShader.Get(), nullptr, 0);
+        context->PSSetShader(shaderResource->PixelShader.Get(), nullptr, 0);
+
+        ID3D11Buffer* transformBuffer = TransformBuffer.Get();
+        context->VSSetConstantBuffers(0, 1, &transformBuffer);
+        context->PSSetConstantBuffers(0, 1, &transformBuffer);
+
+        MaterialLayout* layout = material->get_Layout();
+        MaterialPropertyBlock* properties = material->get_Properties();
+        if (layout != nullptr && properties != nullptr) {
+            Array<MaterialLayoutBinding*>* textureBindings = layout->get_TextureBindings();
+            if (textureBindings != nullptr) {
+                for (int32_t bindingIndex = 0; bindingIndex < textureBindings->Length; bindingIndex++) {
+                    MaterialLayoutBinding* binding = (*textureBindings)[bindingIndex];
+                    if (binding == nullptr) {
+                        continue;
+                    }
+
+                    BindMaterialTexture(material, bindingIndex, binding->get_Slot());
+                }
+            }
+        }
+    }
+
+    /// Binds one runtime material texture to the pixel shader if the texture has been uploaded.
+    void Win32RenderManager3D::BindMaterialTexture(RuntimeMaterial* material, int32_t bindingIndex, int32_t slot) {
+        if (material == nullptr) {
+            throw new ArgumentNullException("material");
+        }
+
+        if (bindingIndex < 0) {
+            throw new ArgumentOutOfRangeException("bindingIndex", "Binding index cannot be negative.");
+        }
+
+        if (slot < 0) {
+            throw new ArgumentOutOfRangeException("slot", "Binding slot cannot be negative.");
+        }
+
+        MaterialPropertyBlock* properties = material->get_Properties();
+        if (properties == nullptr) {
+            return;
+        }
+
+        RuntimeTexture* texture = properties->GetTexture(bindingIndex);
+        ID3D11ShaderResourceView* resourceView = ResolveTextureResourceView(texture);
+        ID3D11DeviceContext* context = Bootstrap.GetDeviceContext();
+        context->PSSetShaderResources(static_cast<UINT>(slot), 1, &resourceView);
+        if (resourceView != nullptr) {
+            ID3D11SamplerState* samplerState = TextureSamplerState.Get();
+            context->PSSetSamplers(static_cast<UINT>(slot), 1, &samplerState);
+        }
+    }
+
+    /// Resolves an uploaded shader resource view for one runtime texture.
+    ID3D11ShaderResourceView* Win32RenderManager3D::ResolveTextureResourceView(RuntimeTexture* texture) const {
+        if (texture == nullptr) {
+            return nullptr;
+        }
+
+        std::string textureId = texture->get_Id();
+        if (textureId.empty()) {
+            return nullptr;
+        }
+
+        auto resource = TextureResources.find(textureId);
+        if (resource == TextureResources.end() || resource->second == nullptr) {
+            return nullptr;
+        }
+
+        return resource->second->ShaderResourceView.Get();
+    }
+
     /// Clears the back buffer to a solid fallback color when nothing else renders.
     void Win32RenderManager3D::ClearBackBuffer(float red, float green, float blue, float alpha) {
         ID3D11RenderTargetView* renderTargetView = Bootstrap.GetRenderTargetView();
@@ -671,6 +1060,11 @@ float4 PSMain() : SV_TARGET {
         viewport.MinDepth = 0.0f;
         viewport.MaxDepth = 1.0f;
         context->RSSetViewports(1, &viewport);
+    }
+
+    /// Creates the native 2D bridge for one DirectX11 bootstrap.
+    Win32RenderManager2D::Win32RenderManager2D(DirectX11Bootstrap& bootstrap)
+        : Bootstrap(bootstrap) {
     }
 
     /// Resolves a camera viewport against the current swap-chain size.
@@ -712,6 +1106,44 @@ float4 PSMain() : SV_TARGET {
             runtimeTexture->set_Id(data->get_Id());
             runtimeTexture->set_Width(data->Width);
             runtimeTexture->set_Height(data->Height);
+
+            if (data->Colors == nullptr || data->Colors->Length == 0) {
+                throw new InvalidOperationException("Texture assets must include embedded color data.");
+            }
+
+            if (data->Width == 0 || data->Height == 0) {
+                throw new InvalidOperationException("Texture assets must define a non-zero width and height.");
+            }
+
+            D3D11_TEXTURE2D_DESC textureDescription {};
+            textureDescription.Width = static_cast<UINT>(data->Width);
+            textureDescription.Height = static_cast<UINT>(data->Height);
+            textureDescription.MipLevels = 1;
+            textureDescription.ArraySize = 1;
+            textureDescription.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+            textureDescription.SampleDesc.Count = 1;
+            textureDescription.Usage = D3D11_USAGE_DEFAULT;
+            textureDescription.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+
+            D3D11_SUBRESOURCE_DATA textureData {};
+            textureData.pSysMem = data->Colors->Data;
+            textureData.SysMemPitch = static_cast<UINT>(static_cast<UINT64>(data->Width) * 4ULL);
+
+            Win32TextureResource textureResource;
+            ThrowIfFailed(
+                Bootstrap.GetDevice()->CreateTexture2D(&textureDescription, &textureData, textureResource.Texture.GetAddressOf()),
+                "ID3D11Device::CreateTexture2D failed for a packaged texture asset.");
+
+            D3D11_SHADER_RESOURCE_VIEW_DESC resourceViewDescription {};
+            resourceViewDescription.Format = textureDescription.Format;
+            resourceViewDescription.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
+            resourceViewDescription.Texture2D.MostDetailedMip = 0;
+            resourceViewDescription.Texture2D.MipLevels = 1;
+            ThrowIfFailed(
+                Bootstrap.GetDevice()->CreateShaderResourceView(textureResource.Texture.Get(), &resourceViewDescription, textureResource.ShaderResourceView.GetAddressOf()),
+                "ID3D11Device::CreateShaderResourceView failed for a packaged texture asset.");
+
+            TextureResources[data->get_Id()] = std::make_unique<Win32TextureResource>(std::move(textureResource));
         }
 
         return runtimeTexture;
@@ -723,11 +1155,6 @@ float4 PSMain() : SV_TARGET {
 
     /// Accepts a text draw request without issuing backend rendering yet.
     void Win32RenderManager2D::DrawText(ITextDrawable2D* text) {
-    }
-
-    /// Accepts a text draw request without issuing backend rendering yet when Win32 macros rename the base contract.
-    void Win32RenderManager2D::DrawTextA(ITextDrawable2D* text) {
-        DrawText(text);
     }
 
     /// Accepts a rounded-rectangle draw request without issuing backend rendering yet.
