@@ -135,9 +135,21 @@ namespace helengine::windows {
             MainWindow->GetClientHeight());
 
         EngineCore->Initialize(EngineRenderManager3D, EngineRenderManager2D, EngineInputManager, options);
+        std::chrono::steady_clock::time_point sceneLoadStart = std::chrono::steady_clock::now();
         LoadPackagedStartupScene();
+        std::chrono::steady_clock::time_point sceneLoadEnd = std::chrono::steady_clock::now();
+        std::chrono::duration<double, std::milli> sceneLoadElapsed = sceneLoadEnd - sceneLoadStart;
         EngineInitialized = true;
         Logger::WriteLine("Core initialized.");
+        {
+            std::ostringstream messageBuilder;
+            messageBuilder << std::fixed << std::setprecision(2)
+                << "Packaged startup scene loaded in "
+                << sceneLoadElapsed.count()
+                << " ms.";
+            std::string message = messageBuilder.str();
+            WriteLifecycleLog(message.c_str());
+        }
         WriteLifecycleLog("Engine core initialized.");
 #else
         WriteLifecycleLog("Generated engine core is not included in this build.");
@@ -155,7 +167,6 @@ namespace helengine::windows {
 
         SceneAsset* startupScene = static_cast<SceneAsset*>(LoadPackagedAsset("scenes/startup.helen"));
         EngineCore->get_SceneLoadService()->Load(startupScene);
-        WriteLifecycleLog("Packaged startup scene loaded.");
 #endif
     }
 
