@@ -38,6 +38,11 @@ set(HELENGINE_WINDOWS_SOURCES
 )
 
 if(HELENGINE_WINDOWS_INCLUDE_GENERATED_CORE)
+    list(APPEND HELENGINE_WINDOWS_SOURCES
+        src/platform/windows/win32/win32_input_bridge.cpp
+        src/platform/windows/win32/win32_render_bridge.cpp
+    )
+
     list(APPEND HELENGINE_WINDOWS_SOURCES "${HELENGINE_CORE_CPP_ROOT}/helengine_core_unity.cpp")
 endif()
 

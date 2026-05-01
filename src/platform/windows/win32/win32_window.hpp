@@ -29,6 +29,9 @@ namespace helengine::windows {
         /// Gets the current client height in pixels.
         int GetClientHeight() const;
 
+        /// Returns and clears the accumulated mouse-wheel delta since the last input poll.
+        int ConsumeMouseWheelDelta();
+
     private:
         /// Handles window messages for this instance.
         LRESULT HandleMessage(UINT message, WPARAM wParam, LPARAM lParam);
@@ -53,5 +56,8 @@ namespace helengine::windows {
 
         /// Stores the native window handle.
         HWND Handle;
+
+        /// Accumulates mouse-wheel delta until the input backend consumes it.
+        int MouseWheelDelta;
     };
 }

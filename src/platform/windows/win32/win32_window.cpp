@@ -8,7 +8,8 @@ namespace helengine::windows {
         : Title(title)
         , Width(width)
         , Height(height)
-        , Handle(nullptr) {
+        , Handle(nullptr)
+        , MouseWheelDelta(0) {
     }
 
     /// Releases the native window if it is still alive.
@@ -68,11 +69,22 @@ namespace helengine::windows {
         return Height;
     }
 
+    /// Returns and clears the accumulated mouse-wheel delta since the last input poll.
+    int Win32Window::ConsumeMouseWheelDelta() {
+        int mouseWheelDelta = MouseWheelDelta;
+        MouseWheelDelta = 0;
+        return mouseWheelDelta;
+    }
+
     /// Handles window messages for this instance.
     LRESULT Win32Window::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam) {
         switch (message) {
             case WM_SIZE:
                 RefreshClientSize();
+                return 0;
+
+            case WM_MOUSEWHEEL:
+                MouseWheelDelta += GET_WHEEL_DELTA_WPARAM(wParam);
                 return 0;
 
             case WM_DESTROY:

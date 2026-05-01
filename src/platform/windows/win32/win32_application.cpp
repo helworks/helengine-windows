@@ -2,29 +2,96 @@
 
 #include <Windows.h>
 
+#ifdef DrawText
+#undef DrawText
+#endif
+
+#include <chrono>
+#include <cstdio>
+#include <filesystem>
+#include <iomanip>
+#include <iostream>
+#include <sstream>
+#include <stdexcept>
+
 #include "platform/windows/directx11/directx11_bootstrap.hpp"
 #include "platform/windows/directx11/directx11_presenter.hpp"
+#include "platform/windows/win32/win32_input_bridge.hpp"
+#include "platform/windows/win32/win32_render_bridge.hpp"
 #include "platform/windows/win32/win32_window.hpp"
+
+#if __has_include("Core.hpp")
+#include "Asset.hpp"
+#include "AssetSerializer.hpp"
+#include "Core.hpp"
+#include "Logger.hpp"
+#include "RenderManager2D.hpp"
+#include "RenderManager3D.hpp"
+#include "SceneAsset.hpp"
+#include "system/io/file.hpp"
+#endif
 
 namespace helengine::windows {
     /// Creates the application runner with no initialized native resources.
     Win32Application::Win32Application()
-        : ExitCode(0) {
+        : ExitCode(0),
+          EngineCore(nullptr),
+          EngineRenderManager3D(nullptr),
+          EngineRenderManager2D(nullptr),
+          EngineInputManager(nullptr),
+          EngineInitialized(false),
+          FrameStatisticStartTime(std::chrono::steady_clock::now()),
+          FramesSinceLastStatisticLog(0) {
     }
 
     /// Releases native bootstrap objects after the application loop finishes.
-    Win32Application::~Win32Application() = default;
+    Win32Application::~Win32Application() {
+#if __has_include("Core.hpp")
+        delete EngineCore;
+        delete EngineInputManager;
+        delete EngineRenderManager2D;
+        delete EngineRenderManager3D;
+#endif
+    }
 
     /// Boots the Win32 window and DirectX11 loop and returns the process exit code.
     int Win32Application::Run() {
-        CreateMainWindow();
-        CreateGraphicsBootstrap();
+        try {
+            InitializeConsole();
+            WriteLifecycleLog("Host startup began.");
+            CreateMainWindow();
+            CreateGraphicsBootstrap();
+            InitializeEngineCore();
+            WriteLifecycleLog("Entering render loop.");
 
-        while (PumpMessages()) {
-            RenderFrame();
+            while (PumpMessages()) {
+                RenderFrame();
+            }
+        } catch (const std::exception& exception) {
+            std::ostringstream messageBuilder;
+            messageBuilder << "Fatal host/engine exception: " << exception.what();
+            std::string message = messageBuilder.str();
+            WriteLifecycleLog(message.c_str());
+            return EXIT_FAILURE;
         }
 
+        std::ostringstream messageBuilder;
+        messageBuilder << "Host shutdown requested with exit code " << ExitCode << '.';
+        std::string message = messageBuilder.str();
+        WriteLifecycleLog(message.c_str());
         return ExitCode;
+    }
+
+    /// Attaches to the parent console or creates one so host and engine logs have a stable output target.
+    void Win32Application::InitializeConsole() {
+        if (!AttachConsole(ATTACH_PARENT_PROCESS)) {
+            AllocConsole();
+        }
+
+        FILE* stream = nullptr;
+        freopen_s(&stream, "CONOUT$", "w", stdout);
+        freopen_s(&stream, "CONOUT$", "w", stderr);
+        std::ios::sync_with_stdio(true);
     }
 
     /// Creates the main native window for the player host.
@@ -32,6 +99,7 @@ namespace helengine::windows {
         MainWindow = std::make_unique<Win32Window>(L"HelEngine Windows Host", 1280, 720);
         MainWindow->Create();
         MainWindow->Show();
+        WriteLifecycleLog("Main window loaded and shown.");
     }
 
     /// Creates the DirectX11 device and presentation resources for the main window.
@@ -41,6 +109,76 @@ namespace helengine::windows {
             MainWindow->GetClientWidth(),
             MainWindow->GetClientHeight());
         Presenter = std::make_unique<DirectX11Presenter>(*Bootstrap);
+        WriteLifecycleLog("DirectX 11 bootstrap initialized.");
+    }
+
+    /// Initializes the generated engine core when it is available in the current build.
+    void Win32Application::InitializeEngineCore() {
+#if __has_include("Core.hpp")
+        EngineCore = new Core();
+        CoreInitializationOptions* options = EngineCore->get_InitializationOptions();
+        options->ContentRootPath = ResolveApplicationDirectoryPath().string();
+        options->UpdateOrderLayers = 4;
+        options->RenderOrderLayers3D = 4;
+        options->UpdateListInitialCapacity = 64;
+        options->RenderList2DInitialCapacity = 64;
+        options->RenderList3DInitialCapacity = 64;
+
+        EngineRenderManager3D = new Win32RenderManager3D();
+        EngineRenderManager2D = new Win32RenderManager2D();
+        EngineInputManager = new Win32InputManager(MainWindow.get());
+        EngineInputManager->SetKeyboardActive(true);
+
+        EngineRenderManager3D->AddWindow(
+            reinterpret_cast<intptr_t>(MainWindow->GetHandle()),
+            MainWindow->GetClientWidth(),
+            MainWindow->GetClientHeight());
+
+        EngineCore->Initialize(EngineRenderManager3D, EngineRenderManager2D, EngineInputManager, options);
+        LoadPackagedStartupScene();
+        EngineInitialized = true;
+        Logger::WriteLine("Core initialized.");
+        WriteLifecycleLog("Engine core initialized.");
+#else
+        WriteLifecycleLog("Generated engine core is not included in this build.");
+#endif
+    }
+
+    /// Loads the packaged startup scene from the built content root when one is present.
+    void Win32Application::LoadPackagedStartupScene() {
+#if __has_include("Core.hpp")
+        std::filesystem::path startupScenePath = ResolveApplicationDirectoryPath() / "scenes" / "startup.helen";
+        if (!std::filesystem::exists(startupScenePath)) {
+            WriteLifecycleLog("No packaged startup scene was found.");
+            return;
+        }
+
+        SceneAsset* startupScene = static_cast<SceneAsset*>(LoadPackagedAsset("scenes/startup.helen"));
+        EngineCore->get_SceneLoadService()->Load(startupScene);
+        WriteLifecycleLog("Packaged startup scene loaded.");
+#endif
+    }
+
+    /// Loads one packaged serialized asset from a build-relative path.
+    Asset* Win32Application::LoadPackagedAsset(const std::string& relativePath) {
+        std::filesystem::path fullPath = ResolveApplicationDirectoryPath() / relativePath;
+        if (!std::filesystem::exists(fullPath)) {
+            throw std::runtime_error(std::string("Required packaged asset was not found: ") + fullPath.string());
+        }
+
+        FileStream* stream = File::OpenRead(fullPath.string());
+        return AssetSerializer::Deserialize(stream);
+    }
+
+    /// Resolves the current executable directory used as the packaged content root.
+    std::filesystem::path Win32Application::ResolveApplicationDirectoryPath() const {
+        wchar_t buffer[MAX_PATH];
+        DWORD length = GetModuleFileNameW(nullptr, buffer, MAX_PATH);
+        if (length == 0) {
+            throw std::runtime_error("Failed to resolve the current executable path.");
+        }
+
+        return std::filesystem::path(buffer).parent_path();
     }
 
     /// Runs one non-blocking message pump pass.
@@ -61,6 +199,64 @@ namespace helengine::windows {
 
     /// Renders and presents the current frame.
     void Win32Application::RenderFrame() {
+        int clientWidth = MainWindow->GetClientWidth();
+        int clientHeight = MainWindow->GetClientHeight();
+        if (clientWidth <= 0 || clientHeight <= 0) {
+            return;
+        }
+
+        if (Bootstrap->GetWidth() != clientWidth || Bootstrap->GetHeight() != clientHeight) {
+            Bootstrap->Resize(clientWidth, clientHeight);
+#if __has_include("Core.hpp")
+            if (EngineInitialized && EngineRenderManager3D != nullptr) {
+                EngineRenderManager3D->OnWindowResize(
+                    reinterpret_cast<intptr_t>(MainWindow->GetHandle()),
+                    clientWidth,
+                    clientHeight);
+            }
+#endif
+        }
+
+        if (EngineInitialized && EngineCore != nullptr) {
+            EngineCore->Update();
+            EngineCore->Draw();
+        }
+
         Presenter->RenderFrame();
+        UpdateFrameStatistics();
+    }
+
+    /// Writes one lifecycle message to the host console.
+    void Win32Application::WriteLifecycleLog(const char* message) const {
+        std::cout << "[Host] " << message << std::endl;
+    }
+
+    /// Updates and emits periodic frame statistics for the host loop.
+    void Win32Application::UpdateFrameStatistics() {
+        FramesSinceLastStatisticLog++;
+
+        std::chrono::steady_clock::time_point now = std::chrono::steady_clock::now();
+        std::chrono::duration<double> elapsed = now - FrameStatisticStartTime;
+        if (elapsed.count() < 5.0) {
+            return;
+        }
+
+        double seconds = elapsed.count();
+        double fps = static_cast<double>(FramesSinceLastStatisticLog) / seconds;
+        double averageFrameTimeMs = (seconds * 1000.0) / static_cast<double>(FramesSinceLastStatisticLog);
+
+        std::ostringstream messageBuilder;
+        messageBuilder << std::fixed << std::setprecision(1)
+            << "FPS: " << fps
+            << " | Avg Frame: ";
+        messageBuilder << std::setprecision(2) << averageFrameTimeMs
+            << " ms"
+            << " | Frames: " << FramesSinceLastStatisticLog;
+
+        std::string message = messageBuilder.str();
+        WriteLifecycleLog(message.c_str());
+
+        FrameStatisticStartTime = now;
+        FramesSinceLastStatisticLog = 0;
     }
 }
