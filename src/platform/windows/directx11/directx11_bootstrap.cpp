@@ -11,6 +11,7 @@ namespace helengine::windows {
         CreateDevice();
         CreateSwapChain();
         CreateRenderTargetView();
+        CreateDepthStencilView();
     }
 
     /// Releases all DirectX11 resources.
@@ -34,6 +35,48 @@ namespace helengine::windows {
     /// Gets the back-buffer render target view.
     ID3D11RenderTargetView* DirectX11Bootstrap::GetRenderTargetView() const {
         return RenderTargetView.Get();
+    }
+
+    /// Gets the back-buffer depth-stencil view.
+    ID3D11DepthStencilView* DirectX11Bootstrap::GetDepthStencilView() const {
+        return DepthStencilView.Get();
+    }
+
+    /// Gets the current swap-chain width in pixels.
+    int DirectX11Bootstrap::GetWidth() const {
+        return Width;
+    }
+
+    /// Gets the current swap-chain height in pixels.
+    int DirectX11Bootstrap::GetHeight() const {
+        return Height;
+    }
+
+    /// Recreates the back-buffer resources for a new client size.
+    void DirectX11Bootstrap::Resize(int width, int height) {
+        if (width <= 0 || height <= 0) {
+            return;
+        }
+
+        if (Width == width && Height == height) {
+            return;
+        }
+
+        ReleaseRenderTargetView();
+        ReleaseDepthStencilView();
+        ThrowIfFailed(
+            SwapChain->ResizeBuffers(
+                0,
+                static_cast<UINT>(width),
+                static_cast<UINT>(height),
+                DXGI_FORMAT_UNKNOWN,
+                0),
+            "IDXGISwapChain1::ResizeBuffers failed for the HelEngine Windows host.");
+
+        Width = width;
+        Height = height;
+        CreateRenderTargetView();
+        CreateDepthStencilView();
     }
 
     /// Creates the hardware Direct3D 11 device and immediate context.
@@ -101,6 +144,39 @@ namespace helengine::windows {
         Microsoft::WRL::ComPtr<ID3D11Texture2D> backBuffer;
         ThrowIfFailed(SwapChain->GetBuffer(0, __uuidof(ID3D11Texture2D), reinterpret_cast<void**>(backBuffer.GetAddressOf())), "IDXGISwapChain1::GetBuffer failed for the back buffer.");
         ThrowIfFailed(Device->CreateRenderTargetView(backBuffer.Get(), nullptr, RenderTargetView.GetAddressOf()), "ID3D11Device::CreateRenderTargetView failed for the back buffer.");
+    }
+
+    /// Creates the back-buffer depth-stencil resources for the current client size.
+    void DirectX11Bootstrap::CreateDepthStencilView() {
+        D3D11_TEXTURE2D_DESC depthDescription {};
+        depthDescription.Width = static_cast<UINT>(Width);
+        depthDescription.Height = static_cast<UINT>(Height);
+        depthDescription.MipLevels = 1;
+        depthDescription.ArraySize = 1;
+        depthDescription.Format = DXGI_FORMAT_D24_UNORM_S8_UINT;
+        depthDescription.SampleDesc.Count = 1;
+        depthDescription.Usage = D3D11_USAGE_DEFAULT;
+        depthDescription.BindFlags = D3D11_BIND_DEPTH_STENCIL;
+
+        ThrowIfFailed(
+            Device->CreateTexture2D(&depthDescription, nullptr, DepthStencilBuffer.GetAddressOf()),
+            "ID3D11Device::CreateTexture2D failed for the back-buffer depth buffer.");
+        ThrowIfFailed(
+            Device->CreateDepthStencilView(DepthStencilBuffer.Get(), nullptr, DepthStencilView.GetAddressOf()),
+            "ID3D11Device::CreateDepthStencilView failed for the back-buffer depth buffer.");
+    }
+
+    /// Releases the current back-buffer render target binding and view.
+    void DirectX11Bootstrap::ReleaseRenderTargetView() {
+        ID3D11RenderTargetView* nullRenderTargetView = nullptr;
+        DeviceContext->OMSetRenderTargets(1, &nullRenderTargetView, nullptr);
+        RenderTargetView.Reset();
+    }
+
+    /// Releases the current depth-stencil resources.
+    void DirectX11Bootstrap::ReleaseDepthStencilView() {
+        DepthStencilView.Reset();
+        DepthStencilBuffer.Reset();
     }
 
     /// Throws when one native DirectX call fails.

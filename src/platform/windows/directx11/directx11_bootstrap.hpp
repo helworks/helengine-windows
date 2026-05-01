@@ -27,6 +27,18 @@ namespace helengine::windows {
         /// Gets the back-buffer render target view.
         ID3D11RenderTargetView* GetRenderTargetView() const;
 
+        /// Gets the back-buffer depth-stencil view.
+        ID3D11DepthStencilView* GetDepthStencilView() const;
+
+        /// Gets the current swap-chain width in pixels.
+        int GetWidth() const;
+
+        /// Gets the current swap-chain height in pixels.
+        int GetHeight() const;
+
+        /// Recreates the back-buffer resources for a new client size.
+        void Resize(int width, int height);
+
     private:
         /// Creates the hardware Direct3D 11 device and immediate context.
         void CreateDevice();
@@ -36,6 +48,15 @@ namespace helengine::windows {
 
         /// Creates the back-buffer render target view from the swap chain.
         void CreateRenderTargetView();
+
+        /// Creates the back-buffer depth-stencil resources for the current client size.
+        void CreateDepthStencilView();
+
+        /// Releases the current back-buffer render target binding and view.
+        void ReleaseRenderTargetView();
+
+        /// Releases the current depth-stencil resources.
+        void ReleaseDepthStencilView();
 
         /// Throws when one native DirectX call fails.
         static void ThrowIfFailed(HRESULT result, const char* message);
@@ -60,5 +81,11 @@ namespace helengine::windows {
 
         /// Stores the created back-buffer render target view.
         Microsoft::WRL::ComPtr<ID3D11RenderTargetView> RenderTargetView;
+
+        /// Stores the created depth-stencil texture for the back buffer.
+        Microsoft::WRL::ComPtr<ID3D11Texture2D> DepthStencilBuffer;
+
+        /// Stores the created depth-stencil view for the back buffer.
+        Microsoft::WRL::ComPtr<ID3D11DepthStencilView> DepthStencilView;
     };
 }

@@ -63,6 +63,7 @@ endif()
 
 target_link_libraries(helengine_windows PRIVATE
     d3d11
+    d3dcompiler
     dxgi
     user32
     gdi32

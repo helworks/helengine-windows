@@ -1,0 +1,14 @@
+{
+    "version":  "0.2.0",
+    "configurations":  [
+                           {
+                               "name":  "helengine_windows generated core",
+                               "type":  "cppvsdbg",
+                               "request":  "launch",
+                               "program":  "C:\\dev\\helprojs\\city\\windows-build\\Build\\helengine_windows.exe",
+                               "cwd":  "C:\\dev\\helprojs\\city\\windows-build\\Build",
+                               "externalConsole":  false,
+                               "stopAtEntry":  true
+                           }
+                       ]
+}

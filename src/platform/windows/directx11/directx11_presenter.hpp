@@ -12,7 +12,7 @@ namespace helengine::windows {
         /// Releases the presenter without owning the bootstrap resources.
         ~DirectX11Presenter();
 
-        /// Binds the back buffer, clears to black, and presents one frame.
+        /// Presents the current swap-chain back buffer.
         void RenderFrame();
 
     private:
