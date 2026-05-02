@@ -4,7 +4,7 @@ project(helengine_windows LANGUAGES CXX)
 
 set(HELENGINE_CORE_CPP_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/generated/helengine.core" CACHE PATH "Path to the generated helengine.core C++ output folder.")
 set(HELENGINE_WINDOWS_RENDER_BACKEND "DirectX11" CACHE STRING "Windows rendering backend to compile.")
-option(HELENGINE_WINDOWS_INCLUDE_GENERATED_CORE "Build the Windows host with generated helengine.core sources." OFF)
+option(HELENGINE_WINDOWS_INCLUDE_GENERATED_CORE "Build the Windows host with generated helengine.core sources." ON)
 set_property(CACHE HELENGINE_WINDOWS_RENDER_BACKEND PROPERTY STRINGS DirectX11 Vulkan)
 
 if(HELENGINE_WINDOWS_INCLUDE_GENERATED_CORE)

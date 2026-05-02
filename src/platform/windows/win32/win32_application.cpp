@@ -28,6 +28,7 @@
 #include "RenderManager2D.hpp"
 #include "RenderManager3D.hpp"
 #include "SceneAsset.hpp"
+#include "runtime/native_exceptions.hpp"
 #include "system/io/file.hpp"
 #endif
 
@@ -58,6 +59,7 @@ namespace helengine::windows {
     int Win32Application::Run() {
         try {
             InitializeConsole();
+            InitializeFileLog();
             WriteLifecycleLog("Host startup began.");
             CreateMainWindow();
             CreateGraphicsBootstrap();
@@ -67,6 +69,13 @@ namespace helengine::windows {
             while (PumpMessages()) {
                 RenderFrame();
             }
+        } catch (Exception* exception) {
+            std::ostringstream messageBuilder;
+            messageBuilder << "Fatal host/engine exception: " << (exception != nullptr ? exception->what() : "null");
+            std::string message = messageBuilder.str();
+            WriteLifecycleLog(message.c_str());
+            delete exception;
+            return EXIT_FAILURE;
         } catch (const std::exception& exception) {
             std::ostringstream messageBuilder;
             messageBuilder << "Fatal host/engine exception: " << exception.what();
@@ -92,6 +101,17 @@ namespace helengine::windows {
         freopen_s(&stream, "CONOUT$", "w", stdout);
         freopen_s(&stream, "CONOUT$", "w", stderr);
         std::ios::sync_with_stdio(true);
+    }
+
+    /// Opens the lifecycle log file beside the executable for crash diagnostics.
+    void Win32Application::InitializeFileLog() {
+        std::filesystem::path logPath = ResolveLogFilePath();
+        std::filesystem::create_directories(logPath.parent_path());
+        LifecycleLogFile.open(logPath, std::ios::out | std::ios::trunc);
+        if (LifecycleLogFile.is_open()) {
+            LifecycleLogFile << "[Host] Lifecycle log opened at " << logPath.string() << '\n';
+            LifecycleLogFile.flush();
+        }
     }
 
     /// Creates the main native window for the player host.
@@ -136,7 +156,17 @@ namespace helengine::windows {
 
         EngineCore->Initialize(EngineRenderManager3D, EngineRenderManager2D, EngineInputManager, options);
         std::chrono::steady_clock::time_point sceneLoadStart = std::chrono::steady_clock::now();
-        LoadPackagedStartupScene();
+        try {
+            WriteLifecycleLog("Loading packaged startup scene.");
+            LoadPackagedStartupScene();
+            WriteLifecycleLog("Packaged startup scene load completed.");
+        } catch (const std::exception& exception) {
+            std::ostringstream messageBuilder;
+            messageBuilder << "Packaged startup scene load failed: " << exception.what();
+            std::string message = messageBuilder.str();
+            WriteLifecycleLog(message.c_str());
+            throw;
+        }
         std::chrono::steady_clock::time_point sceneLoadEnd = std::chrono::steady_clock::now();
         std::chrono::duration<double, std::milli> sceneLoadElapsed = sceneLoadEnd - sceneLoadStart;
         EngineInitialized = true;
@@ -160,6 +190,12 @@ namespace helengine::windows {
     void Win32Application::LoadPackagedStartupScene() {
 #if __has_include("Core.hpp")
         std::filesystem::path startupScenePath = ResolveApplicationDirectoryPath() / "scenes" / "startup.helen";
+        {
+            std::ostringstream messageBuilder;
+            messageBuilder << "Startup scene path resolved to '" << startupScenePath.string() << "'.";
+            std::string message = messageBuilder.str();
+            WriteLifecycleLog(message.c_str());
+        }
         if (!std::filesystem::exists(startupScenePath)) {
             WriteLifecycleLog("No packaged startup scene was found.");
             return;
@@ -172,13 +208,28 @@ namespace helengine::windows {
 
     /// Loads one packaged serialized asset from a build-relative path.
     Asset* Win32Application::LoadPackagedAsset(const std::string& relativePath) {
+#if __has_include("Core.hpp")
         std::filesystem::path fullPath = ResolveApplicationDirectoryPath() / relativePath;
+        {
+            std::ostringstream messageBuilder;
+            messageBuilder << "Loading packaged asset '" << fullPath.string() << "'.";
+            std::string message = messageBuilder.str();
+            WriteLifecycleLog(message.c_str());
+        }
         if (!std::filesystem::exists(fullPath)) {
             throw std::runtime_error(std::string("Required packaged asset was not found: ") + fullPath.string());
         }
 
         FileStream* stream = File::OpenRead(fullPath.string());
-        return AssetSerializer::Deserialize(stream);
+        WriteLifecycleLog("Packaged asset file opened.");
+        WriteLifecycleLog("Deserializing packaged asset.");
+        Asset* asset = AssetSerializer::Deserialize(stream);
+        WriteLifecycleLog("Packaged asset load completed.");
+        return asset;
+#else
+        (void)relativePath;
+        throw std::runtime_error("Generated engine core is not included in this Windows build.");
+#endif
     }
 
     /// Resolves the current executable directory used as the packaged content root.
@@ -190,6 +241,11 @@ namespace helengine::windows {
         }
 
         return std::filesystem::path(buffer).parent_path();
+    }
+
+    /// Resolves the lifecycle log file path beside the executable.
+    std::filesystem::path Win32Application::ResolveLogFilePath() const {
+        return ResolveApplicationDirectoryPath() / "helengine_windows.startup.log";
     }
 
     /// Runs one non-blocking message pump pass.
@@ -229,8 +285,10 @@ namespace helengine::windows {
         }
 
         if (EngineInitialized && EngineCore != nullptr) {
+#if __has_include("Core.hpp")
             EngineCore->Update();
             EngineCore->Draw();
+#endif
         }
 
         Presenter->RenderFrame();
@@ -240,6 +298,10 @@ namespace helengine::windows {
     /// Writes one lifecycle message to the host console.
     void Win32Application::WriteLifecycleLog(const char* message) const {
         std::cout << "[Host] " << message << std::endl;
+        if (LifecycleLogFile.is_open()) {
+            LifecycleLogFile << "[Host] " << message << '\n';
+            LifecycleLogFile.flush();
+        }
     }
 
     /// Updates and emits periodic frame statistics for the host loop.

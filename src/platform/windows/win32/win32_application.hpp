@@ -3,6 +3,7 @@
 #include <chrono>
 #include <cstdint>
 #include <filesystem>
+#include <fstream>
 #include <memory>
 #include <string>
 
@@ -46,6 +47,9 @@ namespace helengine::windows {
         /// Attaches to the parent console or creates one so host and engine logs have a stable output target.
         void InitializeConsole();
 
+        /// Opens the per-run lifecycle log file beside the executable.
+        void InitializeFileLog();
+
         /// Initializes the generated engine core when it is available in the current build.
         void InitializeEngineCore();
 
@@ -57,6 +61,9 @@ namespace helengine::windows {
 
         /// Resolves the current executable directory used as the packaged content root.
         std::filesystem::path ResolveApplicationDirectoryPath() const;
+
+        /// Resolves the lifecycle log file path beside the executable.
+        std::filesystem::path ResolveLogFilePath() const;
 
         /// Runs one non-blocking message pump pass.
         bool PumpMessages();
@@ -102,5 +109,8 @@ namespace helengine::windows {
 
         /// Counts frames presented since the last FPS log flush.
         std::uint32_t FramesSinceLastStatisticLog;
+
+        /// Streams lifecycle logs into a file beside the executable for crash debugging.
+        mutable std::ofstream LifecycleLogFile;
     };
 }

@@ -1,19 +1,12 @@
 # HelEngine Windows Host
 
-This repository contains the native Windows host for HelEngine.
+This repository contains the native Windows host for HelEngine and the Windows platform builder assembly used by the editor.
 
-## Support Policy
+## Builder Output
 
-- Supported runtime operating systems: `Windows 10` and `Windows 11`
-- Supported build host operating systems: `Windows 10 x64` or newer
-- Unsupported operating systems: `Windows 7`, `Windows 8`, and `Windows 8.1`
+The Windows builder assembly lives under `builder/` and is loaded dynamically by the editor through `user_settings/platforms.json`.
 
-## Rendering Backend Policy
-
-- Current Windows host direction: `DirectX 11`
-- Planned later backend: `Vulkan`
-
-The current repository only contains the DirectX11-side bootstrap scaffold. The real renderer implementation is still to be added.
+The builder exposes the Windows platform metadata that the editor needs to render build profiles, graphics profiles, and platform-specific options without hardcoding Windows-specific knowledge in the editor process.
 
 ## Generated Core Contract
 
