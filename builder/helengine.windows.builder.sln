@@ -1,0 +1,31 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 18
+VisualStudioVersion = 18.5.11723.231
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "helengine.windows.builder", "helengine.windows.builder.csproj", "{FB55CB6C-FB4B-2798-3B44-410CA7426FAA}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "helengine.baseplatform", "..\..\helengine\engine\helengine.baseplatform\helengine.baseplatform.csproj", "{66F9599B-6DDF-27FE-2A0C-ABA5E2C19012}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{FB55CB6C-FB4B-2798-3B44-410CA7426FAA}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{FB55CB6C-FB4B-2798-3B44-410CA7426FAA}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{FB55CB6C-FB4B-2798-3B44-410CA7426FAA}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{FB55CB6C-FB4B-2798-3B44-410CA7426FAA}.Release|Any CPU.Build.0 = Release|Any CPU
+		{66F9599B-6DDF-27FE-2A0C-ABA5E2C19012}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{66F9599B-6DDF-27FE-2A0C-ABA5E2C19012}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{66F9599B-6DDF-27FE-2A0C-ABA5E2C19012}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{66F9599B-6DDF-27FE-2A0C-ABA5E2C19012}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ExtensibilityGlobals) = postSolution
+		SolutionGuid = {D11A297C-D0FE-4754-B7F3-C8CB7712E6D2}
+	EndGlobalSection
+EndGlobal

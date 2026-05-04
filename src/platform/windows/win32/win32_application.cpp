@@ -28,6 +28,7 @@
 #include "RenderManager2D.hpp"
 #include "RenderManager3D.hpp"
 #include "SceneAsset.hpp"
+#include "runtime/runtime_startup_manifest.hpp"
 #include "runtime/native_exceptions.hpp"
 #include "system/io/file.hpp"
 #endif
@@ -39,7 +40,7 @@ namespace helengine::windows {
           EngineCore(nullptr),
           EngineRenderManager3D(nullptr),
           EngineRenderManager2D(nullptr),
-          EngineInputManager(nullptr),
+          EngineInputBackend(nullptr),
           EngineInitialized(false),
           FrameStatisticStartTime(std::chrono::steady_clock::now()),
           FramesSinceLastStatisticLog(0) {
@@ -49,7 +50,7 @@ namespace helengine::windows {
     Win32Application::~Win32Application() {
 #if __has_include("Core.hpp")
         delete EngineCore;
-        delete EngineInputManager;
+        delete EngineInputBackend;
         delete EngineRenderManager2D;
         delete EngineRenderManager3D;
 #endif
@@ -146,15 +147,14 @@ namespace helengine::windows {
 
         EngineRenderManager3D = new Win32RenderManager3D(*Bootstrap);
         EngineRenderManager2D = new Win32RenderManager2D(*Bootstrap);
-        EngineInputManager = new Win32InputManager(MainWindow.get());
-        EngineInputManager->SetKeyboardActive(true);
+        EngineInputBackend = new Win32InputBackend(MainWindow.get());
 
         EngineRenderManager3D->AddWindow(
             reinterpret_cast<intptr_t>(MainWindow->GetHandle()),
             MainWindow->GetClientWidth(),
             MainWindow->GetClientHeight());
 
-        EngineCore->Initialize(EngineRenderManager3D, EngineRenderManager2D, EngineInputManager, options);
+        EngineCore->Initialize(EngineRenderManager3D, EngineRenderManager2D, EngineInputBackend, options);
         std::chrono::steady_clock::time_point sceneLoadStart = std::chrono::steady_clock::now();
         try {
             WriteLifecycleLog("Loading packaged startup scene.");
@@ -189,7 +189,13 @@ namespace helengine::windows {
     /// Loads the packaged startup scene from the built content root when one is present.
     void Win32Application::LoadPackagedStartupScene() {
 #if __has_include("Core.hpp")
-        std::filesystem::path startupScenePath = ResolveApplicationDirectoryPath() / "scenes" / "startup.helen";
+        const char* startupSceneRelativePath = he_get_runtime_startup_scene_relative_path();
+        if (startupSceneRelativePath == nullptr || startupSceneRelativePath[0] == '\0') {
+            WriteLifecycleLog("No packaged startup scene was configured.");
+            return;
+        }
+
+        std::filesystem::path startupScenePath = ResolveApplicationDirectoryPath() / startupSceneRelativePath;
         {
             std::ostringstream messageBuilder;
             messageBuilder << "Startup scene path resolved to '" << startupScenePath.string() << "'.";
@@ -201,7 +207,7 @@ namespace helengine::windows {
             return;
         }
 
-        SceneAsset* startupScene = static_cast<SceneAsset*>(LoadPackagedAsset("scenes/startup.helen"));
+        SceneAsset* startupScene = static_cast<SceneAsset*>(LoadPackagedAsset(startupSceneRelativePath));
         EngineCore->get_SceneLoadService()->Load(startupScene);
 #endif
     }

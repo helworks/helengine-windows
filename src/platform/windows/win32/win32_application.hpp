@@ -11,6 +11,7 @@ class CameraClearSettings;
 class CameraComponent;
 class Asset;
 class Core;
+class FontAsset;
 class MeshComponent;
 class RenderManager2D;
 class RenderManager3D;
@@ -20,7 +21,7 @@ class float4;
 namespace helengine::windows {
     class DirectX11Bootstrap;
     class DirectX11Presenter;
-    class Win32InputManager;
+    class Win32InputBackend;
     class Win32RenderManager2D;
     class Win32RenderManager3D;
     class Win32Window;
@@ -98,8 +99,8 @@ namespace helengine::windows {
         /// Stores the generated 2D render manager used by the engine core.
         Win32RenderManager2D* EngineRenderManager2D;
 
-        /// Stores the generated input manager used by the engine core.
-        Win32InputManager* EngineInputManager;
+        /// Stores the generated input backend used by the engine core.
+        Win32InputBackend* EngineInputBackend;
 
         /// Tracks whether the generated engine core finished initialization.
         bool EngineInitialized;
