@@ -129,6 +129,21 @@ public static class WindowsPlatformDefinitionFactory {
                     "helengine.textcomponent",
                     PlatformComponentCompatibilityKind.Transform,
                     "Font references are rewritten during packaging.",
+                    string.Empty),
+                new PlatformComponentCompatibilityDefinition(
+                    "helengine.directionallightcomponent",
+                    PlatformComponentCompatibilityKind.PassThrough,
+                    "Directional light payloads are emitted unchanged for runtime light extraction.",
+                    string.Empty),
+                new PlatformComponentCompatibilityDefinition(
+                    "helengine.pointlightcomponent",
+                    PlatformComponentCompatibilityKind.PassThrough,
+                    "Point light payloads are emitted unchanged for runtime light extraction.",
+                    string.Empty),
+                new PlatformComponentCompatibilityDefinition(
+                    "helengine.spotlightcomponent",
+                    PlatformComponentCompatibilityKind.PassThrough,
+                    "Spot light payloads are emitted unchanged for runtime light extraction.",
                     string.Empty)
             ],
             [
@@ -180,3 +195,4 @@ public static class WindowsPlatformDefinitionFactory {
             ]);
     }
 }
+

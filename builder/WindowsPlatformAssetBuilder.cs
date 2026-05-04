@@ -3,6 +3,7 @@ using helengine.baseplatform.Definitions;
 using helengine.baseplatform.Descriptors;
 using helengine.baseplatform.Reporting;
 using helengine.baseplatform.Requests;
+using helengine.baseplatform.Results;
 
 namespace helengine.windows.builder;
 
@@ -45,6 +46,19 @@ public sealed class WindowsPlatformAssetBuilder : IPlatformAssetBuilder {
     public PlatformDefinition Definition { get; }
 
     /// <summary>
+    /// Returns the builder-owned cooked material payload for one Windows material schema request.
+    /// </summary>
+    /// <param name="request">Material translation request to process.</param>
+    /// <returns>Cooked material payload and shader dependencies for the request.</returns>
+    public PlatformMaterialCookResult CookMaterial(PlatformMaterialCookRequest request) {
+        if (request == null) {
+            throw new ArgumentNullException(nameof(request));
+        }
+
+        throw new InvalidOperationException("Windows material cooking is not implemented by this builder yet.");
+    }
+
+    /// <summary>
     /// Executes one Windows build request through the staged payload workspace.
     /// </summary>
     /// <param name="request">The resolved build request.</param>
@@ -75,3 +89,5 @@ public sealed class WindowsPlatformAssetBuilder : IPlatformAssetBuilder {
             ["debug", "release"]);
     }
 }
+
+

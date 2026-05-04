@@ -89,7 +89,7 @@ internal sealed class WindowsNativeBuildExecutor : IWindowsNativeBuildExecutor {
     static string BuildConfigureArguments(string repositoryRoot, string buildRoot, string generatedCoreCppRootPath, string vsDevCmdPath) {
         return string.Join(" ", [
             "/c",
-            $"call \"{vsDevCmdPath}\" && cmake -S \"{repositoryRoot}\" -B \"{buildRoot}\" -G Ninja -DHELENGINE_WINDOWS_INCLUDE_GENERATED_CORE=ON -DHELENGINE_CORE_CPP_ROOT=\"{generatedCoreCppRootPath}\" -DHELENGINE_WINDOWS_RENDER_BACKEND=DirectX11"
+            $"call \"{vsDevCmdPath}\" -arch=amd64 -host_arch=amd64 && cmake -S \"{repositoryRoot}\" -B \"{buildRoot}\" -G Ninja -DHELENGINE_WINDOWS_INCLUDE_GENERATED_CORE=ON -DHELENGINE_CORE_CPP_ROOT=\"{generatedCoreCppRootPath}\" -DHELENGINE_WINDOWS_RENDER_BACKEND=DirectX11"
         ]);
     }
 
@@ -99,7 +99,7 @@ internal sealed class WindowsNativeBuildExecutor : IWindowsNativeBuildExecutor {
     static string BuildNativeBuildArguments(string buildRoot, string vsDevCmdPath) {
         return string.Join(" ", [
             "/c",
-            $"call \"{vsDevCmdPath}\" && cmake --build \"{buildRoot}\" --config Release"
+            $"call \"{vsDevCmdPath}\" -arch=amd64 -host_arch=amd64 && cmake --build \"{buildRoot}\" --config Release"
         ]);
     }
 
