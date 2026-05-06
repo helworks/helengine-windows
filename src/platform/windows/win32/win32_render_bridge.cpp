@@ -5,8 +5,10 @@
 #include <DirectXMath.h>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstring>
+#include <filesystem>
 #include <fstream>
 #include <numbers>
 #include <string>
@@ -21,6 +23,30 @@ namespace helengine::windows {
     namespace {
         /// Tracks whether one diagnostic render snapshot has already been written.
         bool HasWrittenRenderSnapshot = false;
+
+        /// Tracks whether one native 2D summary has already been written.
+        bool HasWritten2DSummary = false;
+
+        /// Tracks whether one native 2D draw call has already been written.
+        bool HasWritten2DDraw = false;
+
+        /// Counts 2D visitor dispatches for the first logged frame.
+        int Logged2DVisitCount = 0;
+
+        /// Counts 2D rounded-rect draws for the first logged frame.
+        int Logged2DRectCount = 0;
+
+        /// Counts 2D text draws for the first logged frame.
+        int Logged2DTextCount = 0;
+
+        /// Counts 2D sprite draws for the first logged frame.
+        int Logged2DSpriteCount = 0;
+
+        /// Counts text draws that returned before issuing any glyph quads.
+        int Logged2DTextEarlyReturnCount = 0;
+
+        /// Tracks generated identifiers for embedded runtime textures that do not carry an authored asset id.
+        uint64_t GeneratedTextureResourceId = 0;
 
         /// Caches uploaded textures so both the texture loader and material binder resolve the same GPU resources.
         std::unordered_map<std::string, std::unique_ptr<Win32TextureResource>> TextureResources;
@@ -132,6 +158,52 @@ float4 PSMain() : SV_TARGET {
 }
 )";
 
+        /// Packs one native 2D quad vertex in clip space.
+        struct Win32QuadVertex {
+            DirectX::XMFLOAT3 Position;
+            DirectX::XMFLOAT2 UV;
+            DirectX::XMFLOAT4 Color;
+        };
+
+        /// Vertex shader used by the native 2D quad pass.
+        constexpr const char* QuadVertexShaderSource = R"(
+struct VSInput {
+    float3 Position : POSITION;
+    float2 UV : TEXCOORD0;
+    float4 Color : COLOR0;
+};
+
+struct PSInput {
+    float4 Position : SV_POSITION;
+    float2 UV : TEXCOORD0;
+    float4 Color : COLOR0;
+};
+
+PSInput VSMain(VSInput input) {
+    PSInput output;
+    output.Position = float4(input.Position, 1.0f);
+    output.UV = input.UV;
+    output.Color = input.Color;
+    return output;
+}
+)";
+
+        /// Pixel shader used by the native 2D quad pass.
+        constexpr const char* QuadPixelShaderSource = R"(
+Texture2D DiffuseTexture : register(t0);
+SamplerState DiffuseSampler : register(s0);
+
+struct PSInput {
+    float4 Position : SV_POSITION;
+    float2 UV : TEXCOORD0;
+    float4 Color : COLOR0;
+};
+
+float4 PSMain(PSInput input) : SV_TARGET {
+    return DiffuseTexture.Sample(DiffuseSampler, input.UV) * input.Color;
+}
+)";
+
         /// Throws when one native DirectX operation fails.
         void ThrowIfFailed(HRESULT result, const char* message) {
             if (FAILED(result)) {
@@ -148,10 +220,46 @@ float4 PSMain() : SV_TARGET {
                 value.M41, value.M42, value.M43, value.M44);
         }
 
+        /// Converts one packed HelEngine color into normalized DirectX shader color channels.
+        DirectX::XMFLOAT4 ConvertColor(byte4 color) {
+            return DirectX::XMFLOAT4(
+                static_cast<float>(color.X) / 255.0f,
+                static_cast<float>(color.Y) / 255.0f,
+                static_cast<float>(color.Z) / 255.0f,
+                static_cast<float>(color.W) / 255.0f);
+        }
+
         /// Appends one one-line message to the temporary Windows render snapshot log.
         void AppendRenderSnapshotLine(const std::string& line) {
             std::ofstream stream("C:\\dev\\helengine\\tmp\\win32-render-snapshot.log", std::ios::app);
             stream << line << '\n';
+        }
+
+        /// Resolves one diagnostics log path beside the packaged executable.
+        std::filesystem::path ResolveRenderDiagnosticsLogPath() {
+            wchar_t buffer[MAX_PATH];
+            DWORD length = GetModuleFileNameW(nullptr, buffer, MAX_PATH);
+            if (length == 0) {
+                return std::filesystem::path("helengine_windows.render.log");
+            }
+
+            return std::filesystem::path(buffer).parent_path() / "helengine_windows.render.log";
+        }
+
+        /// Appends one line to the packaged Windows render diagnostics log.
+        void AppendRenderDiagnosticsLine(const std::string& line) {
+            std::ofstream stream(ResolveRenderDiagnosticsLogPath(), std::ios::app);
+            if (!stream.is_open()) {
+                return;
+            }
+
+            stream << line << '\n';
+        }
+
+        /// Builds one stable generated identifier for a runtime texture that was created from embedded raw data.
+        std::string BuildGeneratedTextureResourceId() {
+            GeneratedTextureResourceId++;
+            return "__generated_runtime_texture_" + std::to_string(GeneratedTextureResourceId);
         }
 
         /// Creates a descriptor for one default mesh vertex input layout.
@@ -278,6 +386,7 @@ float4 PSMain() : SV_TARGET {
         EnsurePipelineState();
         if (!HasWrittenRenderSnapshot) {
             AppendRenderSnapshotLine("draw begin");
+            AppendRenderDiagnosticsLine("3d.draw begin");
         }
 
         if (Core::get_Instance() == nullptr || Core::get_Instance()->get_ObjectManager() == nullptr) {
@@ -293,6 +402,7 @@ float4 PSMain() : SV_TARGET {
 
         if (!HasWrittenRenderSnapshot) {
             AppendRenderSnapshotLine("camera count=" + std::to_string(cameras->Count()));
+            AppendRenderDiagnosticsLine("3d.camera_count=" + std::to_string(cameras->Count()));
         }
 
         ID3D11DeviceContext* context = Bootstrap.GetDeviceContext();
@@ -667,6 +777,14 @@ float4 PSMain() : SV_TARGET {
 
         const D3D11_VIEWPORT viewport = ResolveViewport(camera);
         context->RSSetViewports(1, &viewport);
+        if (!HasWritten2DSummary) {
+            AppendRenderDiagnosticsLine(
+                "3d.render_camera viewport="
+                + std::to_string(viewport.TopLeftX) + ","
+                + std::to_string(viewport.TopLeftY) + ","
+                + std::to_string(viewport.Width) + ","
+                + std::to_string(viewport.Height));
+        }
 
         Entity* cameraParent = camera->get_Parent();
         float3 cameraPosition = cameraParent->get_Position();
@@ -701,6 +819,11 @@ float4 PSMain() : SV_TARGET {
         IRenderQueue3D* renderQueue = camera->get_RenderQueue3D();
         if (renderQueue != nullptr) {
             renderQueue->VisitOrdered(this);
+        }
+
+        Win32RenderManager2D* renderManager2D = static_cast<Win32RenderManager2D*>(Core::get_Instance()->get_RenderManager2D());
+        if (renderManager2D != nullptr) {
+            renderManager2D->RenderCamera(camera);
         }
     }
 
@@ -1067,6 +1190,350 @@ float4 PSMain() : SV_TARGET {
         : Bootstrap(bootstrap) {
     }
 
+    /// Creates the DirectX11 shaders, buffers, and fixed pipeline state needed for 2D rendering.
+    void Win32RenderManager2D::EnsurePipelineState() {
+        if (QuadVertexBuffer && QuadInputLayout && QuadVertexShader && QuadPixelShader && TextureSamplerState && AlphaBlendState && RasterizerState && DepthStencilState && WhiteShaderResourceView) {
+            return;
+        }
+
+        ID3D11Device* device = Bootstrap.GetDevice();
+        if (device == nullptr) {
+            throw std::runtime_error("DirectX11 device must exist before initializing the native 2D bridge.");
+        }
+
+        Microsoft::WRL::ComPtr<ID3DBlob> vertexShaderBytecode;
+        Microsoft::WRL::ComPtr<ID3DBlob> pixelShaderBytecode;
+        Microsoft::WRL::ComPtr<ID3DBlob> compileErrors;
+
+        ThrowIfFailed(
+            D3DCompile(
+                QuadVertexShaderSource,
+                std::strlen(QuadVertexShaderSource),
+                nullptr,
+                nullptr,
+                nullptr,
+                "VSMain",
+                "vs_4_0",
+                0,
+                0,
+                vertexShaderBytecode.GetAddressOf(),
+                compileErrors.GetAddressOf()),
+            "D3DCompile failed for the Windows 2D vertex shader.");
+
+        compileErrors.Reset();
+        ThrowIfFailed(
+            D3DCompile(
+                QuadPixelShaderSource,
+                std::strlen(QuadPixelShaderSource),
+                nullptr,
+                nullptr,
+                nullptr,
+                "PSMain",
+                "ps_4_0",
+                0,
+                0,
+                pixelShaderBytecode.GetAddressOf(),
+                compileErrors.GetAddressOf()),
+            "D3DCompile failed for the Windows 2D pixel shader.");
+
+        ThrowIfFailed(
+            device->CreateVertexShader(
+                vertexShaderBytecode->GetBufferPointer(),
+                vertexShaderBytecode->GetBufferSize(),
+                nullptr,
+                QuadVertexShader.GetAddressOf()),
+            "ID3D11Device::CreateVertexShader failed for the Windows 2D vertex shader.");
+
+        ThrowIfFailed(
+            device->CreatePixelShader(
+                pixelShaderBytecode->GetBufferPointer(),
+                pixelShaderBytecode->GetBufferSize(),
+                nullptr,
+                QuadPixelShader.GetAddressOf()),
+            "ID3D11Device::CreatePixelShader failed for the Windows 2D pixel shader.");
+
+        const D3D11_INPUT_ELEMENT_DESC inputElements[] = {
+            { "POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 0, D3D11_INPUT_PER_VERTEX_DATA, 0 },
+            { "TEXCOORD", 0, DXGI_FORMAT_R32G32_FLOAT, 0, 12, D3D11_INPUT_PER_VERTEX_DATA, 0 },
+            { "COLOR", 0, DXGI_FORMAT_R32G32B32A32_FLOAT, 0, 20, D3D11_INPUT_PER_VERTEX_DATA, 0 }
+        };
+
+        ThrowIfFailed(
+            device->CreateInputLayout(
+                inputElements,
+                static_cast<UINT>(std::size(inputElements)),
+                vertexShaderBytecode->GetBufferPointer(),
+                vertexShaderBytecode->GetBufferSize(),
+                QuadInputLayout.GetAddressOf()),
+            "ID3D11Device::CreateInputLayout failed for the Windows 2D quad pipeline.");
+
+        D3D11_BUFFER_DESC vertexBufferDescription {};
+        vertexBufferDescription.ByteWidth = static_cast<UINT>(sizeof(Win32QuadVertex) * 4U);
+        vertexBufferDescription.Usage = D3D11_USAGE_DYNAMIC;
+        vertexBufferDescription.BindFlags = D3D11_BIND_VERTEX_BUFFER;
+        vertexBufferDescription.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
+
+        ThrowIfFailed(
+            device->CreateBuffer(&vertexBufferDescription, nullptr, QuadVertexBuffer.GetAddressOf()),
+            "ID3D11Device::CreateBuffer failed for the Windows 2D quad vertex buffer.");
+
+        D3D11_SAMPLER_DESC samplerDescription {};
+        samplerDescription.Filter = D3D11_FILTER_MIN_MAG_MIP_POINT;
+        samplerDescription.AddressU = D3D11_TEXTURE_ADDRESS_CLAMP;
+        samplerDescription.AddressV = D3D11_TEXTURE_ADDRESS_CLAMP;
+        samplerDescription.AddressW = D3D11_TEXTURE_ADDRESS_CLAMP;
+        samplerDescription.ComparisonFunc = D3D11_COMPARISON_NEVER;
+        samplerDescription.MinLOD = 0.0f;
+        samplerDescription.MaxLOD = D3D11_FLOAT32_MAX;
+
+        ThrowIfFailed(
+            device->CreateSamplerState(&samplerDescription, TextureSamplerState.GetAddressOf()),
+            "ID3D11Device::CreateSamplerState failed for the Windows 2D sampler state.");
+
+        D3D11_BLEND_DESC blendDescription {};
+        blendDescription.RenderTarget[0].BlendEnable = TRUE;
+        blendDescription.RenderTarget[0].SrcBlend = D3D11_BLEND_SRC_ALPHA;
+        blendDescription.RenderTarget[0].DestBlend = D3D11_BLEND_INV_SRC_ALPHA;
+        blendDescription.RenderTarget[0].BlendOp = D3D11_BLEND_OP_ADD;
+        blendDescription.RenderTarget[0].SrcBlendAlpha = D3D11_BLEND_ONE;
+        blendDescription.RenderTarget[0].DestBlendAlpha = D3D11_BLEND_ZERO;
+        blendDescription.RenderTarget[0].BlendOpAlpha = D3D11_BLEND_OP_ADD;
+        blendDescription.RenderTarget[0].RenderTargetWriteMask = D3D11_COLOR_WRITE_ENABLE_ALL;
+
+        ThrowIfFailed(
+            device->CreateBlendState(&blendDescription, AlphaBlendState.GetAddressOf()),
+            "ID3D11Device::CreateBlendState failed for the Windows 2D alpha blend state.");
+
+        D3D11_RASTERIZER_DESC rasterizerDescription {};
+        rasterizerDescription.FillMode = D3D11_FILL_SOLID;
+        rasterizerDescription.CullMode = D3D11_CULL_NONE;
+        rasterizerDescription.DepthClipEnable = FALSE;
+
+        ThrowIfFailed(
+            device->CreateRasterizerState(&rasterizerDescription, RasterizerState.GetAddressOf()),
+            "ID3D11Device::CreateRasterizerState failed for the Windows 2D rasterizer state.");
+
+        D3D11_DEPTH_STENCIL_DESC depthStencilDescription {};
+        depthStencilDescription.DepthEnable = FALSE;
+        depthStencilDescription.DepthWriteMask = D3D11_DEPTH_WRITE_MASK_ZERO;
+        depthStencilDescription.DepthFunc = D3D11_COMPARISON_ALWAYS;
+
+        ThrowIfFailed(
+            device->CreateDepthStencilState(&depthStencilDescription, DepthStencilState.GetAddressOf()),
+            "ID3D11Device::CreateDepthStencilState failed for the Windows 2D depth state.");
+
+        const uint32_t whitePixel = 0xFFFFFFFFu;
+        D3D11_TEXTURE2D_DESC whiteTextureDescription {};
+        whiteTextureDescription.Width = 1;
+        whiteTextureDescription.Height = 1;
+        whiteTextureDescription.MipLevels = 1;
+        whiteTextureDescription.ArraySize = 1;
+        whiteTextureDescription.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+        whiteTextureDescription.SampleDesc.Count = 1;
+        whiteTextureDescription.Usage = D3D11_USAGE_DEFAULT;
+        whiteTextureDescription.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+
+        D3D11_SUBRESOURCE_DATA whiteTextureData {};
+        whiteTextureData.pSysMem = &whitePixel;
+        whiteTextureData.SysMemPitch = sizeof(uint32_t);
+
+        ThrowIfFailed(
+            device->CreateTexture2D(&whiteTextureDescription, &whiteTextureData, WhiteTexture.GetAddressOf()),
+            "ID3D11Device::CreateTexture2D failed for the Windows 2D white texture.");
+
+        D3D11_SHADER_RESOURCE_VIEW_DESC whiteResourceViewDescription {};
+        whiteResourceViewDescription.Format = whiteTextureDescription.Format;
+        whiteResourceViewDescription.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
+        whiteResourceViewDescription.Texture2D.MostDetailedMip = 0;
+        whiteResourceViewDescription.Texture2D.MipLevels = 1;
+
+        ThrowIfFailed(
+            device->CreateShaderResourceView(WhiteTexture.Get(), &whiteResourceViewDescription, WhiteShaderResourceView.GetAddressOf()),
+            "ID3D11Device::CreateShaderResourceView failed for the Windows 2D white texture.");
+    }
+
+    /// Resolves one camera viewport against the current swap-chain size.
+    D3D11_VIEWPORT Win32RenderManager2D::ResolveViewport(ICamera* camera) const {
+        if (camera == nullptr) {
+            throw new ArgumentNullException("camera");
+        }
+
+        const float4 rawViewport = camera->get_Viewport();
+        float offsetX = rawViewport.X;
+        float offsetY = rawViewport.Y;
+        float width = rawViewport.Z;
+        float height = rawViewport.W;
+
+        if (width <= 1.0f && height <= 1.0f && width > 0.0f && height > 0.0f) {
+            offsetX *= static_cast<float>(Bootstrap.GetWidth());
+            offsetY *= static_cast<float>(Bootstrap.GetHeight());
+            width *= static_cast<float>(Bootstrap.GetWidth());
+            height *= static_cast<float>(Bootstrap.GetHeight());
+        }
+
+        if (width <= 0.0f || height <= 0.0f) {
+            offsetX = 0.0f;
+            offsetY = 0.0f;
+            width = static_cast<float>(Bootstrap.GetWidth());
+            height = static_cast<float>(Bootstrap.GetHeight());
+        }
+
+        D3D11_VIEWPORT viewport {};
+        viewport.TopLeftX = offsetX;
+        viewport.TopLeftY = offsetY;
+        viewport.Width = width;
+        viewport.Height = height;
+        viewport.MinDepth = 0.0f;
+        viewport.MaxDepth = 1.0f;
+        return viewport;
+    }
+
+    /// Resolves an uploaded shader resource view for one runtime texture.
+    ID3D11ShaderResourceView* Win32RenderManager2D::ResolveTextureResourceView(RuntimeTexture* texture) const {
+        if (texture == nullptr) {
+            return nullptr;
+        }
+
+        std::string textureId = texture->get_Id();
+        if (textureId.empty()) {
+            return nullptr;
+        }
+
+        auto resource = TextureResources.find(textureId);
+        if (resource == TextureResources.end() || resource->second == nullptr) {
+            return nullptr;
+        }
+
+        return resource->second->ShaderResourceView.Get();
+    }
+
+    /// Configures the DirectX11 state used by one textured quad draw.
+    void Win32RenderManager2D::PrepareTexturedQuadDraw(ID3D11ShaderResourceView* textureView) {
+        EnsurePipelineState();
+
+        ID3D11DeviceContext* context = Bootstrap.GetDeviceContext();
+        ID3D11RenderTargetView* renderTargetView = Bootstrap.GetRenderTargetView();
+        ID3D11DepthStencilView* depthStencilView = Bootstrap.GetDepthStencilView();
+        context->OMSetRenderTargets(1, &renderTargetView, depthStencilView);
+        context->RSSetViewports(1, &CurrentViewport);
+        context->RSSetState(RasterizerState.Get());
+        context->OMSetDepthStencilState(DepthStencilState.Get(), 0);
+
+        const float blendFactor[] = { 0.0f, 0.0f, 0.0f, 0.0f };
+        context->OMSetBlendState(AlphaBlendState.Get(), blendFactor, 0xFFFFFFFFu);
+        context->IASetInputLayout(QuadInputLayout.Get());
+        context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP);
+        const UINT stride = sizeof(Win32QuadVertex);
+        const UINT offset = 0;
+        ID3D11Buffer* quadVertexBuffer = QuadVertexBuffer.Get();
+        context->IASetVertexBuffers(0, 1, &quadVertexBuffer, &stride, &offset);
+        context->VSSetShader(QuadVertexShader.Get(), nullptr, 0);
+        context->PSSetShader(QuadPixelShader.Get(), nullptr, 0);
+        context->PSSetShaderResources(0, 1, &textureView);
+        ID3D11SamplerState* samplerState = TextureSamplerState.Get();
+        context->PSSetSamplers(0, 1, &samplerState);
+    }
+
+    /// Draws one textured quad in window-space pixel coordinates.
+    void Win32RenderManager2D::DrawTexturedQuad(
+        ID3D11ShaderResourceView* textureView,
+        float x,
+        float y,
+        float width,
+        float height,
+        float4 sourceRect,
+        byte4 color) {
+        if (!HasActiveViewport || textureView == nullptr || width <= 0.0f || height <= 0.0f || CurrentViewport.Width <= 0.0f || CurrentViewport.Height <= 0.0f) {
+            return;
+        }
+
+        PrepareTexturedQuadDraw(textureView);
+
+        const float leftNdc = (((x - CurrentViewport.TopLeftX) / CurrentViewport.Width) * 2.0f) - 1.0f;
+        const float rightNdc = ((((x + width) - CurrentViewport.TopLeftX) / CurrentViewport.Width) * 2.0f) - 1.0f;
+        const float topNdc = 1.0f - (((y - CurrentViewport.TopLeftY) / CurrentViewport.Height) * 2.0f);
+        const float bottomNdc = 1.0f - ((((y + height) - CurrentViewport.TopLeftY) / CurrentViewport.Height) * 2.0f);
+        const DirectX::XMFLOAT4 tint = ConvertColor(color);
+
+        std::array<Win32QuadVertex, 4> vertices = {
+            Win32QuadVertex { DirectX::XMFLOAT3(leftNdc, bottomNdc, 0.0f), DirectX::XMFLOAT2(sourceRect.X, sourceRect.Y + sourceRect.W), tint },
+            Win32QuadVertex { DirectX::XMFLOAT3(leftNdc, topNdc, 0.0f), DirectX::XMFLOAT2(sourceRect.X, sourceRect.Y), tint },
+            Win32QuadVertex { DirectX::XMFLOAT3(rightNdc, bottomNdc, 0.0f), DirectX::XMFLOAT2(sourceRect.X + sourceRect.Z, sourceRect.Y + sourceRect.W), tint },
+            Win32QuadVertex { DirectX::XMFLOAT3(rightNdc, topNdc, 0.0f), DirectX::XMFLOAT2(sourceRect.X + sourceRect.Z, sourceRect.Y), tint }
+        };
+
+        ID3D11DeviceContext* context = Bootstrap.GetDeviceContext();
+        D3D11_MAPPED_SUBRESOURCE mappedResource {};
+        ThrowIfFailed(
+            context->Map(QuadVertexBuffer.Get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mappedResource),
+            "ID3D11DeviceContext::Map failed for the Windows 2D quad vertex buffer.");
+        std::memcpy(mappedResource.pData, vertices.data(), sizeof(Win32QuadVertex) * vertices.size());
+        context->Unmap(QuadVertexBuffer.Get(), 0);
+        context->Draw(4, 0);
+    }
+
+    /// Draws one solid-color rectangle in window-space pixel coordinates.
+    void Win32RenderManager2D::DrawSolidRect(float x, float y, float width, float height, byte4 color) {
+        DrawTexturedQuad(WhiteShaderResourceView.Get(), x, y, width, height, float4(0.0f, 0.0f, 1.0f, 1.0f), color);
+    }
+
+    /// Draws every queued 2D drawable for one camera.
+    void Win32RenderManager2D::RenderCamera(ICamera* camera) {
+        if (camera == nullptr) {
+            throw new ArgumentNullException("camera");
+        }
+
+        Entity* cameraParent = camera->get_Parent();
+        if (cameraParent == nullptr || !cameraParent->get_IsHierarchyEnabled()) {
+            return;
+        }
+
+        IRenderQueue2D* renderQueue = camera->get_RenderQueue2D();
+        if (renderQueue == nullptr) {
+            return;
+        }
+
+        CurrentViewport = ResolveViewport(camera);
+        HasActiveViewport = true;
+        if (!HasWritten2DSummary) {
+            AppendRenderDiagnosticsLine(
+                "2d.render_camera queue_count=" + std::to_string(renderQueue->get_Count())
+                + " viewport="
+                + std::to_string(CurrentViewport.TopLeftX) + ","
+                + std::to_string(CurrentViewport.TopLeftY) + ","
+                + std::to_string(CurrentViewport.Width) + ","
+                + std::to_string(CurrentViewport.Height));
+        }
+        renderQueue->VisitOrdered(this);
+        if (!HasWritten2DSummary) {
+            AppendRenderDiagnosticsLine(
+                "2d.summary visits=" + std::to_string(Logged2DVisitCount)
+                + " rects=" + std::to_string(Logged2DRectCount)
+                + " texts=" + std::to_string(Logged2DTextCount)
+                + " sprites=" + std::to_string(Logged2DSpriteCount)
+                + " text_early_returns=" + std::to_string(Logged2DTextEarlyReturnCount));
+            HasWritten2DSummary = true;
+        }
+        HasActiveViewport = false;
+    }
+
+    /// Visits one queued 2D drawable and lets it dispatch into the concrete draw methods.
+    void Win32RenderManager2D::Visit(IDrawable2D* drawable) {
+        if (drawable == nullptr) {
+            return;
+        }
+
+        if (!HasWritten2DSummary) {
+            Logged2DVisitCount++;
+        }
+
+        if (!HasWritten2DDraw) {
+            AppendRenderDiagnosticsLine("2d.visit drawable");
+        }
+
+        drawable->Draw();
+    }
+
     /// Resolves a camera viewport against the current swap-chain size.
     D3D11_VIEWPORT Win32RenderManager3D::ResolveViewport(ICamera* camera) const {
         const float4 rawViewport = camera->get_Viewport();
@@ -1103,7 +1570,12 @@ float4 PSMain() : SV_TARGET {
     RuntimeTexture* Win32RenderManager2D::BuildTextureFromRaw(TextureAsset* data) {
         RuntimeTexture* runtimeTexture = new RuntimeTexture();
         if (data != nullptr) {
-            runtimeTexture->set_Id(data->get_Id());
+            std::string textureId = data->get_Id();
+            if (textureId.empty()) {
+                textureId = BuildGeneratedTextureResourceId();
+            }
+
+            runtimeTexture->set_Id(textureId);
             runtimeTexture->set_Width(data->Width);
             runtimeTexture->set_Height(data->Height);
 
@@ -1143,7 +1615,7 @@ float4 PSMain() : SV_TARGET {
                 Bootstrap.GetDevice()->CreateShaderResourceView(textureResource.Texture.Get(), &resourceViewDescription, textureResource.ShaderResourceView.GetAddressOf()),
                 "ID3D11Device::CreateShaderResourceView failed for a packaged texture asset.");
 
-            TextureResources[data->get_Id()] = std::make_unique<Win32TextureResource>(std::move(textureResource));
+            TextureResources[textureId] = std::make_unique<Win32TextureResource>(std::move(textureResource));
         }
 
         return runtimeTexture;
@@ -1151,14 +1623,164 @@ float4 PSMain() : SV_TARGET {
 
     /// Accepts a sprite draw request without issuing backend rendering yet.
     void Win32RenderManager2D::DrawSprite(ISpriteDrawable2D* sprite) {
+        if (sprite == nullptr || sprite->get_Parent() == nullptr || !sprite->get_Parent()->get_IsHierarchyEnabled()) {
+            return;
+        }
+
+        if (!HasWritten2DSummary) {
+            Logged2DSpriteCount++;
+        }
+
+        RuntimeTexture* texture = sprite->get_Texture();
+        if (texture == nullptr) {
+            return;
+        }
+
+        ID3D11ShaderResourceView* textureView = ResolveTextureResourceView(texture);
+        if (textureView == nullptr) {
+            return;
+        }
+
+        int2* size = sprite->get_Size();
+        const float width = size != nullptr && size->X > 0 ? static_cast<float>(size->X) : static_cast<float>(texture->get_Width());
+        const float height = size != nullptr && size->Y > 0 ? static_cast<float>(size->Y) : static_cast<float>(texture->get_Height());
+        const float3 position = sprite->get_Parent()->get_Position();
+        if (!HasWritten2DDraw) {
+            AppendRenderDiagnosticsLine(
+                "2d.draw_sprite pos="
+                + std::to_string(position.X) + ","
+                + std::to_string(position.Y)
+                + " size="
+                + std::to_string(width) + ","
+                + std::to_string(height));
+            HasWritten2DDraw = true;
+        }
+        DrawTexturedQuad(textureView, position.X, position.Y, width, height, sprite->get_SourceRect(), sprite->get_Color());
     }
 
     /// Accepts a text draw request without issuing backend rendering yet.
     void Win32RenderManager2D::DrawText(ITextDrawable2D* text) {
+        if (text == nullptr || text->get_Parent() == nullptr || !text->get_Parent()->get_IsHierarchyEnabled()) {
+            return;
+        }
+
+        if (!HasWritten2DSummary) {
+            Logged2DTextCount++;
+        }
+
+        FontAsset* font = text->get_Font();
+        if (font == nullptr || font->get_Texture() == nullptr || font->get_Characters() == nullptr) {
+            if (!HasWritten2DSummary) {
+                Logged2DTextEarlyReturnCount++;
+            }
+            return;
+        }
+
+        ID3D11ShaderResourceView* textureView = ResolveTextureResourceView(font->get_Texture());
+        if (textureView == nullptr) {
+            if (!HasWritten2DSummary) {
+                Logged2DTextEarlyReturnCount++;
+            }
+            return;
+        }
+
+        std::string value = text->get_Text();
+        if (value.empty()) {
+            if (!HasWritten2DSummary) {
+                Logged2DTextEarlyReturnCount++;
+            }
+            return;
+        }
+
+        const float3 position = text->get_Parent()->get_Position();
+        const double baseX = std::round(position.X);
+        const double baseY = std::round(position.Y);
+        const double lineHeight = std::max(static_cast<double>(font->get_LineHeight()), 1.0);
+        const float atlasWidth = static_cast<float>(std::max(font->get_AtlasWidth(), 1));
+        const float atlasHeight = static_cast<float>(std::max(font->get_AtlasHeight(), 1));
+        const float spaceWidth = font->get_FontInfo() != nullptr ? font->get_FontInfo()->get_SpaceWidth() : 0.0f;
+        double offsetX = 0.0;
+        double offsetY = 0.0;
+
+        for (char character : value) {
+            if (character == '\n') {
+                offsetY += lineHeight;
+                offsetX = 0.0;
+                continue;
+            }
+
+            if (character == ' ') {
+                offsetX += spaceWidth;
+                continue;
+            }
+
+            FontChar glyph;
+            if (!font->get_Characters()->TryGetValue(character, glyph)) {
+                continue;
+            }
+
+            const float4 sourceRect = glyph.SourceRect;
+            const float glyphWidth = sourceRect.Z * atlasWidth;
+            const float glyphHeight = sourceRect.W * atlasHeight;
+            const float drawX = static_cast<float>(baseX + offsetX);
+            const float drawY = static_cast<float>(baseY + std::round(offsetY) + glyph.OffsetY);
+            if (!HasWritten2DDraw) {
+                AppendRenderDiagnosticsLine(
+                    "2d.draw_text glyph pos="
+                    + std::to_string(drawX) + ","
+                    + std::to_string(drawY)
+                    + " size="
+                    + std::to_string(glyphWidth) + ","
+                    + std::to_string(glyphHeight));
+                HasWritten2DDraw = true;
+            }
+            DrawTexturedQuad(textureView, drawX, drawY, glyphWidth, glyphHeight, sourceRect, text->get_Color());
+
+            const double advance = glyph.AdvanceWidth > 0.0f ? glyph.AdvanceWidth : glyphWidth;
+            offsetX += advance;
+        }
     }
 
     /// Accepts a rounded-rectangle draw request without issuing backend rendering yet.
     void Win32RenderManager2D::DrawRoundedRect(IRoundedRectDrawable2D* shape) {
+        if (shape == nullptr || shape->get_Parent() == nullptr || !shape->get_Parent()->get_IsHierarchyEnabled()) {
+            return;
+        }
+
+        if (!HasWritten2DSummary) {
+            Logged2DRectCount++;
+        }
+
+        int2* size = shape->get_Size();
+        if (size == nullptr || size->X <= 0 || size->Y <= 0) {
+            return;
+        }
+
+        const float3 position = shape->get_Parent()->get_Position();
+        const float width = static_cast<float>(size->X);
+        const float height = static_cast<float>(size->Y);
+        if (!HasWritten2DDraw) {
+            AppendRenderDiagnosticsLine(
+                "2d.draw_rect pos="
+                + std::to_string(position.X) + ","
+                + std::to_string(position.Y)
+                + " size="
+                + std::to_string(width) + ","
+                + std::to_string(height));
+            HasWritten2DDraw = true;
+        }
+        DrawSolidRect(position.X, position.Y, width, height, shape->get_FillColor());
+
+        const float borderThickness = std::max(shape->get_BorderThickness(), 0.0f);
+        if (borderThickness <= 0.0f) {
+            return;
+        }
+
+        const float clampedBorderThickness = std::min(borderThickness, std::min(width, height) * 0.5f);
+        DrawSolidRect(position.X, position.Y, width, clampedBorderThickness, shape->get_BorderColor());
+        DrawSolidRect(position.X, position.Y + height - clampedBorderThickness, width, clampedBorderThickness, shape->get_BorderColor());
+        DrawSolidRect(position.X, position.Y + clampedBorderThickness, clampedBorderThickness, std::max(0.0f, height - (clampedBorderThickness * 2.0f)), shape->get_BorderColor());
+        DrawSolidRect(position.X + width - clampedBorderThickness, position.Y + clampedBorderThickness, clampedBorderThickness, std::max(0.0f, height - (clampedBorderThickness * 2.0f)), shape->get_BorderColor());
     }
 #endif
 }

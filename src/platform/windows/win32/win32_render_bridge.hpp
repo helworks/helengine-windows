@@ -15,6 +15,7 @@
 #if __has_include("RenderManager2D.hpp")
 #include "Core.hpp"
 #include "ICamera.hpp"
+#include "IRenderVisitor2D.hpp"
 #include "IDrawable3D.hpp"
 #include "IRenderVisitor3D.hpp"
 #include "IRoundedRectDrawable2D.hpp"
@@ -184,8 +185,8 @@ namespace helengine::windows {
 
     };
 
-    /// Provides a minimal native 2D renderer bridge so the generated core can initialize on Windows.
-    class Win32RenderManager2D : public RenderManager2D {
+    /// Provides a native 2D renderer bridge that can draw packaged sprites, text, and UI shapes on Windows.
+    class Win32RenderManager2D : public RenderManager2D, public IRenderVisitor2D {
     public:
         /// Creates the native 2D bridge for one DirectX11 bootstrap.
         explicit Win32RenderManager2D(DirectX11Bootstrap& bootstrap);
@@ -193,18 +194,85 @@ namespace helengine::windows {
         /// Builds a placeholder runtime texture from raw asset metadata.
         RuntimeTexture* BuildTextureFromRaw(TextureAsset* data) override;
 
-        /// Accepts a sprite draw request without issuing backend rendering yet.
+        /// Draws every queued 2D drawable for one camera.
+        void RenderCamera(ICamera* camera);
+
+        /// Visits one queued 2D drawable and lets it dispatch into the concrete draw methods.
+        void Visit(IDrawable2D* drawable) override;
+
+        /// Draws one sprite directly into the active camera viewport.
         void DrawSprite(ISpriteDrawable2D* sprite) override;
 
-        /// Accepts a text draw request without issuing backend rendering yet.
-        void DrawText(ITextDrawable2D* text);
+        /// Draws one text string directly into the active camera viewport.
+        void DrawText(ITextDrawable2D* text) override;
 
-        /// Accepts a rounded-rectangle draw request without issuing backend rendering yet.
+        /// Draws one UI shape directly into the active camera viewport.
         void DrawRoundedRect(IRoundedRectDrawable2D* shape) override;
 
     private:
+        /// Creates the DirectX11 shaders, buffers, and fixed pipeline state needed for 2D rendering.
+        void EnsurePipelineState();
+
+        /// Resolves one camera viewport against the current swap-chain size.
+        D3D11_VIEWPORT ResolveViewport(ICamera* camera) const;
+
+        /// Resolves an uploaded shader resource view for one runtime texture.
+        ID3D11ShaderResourceView* ResolveTextureResourceView(RuntimeTexture* texture) const;
+
+        /// Configures the DirectX11 state used by one textured quad draw.
+        void PrepareTexturedQuadDraw(ID3D11ShaderResourceView* textureView);
+
+        /// Draws one textured quad in window-space pixel coordinates.
+        void DrawTexturedQuad(
+            ID3D11ShaderResourceView* textureView,
+            float x,
+            float y,
+            float width,
+            float height,
+            float4 sourceRect,
+            byte4 color);
+
+        /// Draws one solid-color rectangle in window-space pixel coordinates.
+        void DrawSolidRect(float x, float y, float width, float height, byte4 color);
+
         /// Stores the DirectX11 bootstrap used for texture uploads.
         DirectX11Bootstrap& Bootstrap;
+
+        /// Stores the dynamic quad vertex buffer reused by every 2D draw call.
+        Microsoft::WRL::ComPtr<ID3D11Buffer> QuadVertexBuffer;
+
+        /// Stores the input layout used by the 2D quad shader pipeline.
+        Microsoft::WRL::ComPtr<ID3D11InputLayout> QuadInputLayout;
+
+        /// Stores the fixed 2D quad vertex shader.
+        Microsoft::WRL::ComPtr<ID3D11VertexShader> QuadVertexShader;
+
+        /// Stores the fixed 2D quad pixel shader.
+        Microsoft::WRL::ComPtr<ID3D11PixelShader> QuadPixelShader;
+
+        /// Stores the default sampler used by sprite and text draws.
+        Microsoft::WRL::ComPtr<ID3D11SamplerState> TextureSamplerState;
+
+        /// Stores the alpha-blend state used by 2D UI draws.
+        Microsoft::WRL::ComPtr<ID3D11BlendState> AlphaBlendState;
+
+        /// Stores the rasterizer state used by 2D draws.
+        Microsoft::WRL::ComPtr<ID3D11RasterizerState> RasterizerState;
+
+        /// Stores the disabled-depth state used by 2D overlay draws.
+        Microsoft::WRL::ComPtr<ID3D11DepthStencilState> DepthStencilState;
+
+        /// Stores the 1x1 white texture used for solid-color rectangle draws.
+        Microsoft::WRL::ComPtr<ID3D11Texture2D> WhiteTexture;
+
+        /// Stores the shader resource view for the 1x1 white texture.
+        Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> WhiteShaderResourceView;
+
+        /// Stores the currently active 2D camera viewport.
+        D3D11_VIEWPORT CurrentViewport {};
+
+        /// Tracks whether a 2D camera pass is currently active.
+        bool HasActiveViewport = false;
     };
 #endif
 }

@@ -54,7 +54,7 @@ if(HELENGINE_WINDOWS_INCLUDE_GENERATED_CORE)
     endif()
 endif()
 
-add_executable(helengine_windows ${HELENGINE_WINDOWS_SOURCES})
+add_executable(helengine_windows WIN32 ${HELENGINE_WINDOWS_SOURCES})
 
 target_compile_features(helengine_windows PRIVATE cxx_std_20)
 
