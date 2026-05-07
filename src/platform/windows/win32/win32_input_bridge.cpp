@@ -20,7 +20,18 @@ namespace helengine::windows {
         , ScrollWheelAccumulator(0)
         , State()
         , PointerWrapEnabled(false)
+        , ReceiveInputInBackground(false)
         , PointerWrapDeltaOffset() {
+    }
+
+    /// Returns whether the backend continues reporting input while the host window is inactive.
+    bool Win32InputBackend::get_ReceiveInputInBackground() {
+        return ReceiveInputInBackground;
+    }
+
+    /// Updates whether the backend continues reporting input while the host window is inactive.
+    void Win32InputBackend::set_ReceiveInputInBackground(bool value) {
+        ReceiveInputInBackground = value;
     }
 
     /// Captures one input frame from the current Windows host state.
@@ -33,6 +44,10 @@ namespace helengine::windows {
 
     /// Reads the current keyboard state from Win32 keyboard APIs.
     KeyboardState Win32InputBackend::CaptureKeyboardState() {
+        if (!ReceiveInputInBackground && Window != nullptr && Window->GetHandle() != nullptr && !IsWindowForegroundActive(Window->GetHandle())) {
+            return KeyboardState();
+        }
+
         List<Keys>* pressedKeys = new List<Keys>();
         std::array<BYTE, 256> keyStates {};
         if (::GetKeyboardState(keyStates.data())) {
@@ -73,7 +88,7 @@ namespace helengine::windows {
         State.set_Y(cursorPoint.y);
         ApplyPointerWrap(windowHandle);
 
-        if (!IsWindowForegroundActive(windowHandle)) {
+        if (!ReceiveInputInBackground && !IsWindowForegroundActive(windowHandle)) {
             ReleaseAllButtons();
             return State;
         }

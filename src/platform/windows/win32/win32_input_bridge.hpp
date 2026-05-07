@@ -22,8 +22,14 @@ namespace helengine::windows {
         /// Creates a backend bound to the host window.
         explicit Win32InputBackend(Win32Window* window);
 
+        /// Returns whether the backend continues reporting input while the host window is inactive.
+        bool get_ReceiveInputInBackground() override;
+
+        /// Updates whether the backend continues reporting input while the host window is inactive.
+        void set_ReceiveInputInBackground(bool value) override;
+
         /// Captures one input frame from the current Windows host state.
-        InputFrameState CaptureFrame();
+        InputFrameState CaptureFrame() override;
 
     private:
         /// Reads the current keyboard state from Win32 keyboard APIs.
@@ -55,6 +61,9 @@ namespace helengine::windows {
 
         /// Tracks whether client-edge pointer wrapping is enabled.
         bool PointerWrapEnabled;
+
+        /// Tracks whether background keyboard and mouse button capture is enabled.
+        bool ReceiveInputInBackground;
 
         /// Stores the delta offset produced by the most recent wrap.
         int2 PointerWrapDeltaOffset;
