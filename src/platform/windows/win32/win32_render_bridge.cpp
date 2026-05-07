@@ -1314,6 +1314,7 @@ float4 PSMain(PSInput input) : SV_TARGET {
         rasterizerDescription.FillMode = D3D11_FILL_SOLID;
         rasterizerDescription.CullMode = D3D11_CULL_NONE;
         rasterizerDescription.DepthClipEnable = FALSE;
+        rasterizerDescription.ScissorEnable = TRUE;
 
         ThrowIfFailed(
             device->CreateRasterizerState(&rasterizerDescription, RasterizerState.GetAddressOf()),
@@ -1423,6 +1424,7 @@ float4 PSMain(PSInput input) : SV_TARGET {
         context->OMSetRenderTargets(1, &renderTargetView, depthStencilView);
         context->RSSetViewports(1, &CurrentViewport);
         context->RSSetState(RasterizerState.Get());
+        ApplyScissorRect();
         context->OMSetDepthStencilState(DepthStencilState.Get(), 0);
 
         const float blendFactor[] = { 0.0f, 0.0f, 0.0f, 0.0f };
@@ -1438,6 +1440,80 @@ float4 PSMain(PSInput input) : SV_TARGET {
         context->PSSetShaderResources(0, 1, &textureView);
         ID3D11SamplerState* samplerState = TextureSamplerState.Get();
         context->PSSetSamplers(0, 1, &samplerState);
+    }
+
+    /// Applies the currently active scissor rectangle, or falls back to the full viewport when clipping is inactive.
+    void Win32RenderManager2D::ApplyScissorRect() {
+        ID3D11DeviceContext* context = Bootstrap.GetDeviceContext();
+        if (context == nullptr) {
+            return;
+        }
+
+        if (!HasActiveViewport) {
+            return;
+        }
+
+        if (HasActiveClipRect) {
+            context->RSSetScissorRects(1, &CurrentScissorRect);
+            return;
+        }
+
+        const LONG viewportLeft = static_cast<LONG>(std::floor(CurrentViewport.TopLeftX));
+        const LONG viewportTop = static_cast<LONG>(std::floor(CurrentViewport.TopLeftY));
+        const LONG viewportRight = static_cast<LONG>(std::ceil(CurrentViewport.TopLeftX + CurrentViewport.Width));
+        const LONG viewportBottom = static_cast<LONG>(std::ceil(CurrentViewport.TopLeftY + CurrentViewport.Height));
+        D3D11_RECT viewportRect {
+            viewportLeft,
+            viewportTop,
+            viewportRight,
+            viewportBottom
+        };
+        context->RSSetScissorRects(1, &viewportRect);
+    }
+
+    /// Pushes one clip rectangle onto the active stack after converting it into the current viewport's scissor space.
+    void Win32RenderManager2D::PushClipRect(float4 clipRect) {
+        D3D11_RECT scissorRect = ResolveScissorRect(clipRect);
+        ClipRectStack.push_back(scissorRect);
+        CurrentScissorRect = scissorRect;
+        HasActiveClipRect = true;
+    }
+
+    /// Pops the most recent clip rectangle and restores the previous scissor state.
+    void Win32RenderManager2D::PopClipRect() {
+        if (ClipRectStack.empty()) {
+            HasActiveClipRect = false;
+            return;
+        }
+
+        ClipRectStack.pop_back();
+        if (ClipRectStack.empty()) {
+            HasActiveClipRect = false;
+            return;
+        }
+
+        CurrentScissorRect = ClipRectStack.back();
+        HasActiveClipRect = true;
+    }
+
+    /// Resolves one raw clip rectangle into a viewport-clamped Direct3D scissor rectangle.
+    D3D11_RECT Win32RenderManager2D::ResolveScissorRect(float4 clipRect) const {
+        const LONG viewportLeft = static_cast<LONG>(std::floor(CurrentViewport.TopLeftX));
+        const LONG viewportTop = static_cast<LONG>(std::floor(CurrentViewport.TopLeftY));
+        const LONG viewportRight = static_cast<LONG>(std::ceil(CurrentViewport.TopLeftX + CurrentViewport.Width));
+        const LONG viewportBottom = static_cast<LONG>(std::ceil(CurrentViewport.TopLeftY + CurrentViewport.Height));
+
+        const LONG clipLeft = static_cast<LONG>(std::floor(clipRect.X));
+        const LONG clipTop = static_cast<LONG>(std::floor(clipRect.Y));
+        const LONG clipRight = static_cast<LONG>(std::ceil(clipRect.X + clipRect.Z));
+        const LONG clipBottom = static_cast<LONG>(std::ceil(clipRect.Y + clipRect.W));
+
+        return D3D11_RECT {
+            std::max(viewportLeft, clipLeft),
+            std::max(viewportTop, clipTop),
+            std::min(viewportRight, clipRight),
+            std::min(viewportBottom, clipBottom)
+        };
     }
 
     /// Draws one textured quad in window-space pixel coordinates.
@@ -1509,6 +1585,8 @@ float4 PSMain(PSInput input) : SV_TARGET {
 
         CurrentViewport = ResolveViewport(camera);
         HasActiveViewport = true;
+        ClipRectStack.clear();
+        HasActiveClipRect = false;
         if (!HasWritten2DSummary) {
             AppendRenderDiagnosticsLine(
                 "2d.render_camera queue_count=" + std::to_string(renderQueue->get_Count())
@@ -1526,6 +1604,17 @@ float4 PSMain(PSInput input) : SV_TARGET {
         const int32_t commandCount = commandList->get_Count();
         for (int32_t commandIndex = 0; commandIndex < commandCount; commandIndex++) {
             RenderCommand2DType commandType = commandList->GetCommandType(commandIndex);
+            if (commandType == RenderCommand2DType::ClipPush) {
+                const int32_t payloadIndex = commandList->GetClipPushPayloadIndex(commandIndex);
+                PushClipRect(commandList->GetClipPushRect(payloadIndex));
+                continue;
+            }
+
+            if (commandType == RenderCommand2DType::ClipPop) {
+                PopClipRect();
+                continue;
+            }
+
             if (commandType == RenderCommand2DType::TexturedQuad) {
                 texturedQuadCount++;
                 const int32_t payloadIndex = commandList->GetTexturedQuadPayloadIndex(commandIndex);
@@ -1639,6 +1728,8 @@ float4 PSMain(PSInput input) : SV_TARGET {
 #endif
             HasWritten2DSummary = true;
         }
+        ClipRectStack.clear();
+        HasActiveClipRect = false;
         HasActiveViewport = false;
     }
 

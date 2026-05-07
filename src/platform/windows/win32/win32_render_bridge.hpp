@@ -235,6 +235,18 @@ namespace helengine::windows {
         /// Draws one solid-color rectangle in window-space pixel coordinates.
         void DrawSolidRect(float x, float y, float width, float height, byte4 color);
 
+        /// Applies the currently active scissor rectangle, or falls back to the full viewport when clipping is inactive.
+        void ApplyScissorRect();
+
+        /// Pushes one clip rectangle onto the active stack after converting it into the current viewport's scissor space.
+        void PushClipRect(float4 clipRect);
+
+        /// Pops the most recent clip rectangle and restores the previous scissor state.
+        void PopClipRect();
+
+        /// Resolves one raw clip rectangle into a viewport-clamped Direct3D scissor rectangle.
+        D3D11_RECT ResolveScissorRect(float4 clipRect) const;
+
         /// Stores the DirectX11 bootstrap used for texture uploads.
         DirectX11Bootstrap& Bootstrap;
 
@@ -273,6 +285,15 @@ namespace helengine::windows {
 
         /// Tracks whether a 2D camera pass is currently active.
         bool HasActiveViewport = false;
+
+        /// Stores the currently active nested scissor stack for the 2D command stream.
+        std::vector<D3D11_RECT> ClipRectStack;
+
+        /// Stores the currently effective scissor rectangle when clipping is active.
+        D3D11_RECT CurrentScissorRect {};
+
+        /// Tracks whether the current 2D pass has an active clipped scissor rectangle.
+        bool HasActiveClipRect = false;
     };
 #endif
 }
