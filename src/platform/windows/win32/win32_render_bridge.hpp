@@ -235,6 +235,12 @@ namespace helengine::windows {
         /// Draws one solid-color rectangle in window-space pixel coordinates.
         void DrawSolidRect(float x, float y, float width, float height, byte4 color);
 
+        /// Configures the DirectX11 state used by one rounded-rect SDF draw.
+        void PrepareRoundedRectDraw();
+
+        /// Draws one rounded rectangle using the native signed-distance-field shader path.
+        void DrawRoundedRectSdf(float4 bounds, float radius, float borderThickness, byte4 fillColor, byte4 borderColor, int32_t corners);
+
         /// Applies the currently active scissor rectangle, or falls back to the full viewport when clipping is inactive.
         void ApplyScissorRect();
 
@@ -262,6 +268,12 @@ namespace helengine::windows {
         /// Stores the fixed 2D quad pixel shader.
         Microsoft::WRL::ComPtr<ID3D11PixelShader> QuadPixelShader;
 
+        /// Stores the fixed rounded-rect vertex shader.
+        Microsoft::WRL::ComPtr<ID3D11VertexShader> RoundedRectVertexShader;
+
+        /// Stores the fixed rounded-rect pixel shader.
+        Microsoft::WRL::ComPtr<ID3D11PixelShader> RoundedRectPixelShader;
+
         /// Stores the default sampler used by sprite and text draws.
         Microsoft::WRL::ComPtr<ID3D11SamplerState> TextureSamplerState;
 
@@ -279,6 +291,9 @@ namespace helengine::windows {
 
         /// Stores the shader resource view for the 1x1 white texture.
         Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> WhiteShaderResourceView;
+
+        /// Stores the rounded-rect constants consumed by the native SDF shader path.
+        Microsoft::WRL::ComPtr<ID3D11Buffer> RoundedRectConstantBuffer;
 
         /// Stores the currently active 2D camera viewport.
         D3D11_VIEWPORT CurrentViewport {};

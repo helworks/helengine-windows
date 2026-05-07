@@ -171,6 +171,16 @@ float4 PSMain() : SV_TARGET {
             DirectX::XMFLOAT4 Color;
         };
 
+        /// Stores the constants consumed by the native rounded-rect SDF shader path.
+        struct alignas(16) Win32RoundedRectShaderConstants {
+            DirectX::XMFLOAT4 DestRect;
+            DirectX::XMFLOAT4 Params1;
+            DirectX::XMFLOAT4 FillColor;
+            DirectX::XMFLOAT4 BorderColor;
+        };
+
+        static_assert((sizeof(Win32RoundedRectShaderConstants) % 16) == 0, "Rounded-rect constant buffer size must stay 16-byte aligned.");
+
         /// Vertex shader used by the native 2D quad pass.
         constexpr const char* QuadVertexShaderSource = R"(
 struct VSInput {
@@ -207,6 +217,104 @@ struct PSInput {
 
 float4 PSMain(PSInput input) : SV_TARGET {
     return DiffuseTexture.Sample(DiffuseSampler, input.UV) * input.Color;
+}
+)";
+
+        /// Vertex shader used by the native rounded-rect SDF pass.
+        constexpr const char* RoundedRectVertexShaderSource = R"(
+cbuffer RoundedRectBuffer : register(b0) {
+    float4 DestRect;
+    float4 Params1;
+    float4 FillColor;
+    float4 BorderColor;
+};
+
+struct VSInput {
+    float3 Position : POSITION;
+    float2 UV : TEXCOORD0;
+    float4 Color : COLOR0;
+};
+
+struct PSInput {
+    float4 Position : SV_POSITION;
+    float2 LocalPosition : TEXCOORD0;
+};
+
+PSInput VSMain(VSInput input) {
+    PSInput output;
+    output.Position = float4(input.Position, 1.0f);
+    output.LocalPosition = (input.UV - 0.5f) * DestRect.zw;
+    return output;
+}
+)";
+
+        /// Pixel shader used by the native rounded-rect SDF pass.
+        constexpr const char* RoundedRectPixelShaderSource = R"(
+cbuffer RoundedRectBuffer : register(b0) {
+    float4 DestRect;
+    float4 Params1;
+    float4 FillColor;
+    float4 BorderColor;
+};
+
+float sdRoundRectMasked(float2 p, float2 halfSize, float radius, uint cornerMask) {
+    radius = min(radius, min(halfSize.x, halfSize.y));
+    float2 ap = abs(p);
+    float2 d = ap - halfSize;
+    float baseDist = length(max(d, 0.0f)) + min(max(d.x, d.y), 0.0f);
+
+    if (radius <= 0.0f) {
+        return baseDist;
+    }
+
+    float2 inner = halfSize - radius;
+    if (ap.x <= inner.x || ap.y <= inner.y) {
+        return baseDist;
+    }
+
+    uint cornerBit;
+    if (p.x < 0.0f && p.y >= 0.0f) {
+        cornerBit = 1u;
+    } else if (p.x >= 0.0f && p.y >= 0.0f) {
+        cornerBit = 2u;
+    } else if (p.x < 0.0f && p.y < 0.0f) {
+        cornerBit = 4u;
+    } else {
+        cornerBit = 8u;
+    }
+
+    if ((cornerMask & cornerBit) == 0u) {
+        return baseDist;
+    }
+
+    return length(ap - inner) - radius;
+}
+
+float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) : SV_TARGET {
+    float radius = Params1.x;
+    float border = max(Params1.y, 0.0f);
+    float aa = max(Params1.z, 0.5f);
+    uint cornerMask = (uint)(Params1.w + 0.5f);
+    float2 halfSize = 0.5f * DestRect.zw;
+
+    float dOuter = sdRoundRectMasked(localPosition, halfSize, radius, cornerMask);
+    float alphaFill = 1.0f - smoothstep(-aa, aa, dOuter);
+
+    float innerRadius = max(radius - border, 0.0f);
+    float2 innerHalf = float2(max(halfSize.x - border, 0.0f), max(halfSize.y - border, 0.0f));
+    float dInner = sdRoundRectMasked(localPosition, innerHalf, innerRadius, cornerMask);
+    float alphaInner = 1.0f - smoothstep(-aa, aa, dInner);
+    float alphaBorder = saturate(alphaFill - alphaInner);
+
+    float4 colFill = FillColor * alphaFill;
+    float4 colBorder = BorderColor * alphaBorder;
+    float alpha = colFill.a + colBorder.a * (1.0f - colFill.a);
+    float3 rgb = float3(0.0f, 0.0f, 0.0f);
+    if (alpha > 0.0001f) {
+        rgb = (colBorder.rgb * colBorder.a + colFill.rgb * colFill.a * (1.0f - colBorder.a)) / alpha;
+    }
+
+    return float4(rgb, alpha);
 }
 )";
 
@@ -1198,7 +1306,18 @@ float4 PSMain(PSInput input) : SV_TARGET {
 
     /// Creates the DirectX11 shaders, buffers, and fixed pipeline state needed for 2D rendering.
     void Win32RenderManager2D::EnsurePipelineState() {
-        if (QuadVertexBuffer && QuadInputLayout && QuadVertexShader && QuadPixelShader && TextureSamplerState && AlphaBlendState && RasterizerState && DepthStencilState && WhiteShaderResourceView) {
+        if (QuadVertexBuffer
+            && QuadInputLayout
+            && QuadVertexShader
+            && QuadPixelShader
+            && RoundedRectVertexShader
+            && RoundedRectPixelShader
+            && RoundedRectConstantBuffer
+            && TextureSamplerState
+            && AlphaBlendState
+            && RasterizerState
+            && DepthStencilState
+            && WhiteShaderResourceView) {
             return;
         }
 
@@ -1258,6 +1377,56 @@ float4 PSMain(PSInput input) : SV_TARGET {
                 QuadPixelShader.GetAddressOf()),
             "ID3D11Device::CreatePixelShader failed for the Windows 2D pixel shader.");
 
+        Microsoft::WRL::ComPtr<ID3DBlob> roundedRectVertexShaderBytecode;
+        Microsoft::WRL::ComPtr<ID3DBlob> roundedRectPixelShaderBytecode;
+        compileErrors.Reset();
+        ThrowIfFailed(
+            D3DCompile(
+                RoundedRectVertexShaderSource,
+                std::strlen(RoundedRectVertexShaderSource),
+                nullptr,
+                nullptr,
+                nullptr,
+                "VSMain",
+                "vs_4_0",
+                0,
+                0,
+                roundedRectVertexShaderBytecode.GetAddressOf(),
+                compileErrors.GetAddressOf()),
+            "D3DCompile failed for the Windows rounded-rect vertex shader.");
+
+        compileErrors.Reset();
+        ThrowIfFailed(
+            D3DCompile(
+                RoundedRectPixelShaderSource,
+                std::strlen(RoundedRectPixelShaderSource),
+                nullptr,
+                nullptr,
+                nullptr,
+                "PSMain",
+                "ps_4_0",
+                0,
+                0,
+                roundedRectPixelShaderBytecode.GetAddressOf(),
+                compileErrors.GetAddressOf()),
+            "D3DCompile failed for the Windows rounded-rect pixel shader.");
+
+        ThrowIfFailed(
+            device->CreateVertexShader(
+                roundedRectVertexShaderBytecode->GetBufferPointer(),
+                roundedRectVertexShaderBytecode->GetBufferSize(),
+                nullptr,
+                RoundedRectVertexShader.GetAddressOf()),
+            "ID3D11Device::CreateVertexShader failed for the Windows rounded-rect vertex shader.");
+
+        ThrowIfFailed(
+            device->CreatePixelShader(
+                roundedRectPixelShaderBytecode->GetBufferPointer(),
+                roundedRectPixelShaderBytecode->GetBufferSize(),
+                nullptr,
+                RoundedRectPixelShader.GetAddressOf()),
+            "ID3D11Device::CreatePixelShader failed for the Windows rounded-rect pixel shader.");
+
         const D3D11_INPUT_ELEMENT_DESC inputElements[] = {
             { "POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 0, D3D11_INPUT_PER_VERTEX_DATA, 0 },
             { "TEXCOORD", 0, DXGI_FORMAT_R32G32_FLOAT, 0, 12, D3D11_INPUT_PER_VERTEX_DATA, 0 },
@@ -1282,6 +1451,15 @@ float4 PSMain(PSInput input) : SV_TARGET {
         ThrowIfFailed(
             device->CreateBuffer(&vertexBufferDescription, nullptr, QuadVertexBuffer.GetAddressOf()),
             "ID3D11Device::CreateBuffer failed for the Windows 2D quad vertex buffer.");
+
+        D3D11_BUFFER_DESC roundedRectConstantBufferDescription {};
+        roundedRectConstantBufferDescription.ByteWidth = static_cast<UINT>(sizeof(Win32RoundedRectShaderConstants));
+        roundedRectConstantBufferDescription.Usage = D3D11_USAGE_DEFAULT;
+        roundedRectConstantBufferDescription.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
+
+        ThrowIfFailed(
+            device->CreateBuffer(&roundedRectConstantBufferDescription, nullptr, RoundedRectConstantBuffer.GetAddressOf()),
+            "ID3D11Device::CreateBuffer failed for the Windows rounded-rect constant buffer.");
 
         D3D11_SAMPLER_DESC samplerDescription {};
         samplerDescription.Filter = D3D11_FILTER_MIN_MAG_MIP_POINT;
@@ -1442,6 +1620,34 @@ float4 PSMain(PSInput input) : SV_TARGET {
         context->PSSetSamplers(0, 1, &samplerState);
     }
 
+    /// Configures the DirectX11 state used by one rounded-rect SDF draw.
+    void Win32RenderManager2D::PrepareRoundedRectDraw() {
+        EnsurePipelineState();
+
+        ID3D11DeviceContext* context = Bootstrap.GetDeviceContext();
+        ID3D11RenderTargetView* renderTargetView = Bootstrap.GetRenderTargetView();
+        ID3D11DepthStencilView* depthStencilView = Bootstrap.GetDepthStencilView();
+        context->OMSetRenderTargets(1, &renderTargetView, depthStencilView);
+        context->RSSetViewports(1, &CurrentViewport);
+        context->RSSetState(RasterizerState.Get());
+        ApplyScissorRect();
+        context->OMSetDepthStencilState(DepthStencilState.Get(), 0);
+
+        const float blendFactor[] = { 0.0f, 0.0f, 0.0f, 0.0f };
+        context->OMSetBlendState(AlphaBlendState.Get(), blendFactor, 0xFFFFFFFFu);
+        context->IASetInputLayout(QuadInputLayout.Get());
+        context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP);
+        const UINT stride = sizeof(Win32QuadVertex);
+        const UINT offset = 0;
+        ID3D11Buffer* quadVertexBuffer = QuadVertexBuffer.Get();
+        context->IASetVertexBuffers(0, 1, &quadVertexBuffer, &stride, &offset);
+        context->VSSetShader(RoundedRectVertexShader.Get(), nullptr, 0);
+        context->PSSetShader(RoundedRectPixelShader.Get(), nullptr, 0);
+        ID3D11Buffer* roundedRectConstantBuffer = RoundedRectConstantBuffer.Get();
+        context->VSSetConstantBuffers(0, 1, &roundedRectConstantBuffer);
+        context->PSSetConstantBuffers(0, 1, &roundedRectConstantBuffer);
+    }
+
     /// Applies the currently active scissor rectangle, or falls back to the full viewport when clipping is inactive.
     void Win32RenderManager2D::ApplyScissorRect() {
         ID3D11DeviceContext* context = Bootstrap.GetDeviceContext();
@@ -1557,6 +1763,43 @@ float4 PSMain(PSInput input) : SV_TARGET {
     /// Draws one solid-color rectangle in window-space pixel coordinates.
     void Win32RenderManager2D::DrawSolidRect(float x, float y, float width, float height, byte4 color) {
         DrawTexturedQuad(WhiteShaderResourceView.Get(), x, y, width, height, float4(0.0f, 0.0f, 1.0f, 1.0f), color);
+    }
+
+    /// Draws one rounded rectangle using the native signed-distance-field shader path.
+    void Win32RenderManager2D::DrawRoundedRectSdf(float4 bounds, float radius, float borderThickness, byte4 fillColor, byte4 borderColor, int32_t corners) {
+        if (!HasActiveViewport || bounds.Z <= 0.0f || bounds.W <= 0.0f || CurrentViewport.Width <= 0.0f || CurrentViewport.Height <= 0.0f) {
+            return;
+        }
+
+        PrepareRoundedRectDraw();
+
+        const float leftNdc = (((bounds.X - CurrentViewport.TopLeftX) / CurrentViewport.Width) * 2.0f) - 1.0f;
+        const float rightNdc = ((((bounds.X + bounds.Z) - CurrentViewport.TopLeftX) / CurrentViewport.Width) * 2.0f) - 1.0f;
+        const float topNdc = 1.0f - (((bounds.Y - CurrentViewport.TopLeftY) / CurrentViewport.Height) * 2.0f);
+        const float bottomNdc = 1.0f - ((((bounds.Y + bounds.W) - CurrentViewport.TopLeftY) / CurrentViewport.Height) * 2.0f);
+
+        std::array<Win32QuadVertex, 4> vertices = {
+            Win32QuadVertex { DirectX::XMFLOAT3(leftNdc, bottomNdc, 0.0f), DirectX::XMFLOAT2(0.0f, 1.0f), DirectX::XMFLOAT4(1.0f, 1.0f, 1.0f, 1.0f) },
+            Win32QuadVertex { DirectX::XMFLOAT3(leftNdc, topNdc, 0.0f), DirectX::XMFLOAT2(0.0f, 0.0f), DirectX::XMFLOAT4(1.0f, 1.0f, 1.0f, 1.0f) },
+            Win32QuadVertex { DirectX::XMFLOAT3(rightNdc, bottomNdc, 0.0f), DirectX::XMFLOAT2(1.0f, 1.0f), DirectX::XMFLOAT4(1.0f, 1.0f, 1.0f, 1.0f) },
+            Win32QuadVertex { DirectX::XMFLOAT3(rightNdc, topNdc, 0.0f), DirectX::XMFLOAT2(1.0f, 0.0f), DirectX::XMFLOAT4(1.0f, 1.0f, 1.0f, 1.0f) }
+        };
+
+        ID3D11DeviceContext* context = Bootstrap.GetDeviceContext();
+        D3D11_MAPPED_SUBRESOURCE mappedResource {};
+        ThrowIfFailed(
+            context->Map(QuadVertexBuffer.Get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mappedResource),
+            "ID3D11DeviceContext::Map failed for the Windows rounded-rect quad vertex buffer.");
+        std::memcpy(mappedResource.pData, vertices.data(), sizeof(Win32QuadVertex) * vertices.size());
+        context->Unmap(QuadVertexBuffer.Get(), 0);
+
+        Win32RoundedRectShaderConstants constants {};
+        constants.DestRect = DirectX::XMFLOAT4(bounds.X, bounds.Y, bounds.Z, bounds.W);
+        constants.Params1 = DirectX::XMFLOAT4(radius, borderThickness, 1.0f, static_cast<float>(corners));
+        constants.FillColor = ConvertColor(fillColor);
+        constants.BorderColor = ConvertColor(borderColor);
+        context->UpdateSubresource(RoundedRectConstantBuffer.Get(), 0, nullptr, &constants, 0, 0);
+        context->Draw(4, 0);
     }
 
     /// Draws every queued 2D drawable for one camera.
@@ -1691,19 +1934,13 @@ float4 PSMain(PSInput input) : SV_TARGET {
                     HasWritten2DDraw = true;
                 }
 
-                DrawSolidRect(bounds.X, bounds.Y, bounds.Z, bounds.W, commandList->GetRoundedRectFillColor(payloadIndex));
-
-                const float borderThickness = std::max(commandList->GetRoundedRectBorderThickness(payloadIndex), 0.0f);
-                if (borderThickness <= 0.0f) {
-                    continue;
-                }
-
-                const float clampedBorderThickness = std::min(borderThickness, std::min(bounds.Z, bounds.W) * 0.5f);
-                const byte4 borderColor = commandList->GetRoundedRectBorderColor(payloadIndex);
-                DrawSolidRect(bounds.X, bounds.Y, bounds.Z, clampedBorderThickness, borderColor);
-                DrawSolidRect(bounds.X, bounds.Y + bounds.W - clampedBorderThickness, bounds.Z, clampedBorderThickness, borderColor);
-                DrawSolidRect(bounds.X, bounds.Y + clampedBorderThickness, clampedBorderThickness, std::max(0.0f, bounds.W - (clampedBorderThickness * 2.0f)), borderColor);
-                DrawSolidRect(bounds.X + bounds.Z - clampedBorderThickness, bounds.Y + clampedBorderThickness, clampedBorderThickness, std::max(0.0f, bounds.W - (clampedBorderThickness * 2.0f)), borderColor);
+                DrawRoundedRectSdf(
+                    bounds,
+                    commandList->GetRoundedRectRadius(payloadIndex),
+                    commandList->GetRoundedRectBorderThickness(payloadIndex),
+                    commandList->GetRoundedRectFillColor(payloadIndex),
+                    commandList->GetRoundedRectBorderColor(payloadIndex),
+                    static_cast<int32_t>(commandList->GetRoundedRectCorners(payloadIndex)));
                 continue;
             }
         }
@@ -1985,18 +2222,13 @@ float4 PSMain(PSInput input) : SV_TARGET {
                 + std::to_string(height));
             HasWritten2DDraw = true;
         }
-        DrawSolidRect(position.X, position.Y, width, height, shape->get_FillColor());
-
-        const float borderThickness = std::max(shape->get_BorderThickness(), 0.0f);
-        if (borderThickness <= 0.0f) {
-            return;
-        }
-
-        const float clampedBorderThickness = std::min(borderThickness, std::min(width, height) * 0.5f);
-        DrawSolidRect(position.X, position.Y, width, clampedBorderThickness, shape->get_BorderColor());
-        DrawSolidRect(position.X, position.Y + height - clampedBorderThickness, width, clampedBorderThickness, shape->get_BorderColor());
-        DrawSolidRect(position.X, position.Y + clampedBorderThickness, clampedBorderThickness, std::max(0.0f, height - (clampedBorderThickness * 2.0f)), shape->get_BorderColor());
-        DrawSolidRect(position.X + width - clampedBorderThickness, position.Y + clampedBorderThickness, clampedBorderThickness, std::max(0.0f, height - (clampedBorderThickness * 2.0f)), shape->get_BorderColor());
+        DrawRoundedRectSdf(
+            float4(position.X, position.Y, width, height),
+            shape->get_Radius(),
+            shape->get_BorderThickness(),
+            shape->get_FillColor(),
+            shape->get_BorderColor(),
+            static_cast<int32_t>(shape->get_Corners()));
     }
 #endif
 }
