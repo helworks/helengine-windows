@@ -18,6 +18,12 @@
 #include "MaterialLayoutBuilder.hpp"
 #include "platform/windows/directx11/directx11_bootstrap.hpp"
 
+#if __has_include("RenderCommandListBuilder2D.hpp")
+#include "RenderCommand2DType.hpp"
+#include "RenderCommandList2D.hpp"
+#include "RenderCommandListBuilder2D.hpp"
+#endif
+
 namespace helengine::windows {
 #if __has_include("RenderManager2D.hpp")
     namespace {
@@ -1493,6 +1499,14 @@ float4 PSMain(PSInput input) : SV_TARGET {
             return;
         }
 
+#if __has_include("RenderCommandListBuilder2D.hpp")
+        RenderCommandListBuilder2D commandListBuilder;
+        RenderCommandList2D* commandList = commandListBuilder.Build(renderQueue);
+        if (commandList == nullptr || commandList->get_Count() <= 0) {
+            return;
+        }
+#endif
+
         CurrentViewport = ResolveViewport(camera);
         HasActiveViewport = true;
         if (!HasWritten2DSummary) {
@@ -1504,14 +1518,125 @@ float4 PSMain(PSInput input) : SV_TARGET {
                 + std::to_string(CurrentViewport.Width) + ","
                 + std::to_string(CurrentViewport.Height));
         }
+
+#if __has_include("RenderCommandListBuilder2D.hpp")
+        int texturedQuadCount = 0;
+        int glyphQuadCount = 0;
+        int roundedRectCount = 0;
+        const int32_t commandCount = commandList->get_Count();
+        for (int32_t commandIndex = 0; commandIndex < commandCount; commandIndex++) {
+            RenderCommand2DType commandType = commandList->GetCommandType(commandIndex);
+            if (commandType == RenderCommand2DType::TexturedQuad) {
+                texturedQuadCount++;
+                const int32_t payloadIndex = commandList->GetTexturedQuadPayloadIndex(commandIndex);
+                RuntimeTexture* texture = commandList->GetTexturedQuadTexture(payloadIndex);
+                ID3D11ShaderResourceView* textureView = ResolveTextureResourceView(texture);
+                if (textureView == nullptr) {
+                    continue;
+                }
+
+                const float4 bounds = commandList->GetTexturedQuadBounds(payloadIndex);
+                if (!HasWritten2DDraw) {
+                    AppendRenderDiagnosticsLine(
+                        "2d.command textured_quad bounds="
+                        + std::to_string(bounds.X) + ","
+                        + std::to_string(bounds.Y) + ","
+                        + std::to_string(bounds.Z) + ","
+                        + std::to_string(bounds.W));
+                    HasWritten2DDraw = true;
+                }
+
+                DrawTexturedQuad(
+                    textureView,
+                    bounds.X,
+                    bounds.Y,
+                    bounds.Z,
+                    bounds.W,
+                    commandList->GetTexturedQuadSourceRect(payloadIndex),
+                    commandList->GetTexturedQuadColor(payloadIndex));
+                continue;
+            }
+
+            if (commandType == RenderCommand2DType::GlyphQuad) {
+                glyphQuadCount++;
+                const int32_t payloadIndex = commandList->GetGlyphQuadPayloadIndex(commandIndex);
+                RuntimeTexture* texture = commandList->GetGlyphQuadTexture(payloadIndex);
+                ID3D11ShaderResourceView* textureView = ResolveTextureResourceView(texture);
+                if (textureView == nullptr) {
+                    continue;
+                }
+
+                const float4 bounds = commandList->GetGlyphQuadBounds(payloadIndex);
+                if (!HasWritten2DDraw) {
+                    AppendRenderDiagnosticsLine(
+                        "2d.command glyph_quad bounds="
+                        + std::to_string(bounds.X) + ","
+                        + std::to_string(bounds.Y) + ","
+                        + std::to_string(bounds.Z) + ","
+                        + std::to_string(bounds.W));
+                    HasWritten2DDraw = true;
+                }
+
+                DrawTexturedQuad(
+                    textureView,
+                    bounds.X,
+                    bounds.Y,
+                    bounds.Z,
+                    bounds.W,
+                    commandList->GetGlyphQuadSourceRect(payloadIndex),
+                    commandList->GetGlyphQuadColor(payloadIndex));
+                continue;
+            }
+
+            if (commandType == RenderCommand2DType::RoundedRect) {
+                roundedRectCount++;
+                const int32_t payloadIndex = commandList->GetRoundedRectPayloadIndex(commandIndex);
+                const float4 bounds = commandList->GetRoundedRectBounds(payloadIndex);
+                if (!HasWritten2DDraw) {
+                    AppendRenderDiagnosticsLine(
+                        "2d.command rounded_rect bounds="
+                        + std::to_string(bounds.X) + ","
+                        + std::to_string(bounds.Y) + ","
+                        + std::to_string(bounds.Z) + ","
+                        + std::to_string(bounds.W));
+                    HasWritten2DDraw = true;
+                }
+
+                DrawSolidRect(bounds.X, bounds.Y, bounds.Z, bounds.W, commandList->GetRoundedRectFillColor(payloadIndex));
+
+                const float borderThickness = std::max(commandList->GetRoundedRectBorderThickness(payloadIndex), 0.0f);
+                if (borderThickness <= 0.0f) {
+                    continue;
+                }
+
+                const float clampedBorderThickness = std::min(borderThickness, std::min(bounds.Z, bounds.W) * 0.5f);
+                const byte4 borderColor = commandList->GetRoundedRectBorderColor(payloadIndex);
+                DrawSolidRect(bounds.X, bounds.Y, bounds.Z, clampedBorderThickness, borderColor);
+                DrawSolidRect(bounds.X, bounds.Y + bounds.W - clampedBorderThickness, bounds.Z, clampedBorderThickness, borderColor);
+                DrawSolidRect(bounds.X, bounds.Y + clampedBorderThickness, clampedBorderThickness, std::max(0.0f, bounds.W - (clampedBorderThickness * 2.0f)), borderColor);
+                DrawSolidRect(bounds.X + bounds.Z - clampedBorderThickness, bounds.Y + clampedBorderThickness, clampedBorderThickness, std::max(0.0f, bounds.W - (clampedBorderThickness * 2.0f)), borderColor);
+                continue;
+            }
+        }
+#else
         renderQueue->VisitOrdered(this);
+#endif
+
         if (!HasWritten2DSummary) {
             AppendRenderDiagnosticsLine(
-                "2d.summary visits=" + std::to_string(Logged2DVisitCount)
+                std::string("2d.summary")
+#if __has_include("RenderCommandListBuilder2D.hpp")
+                + " command_count=" + std::to_string(commandCount)
+                + " command_textured_quads=" + std::to_string(texturedQuadCount)
+                + " command_glyph_quads=" + std::to_string(glyphQuadCount)
+                + " command_rounded_rects=" + std::to_string(roundedRectCount));
+#else
+                + " visits=" + std::to_string(Logged2DVisitCount)
                 + " rects=" + std::to_string(Logged2DRectCount)
                 + " texts=" + std::to_string(Logged2DTextCount)
                 + " sprites=" + std::to_string(Logged2DSpriteCount)
                 + " text_early_returns=" + std::to_string(Logged2DTextEarlyReturnCount));
+#endif
             HasWritten2DSummary = true;
         }
         HasActiveViewport = false;
