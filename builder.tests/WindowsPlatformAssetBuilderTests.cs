@@ -1,8 +1,10 @@
+using helengine;
 using helengine.baseplatform.Definitions;
 using helengine.baseplatform.Manifest;
 using helengine.baseplatform.Profiles;
 using helengine.baseplatform.Reporting;
 using helengine.baseplatform.Requests;
+using helengine.baseplatform.Results;
 using helengine.baseplatform.Targets;
 using helengine.windows.builder;
 using helengine.windows.builder.tests.Builders;
@@ -36,6 +38,103 @@ public class WindowsPlatformAssetBuilderTests {
         Assert.Contains(builder.Definition.ComponentCompatibilities, compatibility =>
             compatibility.ComponentTypeId == "helengine.meshcomponent" &&
             compatibility.CompatibilityKind == PlatformComponentCompatibilityKind.Transform);
+    }
+
+    /// <summary>
+    /// Verifies the Windows material schema publishes the authored standard material fields.
+    /// </summary>
+    [Fact]
+    public void Descriptor_and_definition_expose_standard_material_fields() {
+        WindowsPlatformAssetBuilder builder = new();
+
+        PlatformMaterialSchemaDefinition schema = Assert.Single(builder.Definition.MaterialSchemas, materialSchema => materialSchema.SchemaId == "standard-shader");
+
+        Assert.Collection(schema.Fields,
+            field => {
+                Assert.Equal("use-custom-shader", field.FieldId);
+                Assert.Equal(PlatformMaterialFieldKind.Boolean, field.FieldKind);
+                Assert.Equal("false", field.DefaultValue);
+                Assert.True(field.Required);
+            },
+            field => {
+                Assert.Equal("shader-asset-id", field.FieldId);
+                Assert.Equal(PlatformMaterialFieldKind.AssetReference, field.FieldKind);
+                Assert.Equal(string.Empty, field.DefaultValue);
+                Assert.True(field.Required);
+            },
+            field => {
+                Assert.Equal("vertex-program", field.FieldId);
+                Assert.Equal(PlatformMaterialFieldKind.Text, field.FieldKind);
+                Assert.Equal(string.Empty, field.DefaultValue);
+                Assert.True(field.Required);
+            },
+            field => {
+                Assert.Equal("pixel-program", field.FieldId);
+                Assert.Equal(PlatformMaterialFieldKind.Text, field.FieldKind);
+                Assert.Equal(string.Empty, field.DefaultValue);
+                Assert.True(field.Required);
+            },
+            field => {
+                Assert.Equal("base-color", field.FieldId);
+                Assert.Equal(PlatformMaterialFieldKind.Color, field.FieldKind);
+                Assert.Equal("#ffffff", field.DefaultValue);
+                Assert.False(field.Required);
+            },
+            field => {
+                Assert.Equal("texture-id", field.FieldId);
+                Assert.Equal(PlatformMaterialFieldKind.AssetReference, field.FieldKind);
+                Assert.Equal(string.Empty, field.DefaultValue);
+                Assert.False(field.Required);
+            },
+            field => {
+                Assert.Equal("casts-shadow", field.FieldId);
+                Assert.Equal(PlatformMaterialFieldKind.Boolean, field.FieldKind);
+                Assert.Equal("true", field.DefaultValue);
+                Assert.False(field.Required);
+            },
+            field => {
+                Assert.Equal("receives-shadow", field.FieldId);
+                Assert.Equal(PlatformMaterialFieldKind.Boolean, field.FieldKind);
+                Assert.Equal("true", field.DefaultValue);
+                Assert.False(field.Required);
+            });
+    }
+
+    /// <summary>
+    /// Verifies the Windows material cook path preserves the diffuse texture and shadow authoring values.
+    /// </summary>
+    [Fact]
+    public void CookMaterial_preserves_diffuse_texture_and_shadow_fields() {
+        WindowsPlatformAssetBuilder builder = new();
+
+        PlatformMaterialCookResult result = builder.CookMaterial(new PlatformMaterialCookRequest(
+            "Materials/Test.helmat",
+            "Materials/Test.helmat",
+            "windows",
+            "debug",
+            "directx11",
+            "standard-shader",
+            new Dictionary<string, string> {
+                ["use-custom-shader"] = "false",
+                ["shader-asset-id"] = "ForwardStandardShader",
+                ["vertex-program"] = "ForwardStandardShader.vs",
+                ["pixel-program"] = "ForwardStandardShader.ps",
+                ["variant"] = "Mesh",
+                ["base-color"] = "#336699",
+                ["texture-id"] = "Textures/Checker",
+                ["casts-shadow"] = "false",
+                ["receives-shadow"] = "true"
+            }));
+
+        MaterialAsset materialAsset = Assert.IsType<MaterialAsset>(AssetSerializer.DeserializeFromBytes(result.CookedMaterialBytes));
+        Assert.Equal("ForwardStandardShader", materialAsset.ShaderAssetId);
+        Assert.Equal("Textures/Checker", materialAsset.DiffuseTextureAssetId);
+        Assert.False(materialAsset.CastsShadows);
+        Assert.True(materialAsset.ReceivesShadows);
+        Assert.Single(materialAsset.ConstantBuffers);
+        Assert.Equal("BaseColorBuffer", materialAsset.ConstantBuffers[0].Name);
+        Assert.Equal(16, materialAsset.ConstantBuffers[0].Data.Length);
+        Assert.Equal(new[] { "ForwardStandardShader" }, result.ReferencedShaderAssetIds);
     }
 
     /// <summary>

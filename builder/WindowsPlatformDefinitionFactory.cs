@@ -110,6 +110,70 @@ public static class WindowsPlatformDefinitionFactory {
                     ["png", "tga", "jpg"])
             ],
             [
+                new PlatformMaterialSchemaDefinition(
+                    "standard-shader",
+                    "Standard Shader",
+                    ["directx11"],
+                    [
+                        new PlatformMaterialFieldDefinition(
+                            "use-custom-shader",
+                            "Use Custom Shader",
+                            PlatformMaterialFieldKind.Boolean,
+                            "false",
+                            true,
+                            []),
+                        new PlatformMaterialFieldDefinition(
+                            "shader-asset-id",
+                            "Shader Asset",
+                            PlatformMaterialFieldKind.AssetReference,
+                            string.Empty,
+                            true,
+                            []),
+                        new PlatformMaterialFieldDefinition(
+                            "vertex-program",
+                            "Vertex Program",
+                            PlatformMaterialFieldKind.Text,
+                            string.Empty,
+                            true,
+                            []),
+                        new PlatformMaterialFieldDefinition(
+                            "pixel-program",
+                            "Pixel Program",
+                            PlatformMaterialFieldKind.Text,
+                            string.Empty,
+                            true,
+                            []),
+                        new PlatformMaterialFieldDefinition(
+                            "base-color",
+                            "Base Color",
+                            PlatformMaterialFieldKind.Color,
+                            "#ffffff",
+                            false,
+                            []),
+                        new PlatformMaterialFieldDefinition(
+                            "texture-id",
+                            "Diffuse Texture",
+                            PlatformMaterialFieldKind.AssetReference,
+                            string.Empty,
+                            false,
+                            []),
+                        new PlatformMaterialFieldDefinition(
+                            "casts-shadow",
+                            "Casts Shadows",
+                            PlatformMaterialFieldKind.Boolean,
+                            "true",
+                            false,
+                            []),
+                        new PlatformMaterialFieldDefinition(
+                            "receives-shadow",
+                            "Receives Shadows",
+                            PlatformMaterialFieldKind.Boolean,
+                            "true",
+                            false,
+                            [])
+                    ])
+            ],
+            [
                 new PlatformComponentCompatibilityDefinition(
                     "helengine.meshcomponent",
                     PlatformComponentCompatibilityKind.Transform,
@@ -195,4 +259,6 @@ public static class WindowsPlatformDefinitionFactory {
             ]);
     }
 }
+
+
 
