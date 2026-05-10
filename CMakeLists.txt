@@ -20,8 +20,8 @@ if(HELENGINE_WINDOWS_INCLUDE_GENERATED_CORE)
         include("${HELENGINE_CORE_CPP_ROOT}/helengine_windows_handoff.cmake")
     endif()
 
-    if(NOT EXISTS "${HELENGINE_CORE_CPP_ROOT}/helengine_core_unity.cpp")
-        message(FATAL_ERROR "HELENGINE_CORE_CPP_ROOT does not contain helengine_core_unity.cpp. Regenerate helengine.core C++ output first.")
+    if(NOT EXISTS "${HELENGINE_CORE_CPP_ROOT}/helengine_core_amalgamated.cpp")
+        message(FATAL_ERROR "HELENGINE_CORE_CPP_ROOT does not contain helengine_core_amalgamated.cpp. Regenerate helengine.core C++ output first.")
     endif()
 endif()
 
@@ -43,7 +43,7 @@ if(HELENGINE_WINDOWS_INCLUDE_GENERATED_CORE)
         src/platform/windows/win32/win32_render_bridge.cpp
     )
 
-    list(APPEND HELENGINE_WINDOWS_SOURCES "${HELENGINE_CORE_CPP_ROOT}/helengine_core_unity.cpp")
+    list(APPEND HELENGINE_WINDOWS_SOURCES "${HELENGINE_CORE_CPP_ROOT}/helengine_core_amalgamated.cpp")
 
     if(EXISTS "${HELENGINE_CORE_CPP_ROOT}/runtime/runtime_startup_manifest.cpp")
         list(APPEND HELENGINE_WINDOWS_SOURCES "${HELENGINE_CORE_CPP_ROOT}/runtime/runtime_startup_manifest.cpp")
