@@ -138,6 +138,39 @@ public class WindowsPlatformAssetBuilderTests {
     }
 
     /// <summary>
+    /// Verifies eight-digit authored base colors use the shared engine <c>#RRGGBBAA</c> contract before the payload is cooked for the player.
+    /// </summary>
+    [Fact]
+    public void CookMaterial_when_base_color_includes_alpha_preserves_rgba_channel_order() {
+        WindowsPlatformAssetBuilder builder = new();
+
+        PlatformMaterialCookResult result = builder.CookMaterial(new PlatformMaterialCookRequest(
+            "Materials/Test.helmat",
+            "Materials/Test.helmat",
+            "windows",
+            "debug",
+            "directx11",
+            "standard-shader",
+            new Dictionary<string, string> {
+                ["use-custom-shader"] = "false",
+                ["shader-asset-id"] = "ForwardStandardShader",
+                ["vertex-program"] = "ForwardStandardShader.vs",
+                ["pixel-program"] = "ForwardStandardShader.ps",
+                ["variant"] = "Mesh",
+                ["base-color"] = "#FF4040FF"
+            }));
+
+        MaterialAsset materialAsset = Assert.IsType<MaterialAsset>(AssetSerializer.DeserializeFromBytes(result.CookedMaterialBytes));
+        MaterialConstantBufferAsset baseColorBuffer = Assert.Single(materialAsset.ConstantBuffers);
+        float[] channels = ReadFloat4(baseColorBuffer.Data);
+
+        Assert.Equal(1f, channels[0]);
+        Assert.Equal(64f / 255f, channels[1], 5);
+        Assert.Equal(64f / 255f, channels[2], 5);
+        Assert.Equal(1f, channels[3]);
+    }
+
+    /// <summary>
     /// Verifies the builder copies staged payloads into the output root.
     /// </summary>
     [Fact]
@@ -403,6 +436,26 @@ public class WindowsPlatformAssetBuilderTests {
             } catch {
             }
         }
+    }
+
+    /// <summary>
+    /// Reads one packed four-float constant-buffer payload into scalar channels for assertions.
+    /// </summary>
+    /// <param name="data">Packed constant-buffer payload.</param>
+    /// <returns>Decoded scalar channels in RGBA order.</returns>
+    static float[] ReadFloat4(byte[] data) {
+        if (data == null) {
+            throw new ArgumentNullException(nameof(data));
+        }
+
+        using MemoryStream stream = new(data);
+        using EngineBinaryReader reader = EngineBinaryReader.Create(stream, EngineBinaryEndianness.LittleEndian);
+        return [
+            reader.ReadSingle(),
+            reader.ReadSingle(),
+            reader.ReadSingle(),
+            reader.ReadSingle()
+        ];
     }
 
     /// <summary>

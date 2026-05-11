@@ -197,16 +197,12 @@ public sealed class WindowsPlatformAssetBuilder : IPlatformAssetBuilder {
         }
 
         try {
-            byte alpha = 255;
-            int offset = 0;
-            if (normalized.Length == 8) {
-                alpha = Convert.ToByte(normalized.Substring(0, 2), 16);
-                offset = 2;
-            }
-
-            byte red = Convert.ToByte(normalized.Substring(offset, 2), 16);
-            byte green = Convert.ToByte(normalized.Substring(offset + 2, 2), 16);
-            byte blue = Convert.ToByte(normalized.Substring(offset + 4, 2), 16);
+            byte red = Convert.ToByte(normalized.Substring(0, 2), 16);
+            byte green = Convert.ToByte(normalized.Substring(2, 2), 16);
+            byte blue = Convert.ToByte(normalized.Substring(4, 2), 16);
+            byte alpha = normalized.Length == 8
+                ? Convert.ToByte(normalized.Substring(6, 2), 16)
+                : (byte)255;
 
             return new float4(
                 red / 255f,
