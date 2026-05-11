@@ -54,7 +54,7 @@ public static class WindowsBuildWorkspace {
         bool nativeBuildSucceeded = false;
         string repositoryRoot = ResolveRepositoryRoot();
         string generatedCoreRoot = ResolveGeneratedCoreRoot(request);
-        WriteRuntimeNativeManifest(generatedCoreRoot, request.Manifest);
+        WriteRuntimeNativeManifest(generatedCoreRoot, request.Manifest, request.SelectedGraphicsOptionValues);
         for (int sceneIndex = 0; sceneIndex < request.Manifest.Scenes.Length; sceneIndex++) {
             cancellationToken.ThrowIfCancellationRequested();
 
@@ -378,9 +378,12 @@ public static class WindowsBuildWorkspace {
     /// </summary>
     /// <param name="generatedCoreRoot">Shared generated-core root consumed by CMake.</param>
     /// <param name="manifest">Resolved build manifest that carries runtime startup and code-module metadata.</param>
-    static void WriteRuntimeNativeManifest(string generatedCoreRoot, PlatformBuildManifest manifest) {
+    static void WriteRuntimeNativeManifest(
+        string generatedCoreRoot,
+        PlatformBuildManifest manifest,
+        IReadOnlyDictionary<string, string> selectedGraphicsOptionValues) {
         WindowsRuntimeNativeManifestWriter writer = new();
-        writer.Write(generatedCoreRoot, manifest);
+        writer.Write(generatedCoreRoot, manifest, selectedGraphicsOptionValues);
     }
 
     /// <summary>

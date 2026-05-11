@@ -59,9 +59,13 @@ public sealed class WindowsRuntimeNativeManifestWriterTests : IDisposable {
             [],
             [],
             new PlatformContainerWritePlan(string.Empty, []));
+        Dictionary<string, string> graphicsOptionValues = new(StringComparer.OrdinalIgnoreCase) {
+            ["default-width"] = "1280",
+            ["default-height"] = "720"
+        };
 
         WindowsRuntimeNativeManifestWriter writer = new();
-        writer.Write(GeneratedCoreRootPath, manifest);
+        writer.Write(GeneratedCoreRootPath, manifest, graphicsOptionValues);
 
         string runtimeRootPath = Path.Combine(GeneratedCoreRootPath, "runtime");
         string sceneCatalogHeaderPath = Path.Combine(runtimeRootPath, "runtime_scene_catalog_manifest.hpp");
@@ -74,5 +78,50 @@ public sealed class WindowsRuntimeNativeManifestWriterTests : IDisposable {
         Assert.Contains("he_runtime_scene_catalog_entries", sceneCatalogSource, StringComparison.Ordinal);
         Assert.Contains("scenes/DemoDiscMainMenu.helen", sceneCatalogSource, StringComparison.Ordinal);
         Assert.Contains("cooked/scenes/rendering/cube_test.hasset", sceneCatalogSource, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// Ensures the writer emits the runtime player-settings manifest so the native host can honor the selected default window resolution.
+    /// </summary>
+    [Fact]
+    public void Write_when_graphics_options_define_default_resolution_emits_runtime_player_settings_manifest() {
+        PlatformBuildManifest manifest = new(
+            2,
+            "project",
+            "1.0.0",
+            "1.0.0",
+            "DemoDiscMainMenu",
+            [
+                new PlatformBuildScene(
+                    "DemoDiscMainMenu",
+                    "DemoDiscMainMenu",
+                    "cooked/scenes/DemoDiscMainMenu.hasset",
+                    [],
+                    [new KeyValuePair<string, string>("cooked-relative-path", "cooked/scenes/DemoDiscMainMenu.hasset")])
+            ],
+            [],
+            [],
+            [],
+            [],
+            new PlatformContainerWritePlan(string.Empty, []));
+        Dictionary<string, string> graphicsOptionValues = new(StringComparer.OrdinalIgnoreCase) {
+            ["default-width"] = "640",
+            ["default-height"] = "480"
+        };
+
+        WindowsRuntimeNativeManifestWriter writer = new();
+        writer.Write(GeneratedCoreRootPath, manifest, graphicsOptionValues);
+
+        string runtimeRootPath = Path.Combine(GeneratedCoreRootPath, "runtime");
+        string settingsHeaderPath = Path.Combine(runtimeRootPath, "runtime_player_settings_manifest.hpp");
+        string settingsSourcePath = Path.Combine(runtimeRootPath, "runtime_player_settings_manifest.cpp");
+
+        Assert.True(File.Exists(settingsHeaderPath));
+        Assert.True(File.Exists(settingsSourcePath));
+
+        string settingsSource = File.ReadAllText(settingsSourcePath);
+        Assert.Contains("he_get_runtime_default_window_width", settingsSource, StringComparison.Ordinal);
+        Assert.Contains("640", settingsSource, StringComparison.Ordinal);
+        Assert.Contains("480", settingsSource, StringComparison.Ordinal);
     }
 }

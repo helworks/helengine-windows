@@ -1,4 +1,5 @@
 #nullable enable
+using System.Globalization;
 using System.Text;
 using helengine.baseplatform.Manifest;
 
@@ -13,12 +14,19 @@ public sealed class WindowsRuntimeNativeManifestWriter {
     /// </summary>
     /// <param name="generatedCoreRootPath">Absolute path to the generated core output root.</param>
     /// <param name="manifest">Final build manifest whose runtime data should be embedded into native source.</param>
-    public void Write(string generatedCoreRootPath, PlatformBuildManifest manifest) {
+    /// <param name="selectedGraphicsOptionValues">Resolved graphics-profile options selected for the build.</param>
+    public void Write(
+        string generatedCoreRootPath,
+        PlatformBuildManifest manifest,
+        IReadOnlyDictionary<string, string> selectedGraphicsOptionValues) {
         if (string.IsNullOrWhiteSpace(generatedCoreRootPath)) {
             throw new ArgumentException("Generated core root path must be provided.", nameof(generatedCoreRootPath));
         }
         if (manifest == null) {
             throw new ArgumentNullException(nameof(manifest));
+        }
+        if (selectedGraphicsOptionValues == null) {
+            throw new ArgumentNullException(nameof(selectedGraphicsOptionValues));
         }
 
         string runtimeRootPath = Path.Combine(generatedCoreRootPath, "runtime");
@@ -27,6 +35,7 @@ public sealed class WindowsRuntimeNativeManifestWriter {
         WriteStartupManifestSource(runtimeRootPath, manifest);
         WriteSceneCatalogManifestSource(runtimeRootPath, manifest);
         WriteCodeModuleManifestSource(runtimeRootPath, manifest);
+        WritePlayerSettingsManifestSource(runtimeRootPath, selectedGraphicsOptionValues);
     }
 
     /// <summary>
@@ -67,6 +76,21 @@ public sealed class WindowsRuntimeNativeManifestWriter {
 
         File.WriteAllText(headerPath, BuildCodeModuleManifestHeaderContents());
         File.WriteAllText(sourcePath, BuildCodeModuleManifestSourceContents(manifest.CodeModules));
+    }
+
+    /// <summary>
+    /// Writes the generated player-settings manifest header and implementation.
+    /// </summary>
+    /// <param name="runtimeRootPath">Runtime source folder inside the generated core tree.</param>
+    /// <param name="selectedGraphicsOptionValues">Resolved graphics-profile options selected for the build.</param>
+    void WritePlayerSettingsManifestSource(string runtimeRootPath, IReadOnlyDictionary<string, string> selectedGraphicsOptionValues) {
+        int defaultWindowWidth = ResolveRequiredPositiveIntegerOption(selectedGraphicsOptionValues, "default-width");
+        int defaultWindowHeight = ResolveRequiredPositiveIntegerOption(selectedGraphicsOptionValues, "default-height");
+        string headerPath = Path.Combine(runtimeRootPath, "runtime_player_settings_manifest.hpp");
+        string sourcePath = Path.Combine(runtimeRootPath, "runtime_player_settings_manifest.cpp");
+
+        File.WriteAllText(headerPath, BuildPlayerSettingsManifestHeaderContents());
+        File.WriteAllText(sourcePath, BuildPlayerSettingsManifestSourceContents(defaultWindowWidth, defaultWindowHeight));
     }
 
     /// <summary>
@@ -207,6 +231,19 @@ public sealed class WindowsRuntimeNativeManifestWriter {
     }
 
     /// <summary>
+    /// Builds the generated runtime player-settings manifest header.
+    /// </summary>
+    /// <returns>Generated C++ header text.</returns>
+    static string BuildPlayerSettingsManifestHeaderContents() {
+        StringBuilder builder = new();
+        builder.AppendLine("#pragma once");
+        builder.AppendLine();
+        builder.AppendLine("int he_get_runtime_default_window_width();");
+        builder.AppendLine("int he_get_runtime_default_window_height();");
+        return builder.ToString();
+    }
+
+    /// <summary>
     /// Builds the generated runtime code-module manifest implementation.
     /// </summary>
     /// <param name="codeModules">Cooked code-module records to embed into native source.</param>
@@ -298,6 +335,29 @@ public sealed class WindowsRuntimeNativeManifestWriter {
         builder.AppendLine();
         builder.AppendLine("bool he_runtime_code_module_can_unload(const char* moduleId) {");
         builder.AppendLine("    return he_runtime_code_module_load_state(moduleId) != HERuntimeCodeModuleLoadState::ResidentAtStartup;");
+        builder.AppendLine("}");
+        return builder.ToString();
+    }
+
+    /// <summary>
+    /// Builds the generated runtime player-settings manifest implementation.
+    /// </summary>
+    /// <param name="defaultWindowWidth">Default player-window width resolved from the selected graphics settings.</param>
+    /// <param name="defaultWindowHeight">Default player-window height resolved from the selected graphics settings.</param>
+    /// <returns>Generated C++ implementation text.</returns>
+    static string BuildPlayerSettingsManifestSourceContents(int defaultWindowWidth, int defaultWindowHeight) {
+        StringBuilder builder = new();
+        builder.AppendLine("#include \"runtime/runtime_player_settings_manifest.hpp\"");
+        builder.AppendLine();
+        builder.AppendLine("static const int kRuntimeDefaultWindowWidth = " + defaultWindowWidth.ToString(CultureInfo.InvariantCulture) + ";");
+        builder.AppendLine("static const int kRuntimeDefaultWindowHeight = " + defaultWindowHeight.ToString(CultureInfo.InvariantCulture) + ";");
+        builder.AppendLine();
+        builder.AppendLine("int he_get_runtime_default_window_width() {");
+        builder.AppendLine("    return kRuntimeDefaultWindowWidth;");
+        builder.AppendLine("}");
+        builder.AppendLine();
+        builder.AppendLine("int he_get_runtime_default_window_height() {");
+        builder.AppendLine("    return kRuntimeDefaultWindowHeight;");
         builder.AppendLine("}");
         return builder.ToString();
     }
@@ -397,6 +457,47 @@ public sealed class WindowsRuntimeNativeManifestWriter {
         }
 
         return "HERuntimeCodeModuleLoadState::Unloadable";
+    }
+
+    /// <summary>
+    /// Resolves one required positive integer option from the selected graphics-profile values.
+    /// </summary>
+    /// <param name="selectedGraphicsOptionValues">Resolved graphics-profile option values selected for the build.</param>
+    /// <param name="optionId">Stable option identifier to resolve.</param>
+    /// <returns>Parsed positive integer value.</returns>
+    static int ResolveRequiredPositiveIntegerOption(IReadOnlyDictionary<string, string> selectedGraphicsOptionValues, string optionId) {
+        if (!TryGetOptionValue(selectedGraphicsOptionValues, optionId, out string value) || string.IsNullOrWhiteSpace(value)) {
+            throw new InvalidOperationException($"Required Windows graphics option '{optionId}' was not provided to the native manifest writer.");
+        }
+
+        if (!int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out int parsedValue) || parsedValue <= 0) {
+            throw new InvalidOperationException($"Windows graphics option '{optionId}' must be a positive integer.");
+        }
+
+        return parsedValue;
+    }
+
+    /// <summary>
+    /// Attempts to resolve one option value using a case-insensitive key comparison.
+    /// </summary>
+    /// <param name="selectedGraphicsOptionValues">Resolved graphics-profile option values selected for the build.</param>
+    /// <param name="optionId">Stable option identifier to resolve.</param>
+    /// <param name="value">Resolved option value when present.</param>
+    /// <returns>True when the option value was present.</returns>
+    static bool TryGetOptionValue(IReadOnlyDictionary<string, string> selectedGraphicsOptionValues, string optionId, out string value) {
+        if (selectedGraphicsOptionValues.TryGetValue(optionId, out value)) {
+            return true;
+        }
+
+        foreach (KeyValuePair<string, string> entry in selectedGraphicsOptionValues) {
+            if (string.Equals(entry.Key, optionId, StringComparison.OrdinalIgnoreCase)) {
+                value = entry.Value;
+                return true;
+            }
+        }
+
+        value = string.Empty;
+        return false;
     }
 
     /// <summary>

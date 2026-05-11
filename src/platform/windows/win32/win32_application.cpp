@@ -20,6 +20,10 @@
 #include "platform/windows/win32/win32_render_bridge.hpp"
 #include "platform/windows/win32/win32_window.hpp"
 
+#if __has_include("runtime/runtime_player_settings_manifest.hpp")
+#include "runtime/runtime_player_settings_manifest.hpp"
+#endif
+
 #if __has_include("Core.hpp")
 #include "Asset.hpp"
 #include "AssetSerializer.hpp"
@@ -121,9 +125,27 @@ namespace helengine::windows {
 
     /// Creates the main native window for the player host.
     void Win32Application::CreateMainWindow() {
-        MainWindow = std::make_unique<Win32Window>(L"HelEngine Windows Host", 1280, 720);
+        int defaultWindowWidth = 1280;
+        int defaultWindowHeight = 720;
+
+#if __has_include("runtime/runtime_player_settings_manifest.hpp")
+        defaultWindowWidth = he_get_runtime_default_window_width();
+        defaultWindowHeight = he_get_runtime_default_window_height();
+#endif
+
+        MainWindow = std::make_unique<Win32Window>(L"HelEngine Windows Host", defaultWindowWidth, defaultWindowHeight);
         MainWindow->Create();
         MainWindow->Show();
+        {
+            std::ostringstream messageBuilder;
+            messageBuilder << "Main window configured to default client size "
+                << defaultWindowWidth
+                << "x"
+                << defaultWindowHeight
+                << '.';
+            std::string message = messageBuilder.str();
+            WriteLifecycleLog(message.c_str());
+        }
         WriteLifecycleLog("Main window loaded and shown.");
     }
 
