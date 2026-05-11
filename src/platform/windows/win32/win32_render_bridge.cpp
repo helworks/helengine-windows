@@ -134,11 +134,17 @@ namespace helengine::windows {
         /// Stores the fixed resolution used by the first native directional shadow map.
         constexpr UINT DirectionalShadowMapResolution = 1024;
 
-        /// Minimum directional shadow distance used by the native player so wide orbit showcase cameras keep their casters inside the shadow volume.
-        constexpr float MinimumDirectionalShadowDistance = 200.0f;
+        /// Minimum directional shadow distance used by the native player so zero or invalid authored shadow distances still produce a valid shadow volume.
+        constexpr float MinimumDirectionalShadowDistance = 1.0f;
 
         /// Stores the fraction of the authored shadow distance used to focus directional shadow coverage ahead of the camera.
         constexpr float DirectionalShadowFocusDistanceFactor = 0.5f;
+
+        /// Constant depth bias applied while rendering directional shadow casters so simple rotating meshes do not collapse into self-shadowing.
+        constexpr int ShadowDepthBias = 1000;
+
+        /// Slope-scaled depth bias applied while rendering directional shadow casters so grazing-angle receivers remain lit consistently.
+        constexpr float ShadowSlopeScaledDepthBias = 1.0f;
 
         /// Built-in generated model id used by the infinite-thin ground plane primitive.
         constexpr const char* BuiltInPlaneModelId = "engine:model:plane";
@@ -866,8 +872,10 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
         ::float4x4 world;
         float4x4::Multiply(rotationScale, translation, world);
 
-        ::float4x4 normalMatrix;
-        float4x4::InverseTranspose(world, normalMatrix);
+        ::float4x4 inverseTransposeNormalMatrix;
+        float4x4::InverseTranspose(world, inverseTransposeNormalMatrix);
+        ::float4x4 uploadedNormalMatrix;
+        float4x4::Transpose(inverseTransposeNormalMatrix, uploadedNormalMatrix);
 
         ::float4x4 worldViewProjection;
         float4x4::Multiply(world, CurrentViewProjection, worldViewProjection);
@@ -923,7 +931,7 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
         Win32TransformConstants constants {};
         constants.World = StoreMatrix(transposedWorld);
         constants.WorldViewProjection = StoreMatrix(transposedWorldViewProjection);
-        constants.WorldNormal = StoreMatrix(normalMatrix);
+        constants.WorldNormal = StoreMatrix(uploadedNormalMatrix);
         constants.CameraPosition = DirectX::XMFLOAT4(CurrentCameraPosition.X, CurrentCameraPosition.Y, CurrentCameraPosition.Z, 0.0f);
         constants.LightDirection = DirectX::XMFLOAT4(-0.35f, -0.65f, -0.55f, 0.0f);
         constants.LightColor = DirectX::XMFLOAT4(1.0f, 1.0f, 1.0f, 1.0f);
@@ -1205,8 +1213,8 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
         shadowRasterizerDescription.CullMode = D3D11_CULL_BACK;
         shadowRasterizerDescription.FrontCounterClockwise = TRUE;
         shadowRasterizerDescription.DepthClipEnable = TRUE;
-        shadowRasterizerDescription.DepthBias = 0;
-        shadowRasterizerDescription.SlopeScaledDepthBias = 0.0f;
+        shadowRasterizerDescription.DepthBias = ShadowDepthBias;
+        shadowRasterizerDescription.SlopeScaledDepthBias = ShadowSlopeScaledDepthBias;
         ThrowIfFailed(
             Bootstrap.GetDevice()->CreateRasterizerState(&shadowRasterizerDescription, ShadowRasterizerState.GetAddressOf()),
             "ID3D11Device::CreateRasterizerState failed for the Windows bridge shadow rasterizer state.");
