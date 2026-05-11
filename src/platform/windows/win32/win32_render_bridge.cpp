@@ -18,6 +18,19 @@
 #include "MaterialLayoutBuilder.hpp"
 #include "platform/windows/directx11/directx11_bootstrap.hpp"
 
+#if __has_include("CameraRenderSettings.hpp")
+#include "BuiltInMaterialIds.hpp"
+#include "CameraRenderSettings.hpp"
+#include "DirectionalLightComponent.hpp"
+#include "LightComponent.hpp"
+#include "LightDirectionUtility.hpp"
+#include "PointLightComponent.hpp"
+#include "SpotLightComponent.hpp"
+#if __has_include("StandardMaterialTextureBindingDefaults.hpp")
+#include "StandardMaterialTextureBindingDefaults.hpp"
+#endif
+#endif
+
 #if __has_include("RenderCommandListBuilder2D.hpp")
 #include "RenderCommand2DType.hpp"
 #include "RenderCommandList2D.hpp"
@@ -29,6 +42,9 @@ namespace helengine::windows {
     namespace {
         /// Tracks whether one diagnostic render snapshot has already been written.
         bool HasWrittenRenderSnapshot = false;
+
+        /// Counts logged 3D draw visits for the first snapshot frame.
+        int Logged3DVisitCount = 0;
 
         /// Tracks whether one native 2D summary has already been written.
         bool HasWritten2DSummary = false;
@@ -77,6 +93,65 @@ namespace helengine::windows {
             DirectX::XMFLOAT4 MaterialParameters;
         };
 
+        /// Stores one packed forward-light slot matching the built-in Windows forward shader contract.
+        struct Win32ForwardLightSlotConstants {
+            DirectX::XMFLOAT4 ColorAndType;
+            DirectX::XMFLOAT4 DirectionAndShadow;
+            DirectX::XMFLOAT4 PositionAndRange;
+            DirectX::XMFLOAT4 SpotAngles;
+        };
+
+        /// Stores the packed forward-light constant buffer consumed by built-in scene shaders.
+        struct Win32ForwardLightConstants {
+            DirectX::XMFLOAT4 LightMetadata;
+            Win32ForwardLightSlotConstants Light0;
+            Win32ForwardLightSlotConstants Light1;
+            Win32ForwardLightSlotConstants Light2;
+            Win32ForwardLightSlotConstants Light3;
+        };
+
+        /// Stores one packed shadow slot matching the built-in Windows forward shader contract.
+        struct Win32ShadowLightSlotConstants {
+            DirectX::XMFLOAT4 AtlasRect;
+            DirectX::XMFLOAT4 Metadata;
+            DirectX::XMFLOAT4X4 WorldToShadowClip;
+        };
+
+        /// Stores the packed shadow constant buffer consumed by built-in scene shaders.
+        struct Win32ShadowConstants {
+            DirectX::XMFLOAT4 ShadowMetadata;
+            Win32ShadowLightSlotConstants Light0;
+            Win32ShadowLightSlotConstants Light1;
+            Win32ShadowLightSlotConstants Light2;
+            Win32ShadowLightSlotConstants Light3;
+        };
+
+        /// Stores the transform constants consumed by the directional shadow depth pass.
+        struct Win32ShadowTransformConstants {
+            DirectX::XMFLOAT4X4 WorldViewProjection;
+        };
+
+        /// Stores the fixed resolution used by the first native directional shadow map.
+        constexpr UINT DirectionalShadowMapResolution = 1024;
+
+        /// Minimum directional shadow distance used by the native player so wide orbit showcase cameras keep their casters inside the shadow volume.
+        constexpr float MinimumDirectionalShadowDistance = 200.0f;
+
+        /// Stores the fraction of the authored shadow distance used to focus directional shadow coverage ahead of the camera.
+        constexpr float DirectionalShadowFocusDistanceFactor = 0.5f;
+
+        /// Built-in generated model id used by the infinite-thin ground plane primitive.
+        constexpr const char* BuiltInPlaneModelId = "engine:model:plane";
+
+        /// Engine-managed shadow-atlas texture binding name used by the built-in forward shader.
+        constexpr const char* ShadowAtlasTextureBindingName = "shadowAtlasTexture";
+
+        /// Engine-managed point-shadow texture binding names used by the built-in forward shader.
+        constexpr const char* PointShadowTextureBindingName0 = "pointShadowTexture0";
+        constexpr const char* PointShadowTextureBindingName1 = "pointShadowTexture1";
+        constexpr const char* PointShadowTextureBindingName2 = "pointShadowTexture2";
+        constexpr const char* PointShadowTextureBindingName3 = "pointShadowTexture3";
+
         /// Vertex shader used by the first native 3D Windows pass.
         constexpr const char* VertexShaderSource = R"(
 cbuffer TransformBuffer : register(b0) {
@@ -121,12 +196,50 @@ cbuffer TransformBuffer : register(b0) {
     float4x4 WorldViewProjection;
     float4x4 WorldNormal;
     float4 CameraPosition;
-    float4 LightDirection;
-    float4 LightColor;
-    float4 AmbientColor;
-    float4 SpecularColor;
-    float4 MaterialParameters;
+    float4 Padding0;
+    float4 Padding1;
+    float4 Padding2;
+    float4 Padding3;
 };
+
+cbuffer ForwardLightBuffer : register(b1) {
+    float4 LightMetadata;
+    float4 Light0ColorAndType;
+    float4 Light0DirectionAndShadow;
+    float4 Light0PositionAndRange;
+    float4 Light0SpotAngles;
+    float4 Light1ColorAndType;
+    float4 Light1DirectionAndShadow;
+    float4 Light1PositionAndRange;
+    float4 Light1SpotAngles;
+    float4 Light2ColorAndType;
+    float4 Light2DirectionAndShadow;
+    float4 Light2PositionAndRange;
+    float4 Light2SpotAngles;
+    float4 Light3ColorAndType;
+    float4 Light3DirectionAndShadow;
+    float4 Light3PositionAndRange;
+    float4 Light3SpotAngles;
+};
+
+cbuffer ShadowBuffer : register(b2) {
+    float4 ShadowMetadata;
+    float4 ShadowLight0AtlasRect;
+    float4 ShadowLight0Metadata;
+    float4x4 ShadowLight0WorldToShadowClip;
+    float4 ShadowLight1AtlasRect;
+    float4 ShadowLight1Metadata;
+    float4x4 ShadowLight1WorldToShadowClip;
+    float4 ShadowLight2AtlasRect;
+    float4 ShadowLight2Metadata;
+    float4x4 ShadowLight2WorldToShadowClip;
+    float4 ShadowLight3AtlasRect;
+    float4 ShadowLight3Metadata;
+    float4x4 ShadowLight3WorldToShadowClip;
+};
+
+Texture2D ShadowAtlasTexture : register(t1);
+SamplerState ShadowAtlasSampler : register(s1);
 
 struct PSInput {
     float4 Position : SV_POSITION;
@@ -134,9 +247,143 @@ struct PSInput {
     float3 WorldNormal : TEXCOORD1;
 };
 
+float EvaluateShadow(float4 atlasRect, float4 shadowMetadata, float4x4 worldToShadowClip, float3 worldPosition) {
+    if (shadowMetadata.x <= 0.5f || shadowMetadata.z >= 1.5f || ShadowMetadata.x <= 0.5f) {
+        return 1.0f;
+    }
+
+    float4 shadowClip = mul(float4(worldPosition, 1.0f), worldToShadowClip);
+    if (abs(shadowClip.w) <= 0.0001f) {
+        return 1.0f;
+    }
+
+    float3 shadowNdc = shadowClip.xyz / shadowClip.w;
+    float2 shadowUv = float2((shadowNdc.x * 0.5f) + 0.5f, (-shadowNdc.y * 0.5f) + 0.5f);
+    if (shadowUv.x < 0.0f || shadowUv.x > 1.0f || shadowUv.y < 0.0f || shadowUv.y > 1.0f || shadowNdc.z < 0.0f || shadowNdc.z > 1.0f) {
+        return 1.0f;
+    }
+
+    float2 atlasUv = atlasRect.xy + (shadowUv * atlasRect.zw);
+    float sampledDepth = ShadowAtlasTexture.Sample(ShadowAtlasSampler, atlasUv).r;
+    float shadowBias = 0.01f;
+    float visibility = (shadowNdc.z - shadowBias) <= sampledDepth ? 1.0f : 0.0f;
+    return lerp(1.0f, visibility, shadowMetadata.y);
+}
+
+float3 EvaluateForwardLight(
+    float4 colorAndType,
+    float4 directionAndShadow,
+    float4 positionAndRange,
+    float4 spotAngles,
+    float4 shadowAtlasRect,
+    float4 shadowSlotMetadata,
+    float4x4 worldToShadowClip,
+    float3 surfaceColor,
+    float3 worldPosition,
+    float3 worldNormal,
+    float3 viewDirection) {
+    int lightType = (int)(colorAndType.w + 0.5f);
+    float3 radiance = colorAndType.xyz;
+    float3 lightDirection = float3(0.0f, 0.0f, 0.0f);
+    float attenuation = 1.0f;
+
+    if (lightType == 0) {
+        lightDirection = normalize(-directionAndShadow.xyz);
+    } else {
+        float3 toLight = positionAndRange.xyz - worldPosition;
+        float distanceToLight = length(toLight);
+        if (distanceToLight <= 0.0001f || positionAndRange.w <= 0.0f) {
+            return float3(0.0f, 0.0f, 0.0f);
+        }
+
+        lightDirection = toLight / distanceToLight;
+        float normalizedDistance = saturate(distanceToLight / positionAndRange.w);
+        float rangeAttenuation = 1.0f - (normalizedDistance * normalizedDistance);
+        attenuation = rangeAttenuation * rangeAttenuation;
+
+        if (lightType == 2) {
+            float3 lightForward = normalize(directionAndShadow.xyz);
+            float3 lightToSurface = normalize(worldPosition - positionAndRange.xyz);
+            float cone = dot(lightForward, lightToSurface);
+            float coneRange = max(spotAngles.x - spotAngles.y, 0.0001f);
+            float spotAttenuation = saturate((cone - spotAngles.y) / coneRange);
+            attenuation *= spotAttenuation * spotAttenuation;
+        }
+    }
+
+    if (attenuation <= 0.0f) {
+        return float3(0.0f, 0.0f, 0.0f);
+    }
+
+    attenuation *= EvaluateShadow(shadowAtlasRect, shadowSlotMetadata, worldToShadowClip, worldPosition);
+    float diffuse = saturate(dot(worldNormal, lightDirection));
+    if (diffuse <= 0.0f) {
+        return float3(0.0f, 0.0f, 0.0f);
+    }
+
+    float3 halfVector = normalize(lightDirection + viewDirection);
+    float specular = pow(saturate(dot(worldNormal, halfVector)), 32.0f);
+    float3 diffuseColor = surfaceColor * radiance * diffuse * attenuation;
+    float3 specularColor = radiance * specular * 0.35f * attenuation;
+    return diffuseColor + specularColor;
+}
+
 float4 PSMain(PSInput input) : SV_TARGET {
+    float3 surfaceColor = float3(0.78f, 0.80f, 0.84f);
+    float3 ambientColor = float3(0.12f, 0.13f, 0.15f);
     float3 normal = normalize(input.WorldNormal);
-    return float4(normal * 0.5f + 0.5f, 1.0f);
+    float3 viewDirection = normalize(CameraPosition.xyz - input.WorldPosition);
+    float3 color = surfaceColor * ambientColor;
+    int activeLightCount = (int)(LightMetadata.x + 0.5f);
+
+    if (activeLightCount > 0) {
+        color += EvaluateForwardLight(Light0ColorAndType, Light0DirectionAndShadow, Light0PositionAndRange, Light0SpotAngles, ShadowLight0AtlasRect, ShadowLight0Metadata, ShadowLight0WorldToShadowClip, surfaceColor, input.WorldPosition, normal, viewDirection);
+    }
+
+    if (activeLightCount > 1) {
+        color += EvaluateForwardLight(Light1ColorAndType, Light1DirectionAndShadow, Light1PositionAndRange, Light1SpotAngles, ShadowLight1AtlasRect, ShadowLight1Metadata, ShadowLight1WorldToShadowClip, surfaceColor, input.WorldPosition, normal, viewDirection);
+    }
+
+    if (activeLightCount > 2) {
+        color += EvaluateForwardLight(Light2ColorAndType, Light2DirectionAndShadow, Light2PositionAndRange, Light2SpotAngles, ShadowLight2AtlasRect, ShadowLight2Metadata, ShadowLight2WorldToShadowClip, surfaceColor, input.WorldPosition, normal, viewDirection);
+    }
+
+    if (activeLightCount > 3) {
+        color += EvaluateForwardLight(Light3ColorAndType, Light3DirectionAndShadow, Light3PositionAndRange, Light3SpotAngles, ShadowLight3AtlasRect, ShadowLight3Metadata, ShadowLight3WorldToShadowClip, surfaceColor, input.WorldPosition, normal, viewDirection);
+    }
+
+    return float4(saturate(color), 1.0f);
+}
+)";
+
+        /// Vertex shader used by the directional shadow depth pass.
+        constexpr const char* ShadowVertexShaderSource = R"(
+cbuffer ShadowTransformBuffer : register(b0) {
+    float4x4 WorldViewProjection;
+};
+
+struct VSInput {
+    float3 Position : POSITION;
+};
+
+struct VSOutput {
+    float4 Position : SV_POSITION;
+};
+
+VSOutput VSMain(VSInput input) {
+    VSOutput output;
+    output.Position = mul(float4(input.Position, 1.0f), WorldViewProjection);
+    return output;
+}
+)";
+
+        /// Pixel shader used by the directional shadow depth pass.
+        constexpr const char* ShadowPixelShaderSource = R"(
+struct VSOutput {
+    float4 Position : SV_POSITION;
+};
+
+void PSMain(VSOutput input) {
 }
 )";
 
@@ -389,7 +636,9 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
     /// Creates the native renderer bridge for one DirectX11 bootstrap.
     Win32RenderManager3D::Win32RenderManager3D(DirectX11Bootstrap& bootstrap)
         : Bootstrap(bootstrap)
-        , CurrentViewProjection(::float4x4::get_Identity()) {
+        , CurrentViewProjection(::float4x4::get_Identity())
+        , CurrentShadowViewProjection(::float4x4::get_Identity())
+        , CurrentCameraPosition(0.0f, 0.0f, 0.0f) {
     }
 
     /// Builds a GPU-ready runtime model from raw mesh asset metadata.
@@ -489,6 +738,9 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
         runtimeMaterial->SetLayout(layout);
         runtimeMaterial->SetRenderState(materialAsset->RenderState);
         runtimeMaterial->ApplyConstantBufferDefaults(materialAsset->ConstantBuffers);
+#if __has_include("StandardMaterialTextureBindingDefaults.hpp")
+        StandardMaterialTextureBindingDefaults::Apply(runtimeMaterial);
+#endif
 
         MaterialShaderResources[materialId] = std::make_unique<Win32ShaderResource>(BuildShaderResource(materialAsset, shaderAsset));
         return runtimeMaterial;
@@ -552,6 +804,11 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
 
     /// Draws one queued mesh for the currently active camera.
     void Win32RenderManager3D::Visit(IDrawable3D* drawable) {
+        if (IsShadowPassActive) {
+            DrawDirectionalShadowCaster(drawable, CurrentShadowViewProjection);
+            return;
+        }
+
         if (drawable == nullptr || drawable->get_Parent() == nullptr || !drawable->get_Parent()->get_IsHierarchyEnabled()) {
             return;
         }
@@ -609,15 +866,8 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
         ::float4x4 world;
         float4x4::Multiply(rotationScale, translation, world);
 
-        ::float4x4 inverseScale;
-        float4x4::CreateScale(
-            scale.X != 0.0f ? 1.0f / scale.X : 0.0f,
-            scale.Y != 0.0f ? 1.0f / scale.Y : 0.0f,
-            scale.Z != 0.0f ? 1.0f / scale.Z : 0.0f,
-            inverseScale);
-
         ::float4x4 normalMatrix;
-        float4x4::Multiply(rotation, inverseScale, normalMatrix);
+        float4x4::InverseTranspose(world, normalMatrix);
 
         ::float4x4 worldViewProjection;
         float4x4::Multiply(world, CurrentViewProjection, worldViewProjection);
@@ -628,25 +878,39 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
         ::float4x4 transposedWorld;
         float4x4::Transpose(world, transposedWorld);
 
-        ::float4x4 transposedWorldNormal;
-        float4x4::Transpose(normalMatrix, transposedWorldNormal);
-
-        if (!HasWrittenRenderSnapshot) {
+        if (Logged3DVisitCount < 4) {
             AppendRenderSnapshotLine(
-                "drawable position=" + std::to_string(position.X) + "," + std::to_string(position.Y) + "," + std::to_string(position.Z) +
+                "drawable[" + std::to_string(Logged3DVisitCount) + "] position=" + std::to_string(position.X) + "," + std::to_string(position.Y) + "," + std::to_string(position.Z) +
                 " scale=" + std::to_string(scale.X) + "," + std::to_string(scale.Y) + "," + std::to_string(scale.Z) +
-                " orientation=" + std::to_string(orientation.X) + "," + std::to_string(orientation.Y) + "," + std::to_string(orientation.Z) + "," + std::to_string(orientation.W));
+                " orientation=" + std::to_string(orientation.X) + "," + std::to_string(orientation.Y) + "," + std::to_string(orientation.Z) + "," + std::to_string(orientation.W) +
+                " vertices=" + std::to_string(model->VertexCount) +
+                " indices=" + std::to_string(model->IndexCount));
             AppendRenderSnapshotLine(
-                "wvp rows="
+                "drawable[" + std::to_string(Logged3DVisitCount) + "] wvp rows="
                 "[" + std::to_string(worldViewProjection.M11) + "," + std::to_string(worldViewProjection.M12) + "," + std::to_string(worldViewProjection.M13) + "," + std::to_string(worldViewProjection.M14) + "]"
                 "[" + std::to_string(worldViewProjection.M21) + "," + std::to_string(worldViewProjection.M22) + "," + std::to_string(worldViewProjection.M23) + "," + std::to_string(worldViewProjection.M24) + "]"
                 "[" + std::to_string(worldViewProjection.M31) + "," + std::to_string(worldViewProjection.M32) + "," + std::to_string(worldViewProjection.M33) + "," + std::to_string(worldViewProjection.M34) + "]"
                 "[" + std::to_string(worldViewProjection.M41) + "," + std::to_string(worldViewProjection.M42) + "," + std::to_string(worldViewProjection.M43) + "," + std::to_string(worldViewProjection.M44) + "]");
-            HasWrittenRenderSnapshot = true;
+            Logged3DVisitCount++;
+            if (Logged3DVisitCount >= 4) {
+                HasWrittenRenderSnapshot = true;
+            }
         }
 
         if (shaderResource != nullptr && rootMaterial != nullptr) {
-            ApplyMaterial(rootMaterial);
+            ApplyMaterial(runtimeMaterial != nullptr ? runtimeMaterial : rootMaterial);
+            ID3D11Buffer* forwardLightBuffer = ForwardLightConstantBuffer.Get();
+            context->PSSetConstantBuffers(1, 1, &forwardLightBuffer);
+            ID3D11Buffer* shadowBuffer = ShadowConstantBuffer.Get();
+            context->PSSetConstantBuffers(2, 1, &shadowBuffer);
+            ID3D11ShaderResourceView* shadowShaderResourceView = ShadowMapShaderResourceView.Get();
+            context->PSSetShaderResources(1, 1, &shadowShaderResourceView);
+            ID3D11SamplerState* shadowSamplerState = ShadowSamplerState.Get();
+            context->PSSetSamplers(1, 1, &shadowSamplerState);
+            ID3D11ShaderResourceView* pointShadowShaderResources[4] = { nullptr, nullptr, nullptr, nullptr };
+            context->PSSetShaderResources(2, 4, pointShadowShaderResources);
+            ID3D11SamplerState* pointShadowSamplerState = nullptr;
+            context->PSSetSamplers(2, 1, &pointShadowSamplerState);
         } else {
             context->IASetInputLayout(InputLayout.Get());
             context->VSSetShader(VertexShader.Get(), nullptr, 0);
@@ -659,8 +923,8 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
         Win32TransformConstants constants {};
         constants.World = StoreMatrix(transposedWorld);
         constants.WorldViewProjection = StoreMatrix(transposedWorldViewProjection);
-        constants.WorldNormal = StoreMatrix(transposedWorldNormal);
-        constants.CameraPosition = DirectX::XMFLOAT4(0.0f, 1.818842f, 6.267936f, 0.0f);
+        constants.WorldNormal = StoreMatrix(normalMatrix);
+        constants.CameraPosition = DirectX::XMFLOAT4(CurrentCameraPosition.X, CurrentCameraPosition.Y, CurrentCameraPosition.Z, 0.0f);
         constants.LightDirection = DirectX::XMFLOAT4(-0.35f, -0.65f, -0.55f, 0.0f);
         constants.LightColor = DirectX::XMFLOAT4(1.0f, 1.0f, 1.0f, 1.0f);
         constants.AmbientColor = DirectX::XMFLOAT4(0.16f, 0.18f, 0.22f, 1.0f);
@@ -673,11 +937,13 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
         } else {
             context->Draw(model->VertexCount, 0);
         }
+
     }
 
     /// Creates the shaders, input layout, and fixed pipeline state on first use.
     void Win32RenderManager3D::EnsurePipelineState() {
         if (VertexShader && PixelShader && InputLayout && TransformBuffer && RasterizerState && DepthStencilState) {
+            EnsureShadowPipelineState();
             EnsureTextureSamplerState();
             return;
         }
@@ -756,7 +1022,8 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
 
         D3D11_RASTERIZER_DESC rasterizerDescription {};
         rasterizerDescription.FillMode = D3D11_FILL_SOLID;
-        rasterizerDescription.CullMode = D3D11_CULL_NONE;
+        rasterizerDescription.CullMode = D3D11_CULL_BACK;
+        rasterizerDescription.FrontCounterClockwise = TRUE;
         rasterizerDescription.DepthClipEnable = TRUE;
 
         ThrowIfFailed(
@@ -816,6 +1083,141 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
         if (!HasWrittenRenderSnapshot) {
             AppendRenderSnapshotLine("diagnostic pipeline created");
         }
+
+        EnsureShadowPipelineState();
+    }
+
+    /// Creates the shaders, constant buffers, and textures required by the directional shadow path.
+    void Win32RenderManager3D::EnsureShadowPipelineState() {
+        if (ForwardLightConstantBuffer
+            && ShadowConstantBuffer
+            && ShadowTransformBuffer
+            && ShadowVertexShader
+            && ShadowPixelShader
+            && ShadowInputLayout
+            && ShadowRasterizerState
+            && ShadowDepthStencilState
+            && ShadowMapTexture
+            && ShadowMapShaderResourceView
+            && ShadowMapDepthStencilView
+            && ShadowSamplerState) {
+            return;
+        }
+
+        Microsoft::WRL::ComPtr<ID3DBlob> vertexShaderBlob;
+        Microsoft::WRL::ComPtr<ID3DBlob> pixelShaderBlob;
+        Microsoft::WRL::ComPtr<ID3DBlob> errorBlob;
+
+        ThrowIfFailed(
+            D3DCompile(ShadowVertexShaderSource, strlen(ShadowVertexShaderSource), nullptr, nullptr, nullptr, "VSMain", "vs_5_0", 0, 0, vertexShaderBlob.GetAddressOf(), errorBlob.GetAddressOf()),
+            errorBlob ? static_cast<const char*>(errorBlob->GetBufferPointer()) : "D3DCompile failed for the Windows bridge shadow vertex shader.");
+        errorBlob.Reset();
+        ThrowIfFailed(
+            D3DCompile(ShadowPixelShaderSource, strlen(ShadowPixelShaderSource), nullptr, nullptr, nullptr, "PSMain", "ps_5_0", 0, 0, pixelShaderBlob.GetAddressOf(), errorBlob.GetAddressOf()),
+            errorBlob ? static_cast<const char*>(errorBlob->GetBufferPointer()) : "D3DCompile failed for the Windows bridge shadow pixel shader.");
+
+        ThrowIfFailed(
+            Bootstrap.GetDevice()->CreateVertexShader(vertexShaderBlob->GetBufferPointer(), vertexShaderBlob->GetBufferSize(), nullptr, ShadowVertexShader.GetAddressOf()),
+            "ID3D11Device::CreateVertexShader failed for the Windows bridge shadow pass.");
+        ThrowIfFailed(
+            Bootstrap.GetDevice()->CreatePixelShader(pixelShaderBlob->GetBufferPointer(), pixelShaderBlob->GetBufferSize(), nullptr, ShadowPixelShader.GetAddressOf()),
+            "ID3D11Device::CreatePixelShader failed for the Windows bridge shadow pass.");
+
+        static const D3D11_INPUT_ELEMENT_DESC ShadowInputElements[] = {
+            { "POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 0, D3D11_INPUT_PER_VERTEX_DATA, 0 }
+        };
+
+        ThrowIfFailed(
+            Bootstrap.GetDevice()->CreateInputLayout(
+                ShadowInputElements,
+                static_cast<UINT>(std::size(ShadowInputElements)),
+                vertexShaderBlob->GetBufferPointer(),
+                vertexShaderBlob->GetBufferSize(),
+                ShadowInputLayout.GetAddressOf()),
+            "ID3D11Device::CreateInputLayout failed for the Windows bridge shadow pass.");
+
+        D3D11_BUFFER_DESC forwardLightBufferDescription {};
+        forwardLightBufferDescription.ByteWidth = sizeof(Win32ForwardLightConstants);
+        forwardLightBufferDescription.Usage = D3D11_USAGE_DEFAULT;
+        forwardLightBufferDescription.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
+        ThrowIfFailed(
+            Bootstrap.GetDevice()->CreateBuffer(&forwardLightBufferDescription, nullptr, ForwardLightConstantBuffer.GetAddressOf()),
+            "ID3D11Device::CreateBuffer failed for the Windows bridge forward-light constant buffer.");
+
+        D3D11_BUFFER_DESC shadowBufferDescription {};
+        shadowBufferDescription.ByteWidth = sizeof(Win32ShadowConstants);
+        shadowBufferDescription.Usage = D3D11_USAGE_DEFAULT;
+        shadowBufferDescription.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
+        ThrowIfFailed(
+            Bootstrap.GetDevice()->CreateBuffer(&shadowBufferDescription, nullptr, ShadowConstantBuffer.GetAddressOf()),
+            "ID3D11Device::CreateBuffer failed for the Windows bridge shadow constant buffer.");
+
+        D3D11_BUFFER_DESC shadowTransformBufferDescription {};
+        shadowTransformBufferDescription.ByteWidth = sizeof(Win32ShadowTransformConstants);
+        shadowTransformBufferDescription.Usage = D3D11_USAGE_DEFAULT;
+        shadowTransformBufferDescription.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
+        ThrowIfFailed(
+            Bootstrap.GetDevice()->CreateBuffer(&shadowTransformBufferDescription, nullptr, ShadowTransformBuffer.GetAddressOf()),
+            "ID3D11Device::CreateBuffer failed for the Windows bridge shadow transform buffer.");
+
+        D3D11_TEXTURE2D_DESC shadowTextureDescription {};
+        shadowTextureDescription.Width = DirectionalShadowMapResolution;
+        shadowTextureDescription.Height = DirectionalShadowMapResolution;
+        shadowTextureDescription.MipLevels = 1;
+        shadowTextureDescription.ArraySize = 1;
+        shadowTextureDescription.Format = DXGI_FORMAT_R32_TYPELESS;
+        shadowTextureDescription.SampleDesc.Count = 1;
+        shadowTextureDescription.Usage = D3D11_USAGE_DEFAULT;
+        shadowTextureDescription.BindFlags = D3D11_BIND_DEPTH_STENCIL | D3D11_BIND_SHADER_RESOURCE;
+        ThrowIfFailed(
+            Bootstrap.GetDevice()->CreateTexture2D(&shadowTextureDescription, nullptr, ShadowMapTexture.GetAddressOf()),
+            "ID3D11Device::CreateTexture2D failed for the Windows bridge shadow map.");
+
+        D3D11_DEPTH_STENCIL_VIEW_DESC shadowDepthStencilViewDescription {};
+        shadowDepthStencilViewDescription.Format = DXGI_FORMAT_D32_FLOAT;
+        shadowDepthStencilViewDescription.ViewDimension = D3D11_DSV_DIMENSION_TEXTURE2D;
+        ThrowIfFailed(
+            Bootstrap.GetDevice()->CreateDepthStencilView(ShadowMapTexture.Get(), &shadowDepthStencilViewDescription, ShadowMapDepthStencilView.GetAddressOf()),
+            "ID3D11Device::CreateDepthStencilView failed for the Windows bridge shadow depth buffer.");
+
+        D3D11_SHADER_RESOURCE_VIEW_DESC shadowShaderResourceViewDescription {};
+        shadowShaderResourceViewDescription.Format = DXGI_FORMAT_R32_FLOAT;
+        shadowShaderResourceViewDescription.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
+        shadowShaderResourceViewDescription.Texture2D.MipLevels = 1;
+        shadowShaderResourceViewDescription.Texture2D.MostDetailedMip = 0;
+        ThrowIfFailed(
+            Bootstrap.GetDevice()->CreateShaderResourceView(ShadowMapTexture.Get(), &shadowShaderResourceViewDescription, ShadowMapShaderResourceView.GetAddressOf()),
+            "ID3D11Device::CreateShaderResourceView failed for the Windows bridge shadow map.");
+
+        D3D11_SAMPLER_DESC shadowSamplerDescription {};
+        shadowSamplerDescription.Filter = D3D11_FILTER_MIN_MAG_MIP_LINEAR;
+        shadowSamplerDescription.AddressU = D3D11_TEXTURE_ADDRESS_CLAMP;
+        shadowSamplerDescription.AddressV = D3D11_TEXTURE_ADDRESS_CLAMP;
+        shadowSamplerDescription.AddressW = D3D11_TEXTURE_ADDRESS_CLAMP;
+        shadowSamplerDescription.MinLOD = 0;
+        shadowSamplerDescription.MaxLOD = D3D11_FLOAT32_MAX;
+        ThrowIfFailed(
+            Bootstrap.GetDevice()->CreateSamplerState(&shadowSamplerDescription, ShadowSamplerState.GetAddressOf()),
+            "ID3D11Device::CreateSamplerState failed for the Windows bridge shadow sampler.");
+
+        D3D11_RASTERIZER_DESC shadowRasterizerDescription {};
+        shadowRasterizerDescription.FillMode = D3D11_FILL_SOLID;
+        shadowRasterizerDescription.CullMode = D3D11_CULL_BACK;
+        shadowRasterizerDescription.FrontCounterClockwise = TRUE;
+        shadowRasterizerDescription.DepthClipEnable = TRUE;
+        shadowRasterizerDescription.DepthBias = 0;
+        shadowRasterizerDescription.SlopeScaledDepthBias = 0.0f;
+        ThrowIfFailed(
+            Bootstrap.GetDevice()->CreateRasterizerState(&shadowRasterizerDescription, ShadowRasterizerState.GetAddressOf()),
+            "ID3D11Device::CreateRasterizerState failed for the Windows bridge shadow rasterizer state.");
+
+        D3D11_DEPTH_STENCIL_DESC shadowDepthStencilDescription {};
+        shadowDepthStencilDescription.DepthEnable = TRUE;
+        shadowDepthStencilDescription.DepthWriteMask = D3D11_DEPTH_WRITE_MASK_ALL;
+        shadowDepthStencilDescription.DepthFunc = D3D11_COMPARISON_LESS_EQUAL;
+        ThrowIfFailed(
+            Bootstrap.GetDevice()->CreateDepthStencilState(&shadowDepthStencilDescription, ShadowDepthStencilState.GetAddressOf()),
+            "ID3D11Device::CreateDepthStencilState failed for the Windows bridge shadow depth state.");
     }
 
     /// Creates the default sampler used by material texture bindings.
@@ -906,14 +1308,37 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
         float3 cameraForward = float4::RotateVector(float3(0.0f, 0.0f, -1.0f), cameraOrientation);
         float3 cameraUp = float4::RotateVector(float3(0.0f, 1.0f, 0.0f), cameraOrientation);
         float3 cameraTarget = cameraPosition + cameraForward;
+        CurrentCameraPosition = cameraPosition;
 
         ::float4x4 view;
         float4x4::CreateLookAt(cameraPosition, cameraTarget, cameraUp, view);
         const float aspectRatio = viewport.Height > 0.0f ? viewport.Width / viewport.Height : 1.0f;
         constexpr float CameraFieldOfViewRadians = 0.78539816339f;
+        float nearPlaneDistance = camera->get_NearPlaneDistance();
+        if (nearPlaneDistance <= 0.0f) {
+            nearPlaneDistance = 0.1f;
+        }
+
+        float farPlaneDistance = camera->get_FarPlaneDistance();
+        if (farPlaneDistance <= nearPlaneDistance) {
+            farPlaneDistance = nearPlaneDistance + 0.1f;
+        }
+
         ::float4x4 projection;
-        float4x4::CreatePerspectiveFieldOfView(CameraFieldOfViewRadians, aspectRatio, 0.1f, 100.0f, projection);
+        float4x4::CreatePerspectiveFieldOfView(CameraFieldOfViewRadians, aspectRatio, nearPlaneDistance, farPlaneDistance, projection);
         float4x4::Multiply(view, projection, CurrentViewProjection);
+
+        std::vector<LightComponent*> visibleLights = SnapshotVisibleLights(camera);
+        if (!HasWrittenRenderSnapshot) {
+            AppendRenderDiagnosticsLine("3d.visible_lights=" + std::to_string(visibleLights.size()));
+        }
+        PrepareForwardLightState(visibleLights);
+        PrepareShadowState(camera, visibleLights);
+        context->OMSetRenderTargets(1, &renderTargetView, depthStencilView);
+        context->RSSetViewports(1, &viewport);
+        context->RSSetState(RasterizerState.Get());
+        context->OMSetDepthStencilState(DepthStencilState.Get(), 0);
+        context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
 
         if (!HasWrittenRenderSnapshot) {
             AppendRenderSnapshotLine(
@@ -939,6 +1364,349 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
         if (renderManager2D != nullptr) {
             renderManager2D->RenderCamera(camera);
         }
+    }
+
+    /// Copies the currently visible authored lights relevant to one camera into a render-ready list.
+    std::vector<LightComponent*> Win32RenderManager3D::SnapshotVisibleLights(ICamera* camera) const {
+        if (camera == nullptr) {
+            throw new ArgumentNullException("camera");
+        }
+
+        std::vector<LightComponent*> lights;
+        if (Core::get_Instance() == nullptr || Core::get_Instance()->get_ObjectManager() == nullptr) {
+            return lights;
+        }
+
+        List<Entity*>* entities = Core::get_Instance()->get_ObjectManager()->get_Entities();
+        if (entities == nullptr) {
+            return lights;
+        }
+
+        for (int32_t entityIndex = 0; entityIndex < entities->Count(); entityIndex++) {
+            Entity* entity = (*entities)[entityIndex];
+            if (entity == nullptr || !entity->get_IsHierarchyEnabled()) {
+                continue;
+            } else if ((entity->get_LayerMask() & camera->get_LayerMask()) == 0) {
+                continue;
+            }
+
+            List<Component*>* components = entity->get_Components();
+            if (components == nullptr) {
+                continue;
+            }
+
+            for (int32_t componentIndex = 0; componentIndex < components->Count(); componentIndex++) {
+                Component* component = (*components)[componentIndex];
+                LightComponent* light = dynamic_cast<LightComponent*>(component);
+                if (light != nullptr) {
+                    lights.push_back(light);
+                }
+            }
+        }
+
+        return lights;
+    }
+
+    /// Uploads the packed forward-light constant buffer used by built-in forward scene shaders.
+    void Win32RenderManager3D::PrepareForwardLightState(const std::vector<LightComponent*>& lights) {
+        EnsureShadowPipelineState();
+
+        Win32ForwardLightConstants constants {};
+        int32_t packedLightCount = 0;
+        for (std::size_t lightIndex = 0; lightIndex < lights.size() && packedLightCount < 4; lightIndex++) {
+            LightComponent* light = lights[lightIndex];
+            if (light == nullptr || light->get_Parent() == nullptr) {
+                continue;
+            }
+
+            Win32ForwardLightSlotConstants slot {};
+            float4 color = light->get_Color();
+            float intensity = light->get_Intensity();
+            slot.ColorAndType = DirectX::XMFLOAT4(
+                color.X * intensity,
+                color.Y * intensity,
+                color.Z * intensity,
+                static_cast<float>(light->get_LightType()));
+
+            float3 lightDirection = LightDirectionUtility::GetEntityForwardDirection(light->get_Parent());
+            slot.DirectionAndShadow = DirectX::XMFLOAT4(
+                lightDirection.X,
+                lightDirection.Y,
+                lightDirection.Z,
+                light->get_ShadowStrength());
+
+            if (PointLightComponent* pointLight = dynamic_cast<PointLightComponent*>(light)) {
+                float3 lightPosition = pointLight->get_Parent()->get_Position();
+                slot.PositionAndRange = DirectX::XMFLOAT4(
+                    lightPosition.X,
+                    lightPosition.Y,
+                    lightPosition.Z,
+                    pointLight->get_Range());
+            } else if (SpotLightComponent* spotLight = dynamic_cast<SpotLightComponent*>(light)) {
+                float3 lightPosition = spotLight->get_Parent()->get_Position();
+                slot.PositionAndRange = DirectX::XMFLOAT4(
+                    lightPosition.X,
+                    lightPosition.Y,
+                    lightPosition.Z,
+                    spotLight->get_Range());
+
+                double innerRadians = static_cast<double>(spotLight->get_InnerConeAngleDegrees()) * (std::numbers::pi / 180.0);
+                double outerRadians = static_cast<double>(spotLight->get_OuterConeAngleDegrees()) * (std::numbers::pi / 180.0);
+                slot.SpotAngles = DirectX::XMFLOAT4(
+                    static_cast<float>(std::cos(innerRadians)),
+                    static_cast<float>(std::cos(outerRadians)),
+                    0.0f,
+                    0.0f);
+            }
+
+            if (packedLightCount == 0) {
+                constants.Light0 = slot;
+            } else if (packedLightCount == 1) {
+                constants.Light1 = slot;
+            } else if (packedLightCount == 2) {
+                constants.Light2 = slot;
+            } else if (packedLightCount == 3) {
+                constants.Light3 = slot;
+            }
+
+            packedLightCount++;
+        }
+
+        constants.LightMetadata = DirectX::XMFLOAT4(static_cast<float>(packedLightCount), 0.0f, 0.0f, 0.0f);
+        if (!HasWrittenRenderSnapshot) {
+            AppendRenderDiagnosticsLine("3d.packed_lights=" + std::to_string(packedLightCount));
+            if (packedLightCount > 0) {
+                AppendRenderSnapshotLine(
+                    "light0 colorAndType="
+                    + std::to_string(constants.Light0.ColorAndType.x) + ","
+                    + std::to_string(constants.Light0.ColorAndType.y) + ","
+                    + std::to_string(constants.Light0.ColorAndType.z) + ","
+                    + std::to_string(constants.Light0.ColorAndType.w)
+                    + " directionAndShadow="
+                    + std::to_string(constants.Light0.DirectionAndShadow.x) + ","
+                    + std::to_string(constants.Light0.DirectionAndShadow.y) + ","
+                    + std::to_string(constants.Light0.DirectionAndShadow.z) + ","
+                    + std::to_string(constants.Light0.DirectionAndShadow.w));
+            }
+        }
+
+        ID3D11DeviceContext* context = Bootstrap.GetDeviceContext();
+        context->UpdateSubresource(ForwardLightConstantBuffer.Get(), 0, nullptr, &constants, 0, 0);
+        ID3D11Buffer* buffer = ForwardLightConstantBuffer.Get();
+        context->PSSetConstantBuffers(1, 1, &buffer);
+    }
+
+    /// Uploads the packed shadow constant buffer and bindings for the active directional shadow light.
+    void Win32RenderManager3D::PrepareShadowState(ICamera* camera, const std::vector<LightComponent*>& lights) {
+        if (camera == nullptr) {
+            throw new ArgumentNullException("camera");
+        }
+
+        EnsureShadowPipelineState();
+
+        DirectionalLightComponent* light = FindPrimaryDirectionalShadowLight(lights);
+        if (!HasWrittenRenderSnapshot) {
+            AppendRenderDiagnosticsLine(std::string("3d.shadow_light=") + (light != nullptr ? "directional" : "none"));
+            if (light != nullptr) {
+                AppendRenderSnapshotLine(
+                    "shadow light strength=" + std::to_string(light->get_ShadowStrength())
+                    + " distance=" + std::to_string(light->get_ShadowDistance()));
+            }
+        }
+        if (light != nullptr) {
+            RenderDirectionalShadowMap(camera, light);
+        }
+
+        Win32ShadowConstants constants {};
+        if (light != nullptr) {
+            ::float4x4 worldToShadowClip = BuildDirectionalShadowViewProjection(camera, light);
+            ::float4x4 transposedWorldToShadowClip;
+            float4x4::Transpose(worldToShadowClip, transposedWorldToShadowClip);
+
+            constants.ShadowMetadata = DirectX::XMFLOAT4(
+                1.0f,
+                1.0f / static_cast<float>(DirectionalShadowMapResolution),
+                1.0f / static_cast<float>(DirectionalShadowMapResolution),
+                1.0f);
+            constants.Light0.AtlasRect = DirectX::XMFLOAT4(0.0f, 0.0f, 1.0f, 1.0f);
+            constants.Light0.Metadata = DirectX::XMFLOAT4(1.0f, light->get_ShadowStrength(), 1.0f, 0.0f);
+            constants.Light0.WorldToShadowClip = StoreMatrix(transposedWorldToShadowClip);
+        }
+
+        ID3D11DeviceContext* context = Bootstrap.GetDeviceContext();
+        context->UpdateSubresource(ShadowConstantBuffer.Get(), 0, nullptr, &constants, 0, 0);
+        ID3D11Buffer* buffer = ShadowConstantBuffer.Get();
+        context->PSSetConstantBuffers(2, 1, &buffer);
+
+        ID3D11ShaderResourceView* shadowShaderResourceView = light != nullptr ? ShadowMapShaderResourceView.Get() : nullptr;
+        context->PSSetShaderResources(1, 1, &shadowShaderResourceView);
+        ID3D11SamplerState* shadowSamplerState = light != nullptr ? ShadowSamplerState.Get() : nullptr;
+        context->PSSetSamplers(1, 1, &shadowSamplerState);
+        ID3D11ShaderResourceView* pointShadowShaderResources[4] = { nullptr, nullptr, nullptr, nullptr };
+        context->PSSetShaderResources(2, 4, pointShadowShaderResources);
+        ID3D11SamplerState* pointShadowSamplerState = nullptr;
+        context->PSSetSamplers(2, 1, &pointShadowSamplerState);
+    }
+
+    /// Finds the first visible shadow-enabled directional light affecting the current camera.
+    DirectionalLightComponent* Win32RenderManager3D::FindPrimaryDirectionalShadowLight(const std::vector<LightComponent*>& lights) const {
+        for (std::size_t lightIndex = 0; lightIndex < lights.size(); lightIndex++) {
+            DirectionalLightComponent* light = dynamic_cast<DirectionalLightComponent*>(lights[lightIndex]);
+            if (light == nullptr || light->get_Parent() == nullptr) {
+                continue;
+            } else if (!light->get_ShadowsEnabled()) {
+                continue;
+            } else if (!light->get_Parent()->get_IsHierarchyEnabled()) {
+                continue;
+            }
+
+            return light;
+        }
+
+        return nullptr;
+    }
+
+    /// Renders the current scene depth from the active directional light into the shared shadow map.
+    void Win32RenderManager3D::RenderDirectionalShadowMap(ICamera* camera, DirectionalLightComponent* light) {
+        if (camera == nullptr) {
+            throw new ArgumentNullException("camera");
+        } else if (light == nullptr) {
+            throw new ArgumentNullException("light");
+        }
+
+        EnsureShadowPipelineState();
+
+        ID3D11DeviceContext* context = Bootstrap.GetDeviceContext();
+        ID3D11ShaderResourceView* nullShaderResourceView = nullptr;
+        context->PSSetShaderResources(1, 1, &nullShaderResourceView);
+
+        ID3D11DepthStencilView* depthStencilView = ShadowMapDepthStencilView.Get();
+        context->OMSetRenderTargets(0, nullptr, depthStencilView);
+        context->ClearDepthStencilView(depthStencilView, D3D11_CLEAR_DEPTH | D3D11_CLEAR_STENCIL, 1.0f, 0);
+
+        D3D11_VIEWPORT viewport {};
+        viewport.TopLeftX = 0.0f;
+        viewport.TopLeftY = 0.0f;
+        viewport.Width = static_cast<float>(DirectionalShadowMapResolution);
+        viewport.Height = static_cast<float>(DirectionalShadowMapResolution);
+        viewport.MinDepth = 0.0f;
+        viewport.MaxDepth = 1.0f;
+        context->RSSetViewports(1, &viewport);
+        context->RSSetState(ShadowRasterizerState.Get());
+        context->OMSetDepthStencilState(ShadowDepthStencilState.Get(), 0);
+        context->IASetInputLayout(ShadowInputLayout.Get());
+        context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+        context->VSSetShader(ShadowVertexShader.Get(), nullptr, 0);
+        context->PSSetShader(ShadowPixelShader.Get(), nullptr, 0);
+        ID3D11Buffer* transformBuffer = ShadowTransformBuffer.Get();
+        context->VSSetConstantBuffers(0, 1, &transformBuffer);
+
+        CurrentShadowViewProjection = BuildDirectionalShadowViewProjection(camera, light);
+        IsShadowPassActive = true;
+        try {
+            IRenderQueue3D* renderQueue = camera->get_RenderQueue3D();
+            if (renderQueue != nullptr) {
+                renderQueue->VisitOrdered(this);
+            }
+        } catch (...) {
+            IsShadowPassActive = false;
+            throw;
+        }
+
+        IsShadowPassActive = false;
+    }
+
+    /// Draws one shadow-casting mesh into the active directional shadow map.
+    void Win32RenderManager3D::DrawDirectionalShadowCaster(IDrawable3D* drawable, ::float4x4& lightViewProjection) {
+        if (drawable == nullptr || drawable->get_Parent() == nullptr || !drawable->get_Parent()->get_IsHierarchyEnabled()) {
+            return;
+        }
+
+        RuntimeModel* modelBase = drawable->get_Model();
+        if (modelBase == nullptr) {
+            return;
+        }
+
+        if (String::Equals(modelBase->get_Id(), BuiltInPlaneModelId, StringComparison::Ordinal)) {
+            return;
+        }
+
+        auto* model = static_cast<Win32RuntimeModel*>(modelBase);
+        if (!model->VertexBuffer) {
+            return;
+        }
+
+        ID3D11DeviceContext* context = Bootstrap.GetDeviceContext();
+        const UINT stride = sizeof(Win32VertexPositionNormalUV);
+        const UINT offset = 0;
+        ID3D11Buffer* vertexBuffer = model->VertexBuffer.Get();
+        context->IASetVertexBuffers(0, 1, &vertexBuffer, &stride, &offset);
+        if (model->IndexBuffer && model->IndexCount > 0) {
+            context->IASetIndexBuffer(model->IndexBuffer.Get(), model->IndexFormat, 0);
+        }
+
+        Entity* parent = drawable->get_Parent();
+        float4 orientation = parent->get_Orientation();
+        float3 scale = parent->get_Scale();
+        float3 position = parent->get_Position();
+
+        ::float4x4 rotation;
+        float4x4::CreateFromQuaternion(orientation, rotation);
+        ::float4x4 size;
+        float4x4::CreateScale(scale.X, scale.Y, scale.Z, size);
+        ::float4x4 rotationScale;
+        float4x4::Multiply(rotation, size, rotationScale);
+        ::float4x4 translation;
+        float4x4::CreateTranslation(position, translation);
+        ::float4x4 world;
+        float4x4::Multiply(rotationScale, translation, world);
+        ::float4x4 worldViewProjection;
+        float4x4::Multiply(world, lightViewProjection, worldViewProjection);
+        ::float4x4 transposedWorldViewProjection;
+        float4x4::Transpose(worldViewProjection, transposedWorldViewProjection);
+
+        Win32ShadowTransformConstants constants {};
+        constants.WorldViewProjection = StoreMatrix(transposedWorldViewProjection);
+        context->UpdateSubresource(ShadowTransformBuffer.Get(), 0, nullptr, &constants, 0, 0);
+
+        if (model->IndexBuffer && model->IndexCount > 0) {
+            context->DrawIndexed(model->IndexCount, 0, 0);
+        } else {
+            context->Draw(model->VertexCount, 0);
+        }
+    }
+
+    /// Builds the light-space view-projection matrix used by the active directional shadow pass.
+    ::float4x4 Win32RenderManager3D::BuildDirectionalShadowViewProjection(ICamera* camera, DirectionalLightComponent* light) const {
+        if (camera == nullptr) {
+            throw new ArgumentNullException("camera");
+        } else if (light == nullptr) {
+            throw new ArgumentNullException("light");
+        } else if (camera->get_Parent() == nullptr) {
+            throw new InvalidOperationException("Directional shadow rendering requires the camera to be attached to an entity.");
+        } else if (light->get_Parent() == nullptr) {
+            throw new InvalidOperationException("Directional shadow rendering requires the light to be attached to an entity.");
+        }
+
+        float3 rotatedForward = LightDirectionUtility::GetEntityForwardDirection(light->get_Parent());
+        float3 lightDirection = float3::Normalize(float3(-rotatedForward.X, -rotatedForward.Y, -rotatedForward.Z));
+        float shadowDistance = std::max(light->get_ShadowDistance(), MinimumDirectionalShadowDistance);
+        float3 cameraForward = float4::RotateVector(float3(0.0f, 0.0f, -1.0f), camera->get_Parent()->get_Orientation());
+        float3 target = camera->get_Parent()->get_Position() + (cameraForward * (shadowDistance * DirectionalShadowFocusDistanceFactor));
+        float depthRange = shadowDistance * 2.0f;
+        float3 lightPosition = target + (lightDirection * shadowDistance);
+        float3 defaultUp(0.0f, 1.0f, 0.0f);
+        float3 fallbackUp(0.0f, 0.0f, 1.0f);
+        float3 up = std::abs(float3::Dot(lightDirection, defaultUp)) > 0.99f ? fallbackUp : defaultUp;
+
+        ::float4x4 view;
+        float4x4::CreateLookAt(lightPosition, target, up, view);
+        float halfDistance = shadowDistance * 0.5f;
+        ::float4x4 projection;
+        float4x4::CreateOrthographicOffCenter(-halfDistance, halfDistance, -halfDistance, halfDistance, 0.1f, depthRange, projection);
+        ::float4x4 worldToShadowClip;
+        float4x4::Multiply(view, projection, worldToShadowClip);
+        return worldToShadowClip;
     }
 
     /// Draws one clip-space triangle with an identity transform to validate the native draw pipeline.
@@ -1196,9 +1964,17 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
             throw new InvalidOperationException("Runtime materials must have an identifier before rendering.");
         }
 
+        if (!HasWrittenRenderSnapshot) {
+            AppendRenderDiagnosticsLine("3d.material_id=" + materialId);
+        }
+
         auto shaderResourceIt = MaterialShaderResources.find(materialId);
         if (shaderResourceIt == MaterialShaderResources.end() || shaderResourceIt->second == nullptr) {
             throw new InvalidOperationException(std::string("No shader resource was cached for runtime material '") + materialId + std::string("'."));
+        }
+
+        if (!HasWrittenRenderSnapshot) {
+            AppendRenderDiagnosticsLine("3d.material_path=packaged_shader");
         }
 
         ID3D11DeviceContext* context = Bootstrap.GetDeviceContext();
@@ -1210,50 +1986,79 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
         ID3D11Buffer* transformBuffer = TransformBuffer.Get();
         context->VSSetConstantBuffers(0, 1, &transformBuffer);
         context->PSSetConstantBuffers(0, 1, &transformBuffer);
+        BindMaterialConstantBuffers(material);
 
         MaterialLayout* layout = material->get_Layout();
         MaterialPropertyBlock* properties = material->get_Properties();
         if (layout != nullptr && properties != nullptr) {
             Array<MaterialLayoutBinding*>* textureBindings = layout->get_TextureBindings();
-            if (textureBindings != nullptr) {
-                for (int32_t bindingIndex = 0; bindingIndex < textureBindings->Length; bindingIndex++) {
-                    MaterialLayoutBinding* binding = (*textureBindings)[bindingIndex];
-                    if (binding == nullptr) {
-                        continue;
-                    }
-
-                    BindMaterialTexture(material, bindingIndex, binding->get_Slot());
-                }
+            if (textureBindings != nullptr && textureBindings->Length > 0) {
+                BindMaterialTexture(material);
             }
         }
     }
 
-    /// Binds one runtime material texture to the pixel shader if the texture has been uploaded.
-    void Win32RenderManager3D::BindMaterialTexture(RuntimeMaterial* material, int32_t bindingIndex, int32_t slot) {
+    /// Applies authored material constant-buffer payloads for one runtime material while leaving engine-managed buffers untouched.
+    void Win32RenderManager3D::BindMaterialConstantBuffers(RuntimeMaterial* material) {
         if (material == nullptr) {
             throw new ArgumentNullException("material");
         }
 
-        if (bindingIndex < 0) {
-            throw new ArgumentOutOfRangeException("bindingIndex", "Binding index cannot be negative.");
-        }
-
-        if (slot < 0) {
-            throw new ArgumentOutOfRangeException("slot", "Binding slot cannot be negative.");
-        }
-
-        MaterialPropertyBlock* properties = material->get_Properties();
-        if (properties == nullptr) {
+        MaterialLayout* layout = material->get_Layout();
+        if (layout == nullptr) {
             return;
         }
 
-        RuntimeTexture* texture = properties->GetTexture(bindingIndex);
+        Array<MaterialLayoutBinding*>* constantBufferBindings = layout->get_ConstantBufferBindings();
+        if (constantBufferBindings == nullptr) {
+            return;
+        }
+
+        ID3D11DeviceContext* context = Bootstrap.GetDeviceContext();
+        for (int32_t bindingIndex = 0; bindingIndex < constantBufferBindings->Length; bindingIndex++) {
+            MaterialLayoutBinding* binding = (*constantBufferBindings)[bindingIndex];
+            if (binding == nullptr) {
+                continue;
+            }
+
+            std::string bindingName = binding->get_Name();
+            if (IsEngineManagedConstantBufferBinding(bindingName)) {
+                continue;
+            }
+
+            Array<uint8_t>* data = nullptr;
+            if (!material->TryResolveConstantBufferData(bindingName, data) || data == nullptr || data->Length == 0) {
+                ID3D11Buffer* nullBuffer = nullptr;
+                context->VSSetConstantBuffers(static_cast<UINT>(binding->get_Slot()), 1, &nullBuffer);
+                context->PSSetConstantBuffers(static_cast<UINT>(binding->get_Slot()), 1, &nullBuffer);
+                continue;
+            }
+
+            ID3D11Buffer* constantBuffer = GetOrCreateMaterialConstantBuffer(binding->get_Slot(), data->Length);
+            std::vector<uint8_t> uploadBytes(static_cast<std::size_t>(data->Length));
+            std::memcpy(uploadBytes.data(), data->Data, static_cast<std::size_t>(data->Length));
+            context->UpdateSubresource(constantBuffer, 0, nullptr, uploadBytes.data(), 0, 0);
+            context->VSSetConstantBuffers(static_cast<UINT>(binding->get_Slot()), 1, &constantBuffer);
+            context->PSSetConstantBuffers(static_cast<UINT>(binding->get_Slot()), 1, &constantBuffer);
+        }
+    }
+
+    /// Binds the resolved runtime material texture to the pixel shader slot consumed by the Windows forward path.
+    void Win32RenderManager3D::BindMaterialTexture(RuntimeMaterial* material) {
+        if (material == nullptr) {
+            throw new ArgumentNullException("material");
+        }
+
+        RuntimeTexture* texture = material->ResolveTexture();
         ID3D11ShaderResourceView* resourceView = ResolveTextureResourceView(texture);
         ID3D11DeviceContext* context = Bootstrap.GetDeviceContext();
-        context->PSSetShaderResources(static_cast<UINT>(slot), 1, &resourceView);
+        context->PSSetShaderResources(0, 1, &resourceView);
         if (resourceView != nullptr) {
             ID3D11SamplerState* samplerState = TextureSamplerState.Get();
-            context->PSSetSamplers(static_cast<UINT>(slot), 1, &samplerState);
+            context->PSSetSamplers(0, 1, &samplerState);
+        } else {
+            ID3D11SamplerState* nullSampler = nullptr;
+            context->PSSetSamplers(0, 1, &nullSampler);
         }
     }
 
@@ -1274,6 +2079,44 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
         }
 
         return resource->second->ShaderResourceView.Get();
+    }
+
+    /// Resolves or creates one Direct3D constant buffer matching the requested shader slot and byte size.
+    ID3D11Buffer* Win32RenderManager3D::GetOrCreateMaterialConstantBuffer(int32_t slot, int32_t sizeInBytes) {
+        if (slot < 0) {
+            throw new ArgumentOutOfRangeException("slot", "Constant-buffer slot cannot be negative.");
+        }
+        if (sizeInBytes <= 0) {
+            throw new ArgumentOutOfRangeException("sizeInBytes", "Constant-buffer size must be positive.");
+        }
+
+        uint64_t key = (static_cast<uint64_t>(static_cast<uint32_t>(slot)) << 32) | static_cast<uint32_t>(sizeInBytes);
+        auto existing = MaterialConstantBuffers.find(key);
+        if (existing != MaterialConstantBuffers.end() && existing->second) {
+            return existing->second.Get();
+        }
+
+        D3D11_BUFFER_DESC description {};
+        description.ByteWidth = static_cast<UINT>(sizeInBytes);
+        description.Usage = D3D11_USAGE_DEFAULT;
+        description.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
+        description.CPUAccessFlags = 0;
+        description.MiscFlags = 0;
+        description.StructureByteStride = 0;
+
+        Microsoft::WRL::ComPtr<ID3D11Buffer> constantBuffer;
+        ThrowIfFailed(
+            Bootstrap.GetDevice()->CreateBuffer(&description, nullptr, constantBuffer.GetAddressOf()),
+            "ID3D11Device::CreateBuffer failed for a Windows material constant buffer.");
+        MaterialConstantBuffers[key] = constantBuffer;
+        return MaterialConstantBuffers[key].Get();
+    }
+
+    /// Returns whether one constant-buffer binding is owned by the renderer instead of material-authored property data.
+    bool Win32RenderManager3D::IsEngineManagedConstantBufferBinding(std::string bindingName) {
+        return bindingName == "TransformBuffer"
+            || bindingName == "ForwardLightBuffer"
+            || bindingName == "ShadowBuffer";
     }
 
     /// Clears the back buffer to a solid fallback color when nothing else renders.
@@ -2232,3 +3075,15 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
     }
 #endif
 }
+
+
+
+
+
+
+
+
+
+
+
+

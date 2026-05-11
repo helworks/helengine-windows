@@ -5,7 +5,7 @@ using helengine.baseplatform.Manifest;
 namespace helengine.windows.builder;
 
 /// <summary>
-/// Writes generated C++ source fragments that embed runtime startup-scene and code-module residency data for the Windows player.
+/// Writes generated C++ source fragments that embed runtime startup-scene, scene-catalog, and code-module residency data for the Windows player.
 /// </summary>
 public sealed class WindowsRuntimeNativeManifestWriter {
     /// <summary>
@@ -25,6 +25,7 @@ public sealed class WindowsRuntimeNativeManifestWriter {
         Directory.CreateDirectory(runtimeRootPath);
 
         WriteStartupManifestSource(runtimeRootPath, manifest);
+        WriteSceneCatalogManifestSource(runtimeRootPath, manifest);
         WriteCodeModuleManifestSource(runtimeRootPath, manifest);
     }
 
@@ -40,6 +41,19 @@ public sealed class WindowsRuntimeNativeManifestWriter {
 
         File.WriteAllText(headerPath, BuildStartupManifestHeaderContents());
         File.WriteAllText(sourcePath, BuildStartupManifestSourceContents(startupSceneRelativePath));
+    }
+
+    /// <summary>
+    /// Writes the generated runtime scene-catalog manifest header and implementation.
+    /// </summary>
+    /// <param name="runtimeRootPath">Runtime source folder inside the generated core tree.</param>
+    /// <param name="manifest">Final build manifest whose built scene layout should be embedded.</param>
+    void WriteSceneCatalogManifestSource(string runtimeRootPath, PlatformBuildManifest manifest) {
+        string headerPath = Path.Combine(runtimeRootPath, "runtime_scene_catalog_manifest.hpp");
+        string sourcePath = Path.Combine(runtimeRootPath, "runtime_scene_catalog_manifest.cpp");
+
+        File.WriteAllText(headerPath, BuildSceneCatalogManifestHeaderContents());
+        File.WriteAllText(sourcePath, BuildSceneCatalogManifestSourceContents(manifest));
     }
 
     /// <summary>
@@ -68,6 +82,26 @@ public sealed class WindowsRuntimeNativeManifestWriter {
     }
 
     /// <summary>
+    /// Builds the generated runtime scene-catalog manifest header.
+    /// </summary>
+    /// <returns>Generated C++ header text.</returns>
+    static string BuildSceneCatalogManifestHeaderContents() {
+        StringBuilder builder = new();
+        builder.AppendLine("#pragma once");
+        builder.AppendLine();
+        builder.AppendLine("#include <cstddef>");
+        builder.AppendLine();
+        builder.AppendLine("struct HERuntimeSceneCatalogEntry {");
+        builder.AppendLine("    const char* SceneId;");
+        builder.AppendLine("    const char* CookedRelativePath;");
+        builder.AppendLine("};");
+        builder.AppendLine();
+        builder.AppendLine("const HERuntimeSceneCatalogEntry* he_runtime_scene_catalog_entries(std::size_t* count);");
+        builder.AppendLine("const char* he_runtime_scene_cooked_relative_path(const char* sceneId);");
+        return builder.ToString();
+    }
+
+    /// <summary>
     /// Builds the generated runtime startup manifest implementation.
     /// </summary>
     /// <param name="startupSceneRelativePath">Cooked runtime scene path embedded into the native player.</param>
@@ -80,6 +114,64 @@ public sealed class WindowsRuntimeNativeManifestWriter {
         builder.AppendLine();
         builder.AppendLine("const char* he_get_runtime_startup_scene_relative_path() {");
         builder.AppendLine("    return kRuntimeStartupSceneRelativePath;");
+        builder.AppendLine("}");
+        return builder.ToString();
+    }
+
+    /// <summary>
+    /// Builds the generated runtime scene-catalog manifest implementation.
+    /// </summary>
+    /// <param name="manifest">Build manifest whose scene layout should be embedded into native source.</param>
+    /// <returns>Generated C++ implementation text.</returns>
+    static string BuildSceneCatalogManifestSourceContents(PlatformBuildManifest manifest) {
+        if (manifest == null) {
+            throw new ArgumentNullException(nameof(manifest));
+        }
+        if (manifest.Scenes == null || manifest.Scenes.Length == 0) {
+            throw new InvalidOperationException("Build manifest did not define any scenes.");
+        }
+
+        StringBuilder builder = new();
+        builder.AppendLine("#include \"runtime/runtime_scene_catalog_manifest.hpp\"");
+        builder.AppendLine();
+        builder.AppendLine("#include <cstring>");
+        builder.AppendLine("#include <stdexcept>");
+        builder.AppendLine();
+        builder.AppendLine("static const HERuntimeSceneCatalogEntry kRuntimeSceneCatalogEntries[] = {");
+        for (int index = 0; index < manifest.Scenes.Length; index++) {
+            PlatformBuildScene scene = manifest.Scenes[index];
+            string cookedRelativePath = ResolveCookedRelativePath(scene);
+            builder.Append("    { \"");
+            builder.Append(EscapeCppStringLiteral(scene.SceneId));
+            builder.Append("\", \"");
+            builder.Append(EscapeCppStringLiteral(cookedRelativePath));
+            builder.AppendLine("\" },");
+        }
+
+        builder.AppendLine("};");
+        builder.AppendLine("static const std::size_t kRuntimeSceneCatalogEntryCount = sizeof(kRuntimeSceneCatalogEntries) / sizeof(kRuntimeSceneCatalogEntries[0]);");
+        builder.AppendLine();
+        builder.AppendLine("const HERuntimeSceneCatalogEntry* he_runtime_scene_catalog_entries(std::size_t* count) {");
+        builder.AppendLine("    if (count != nullptr) {");
+        builder.AppendLine("        *count = kRuntimeSceneCatalogEntryCount;");
+        builder.AppendLine("    }");
+        builder.AppendLine();
+        builder.AppendLine("    return kRuntimeSceneCatalogEntries;");
+        builder.AppendLine("}");
+        builder.AppendLine();
+        builder.AppendLine("const char* he_runtime_scene_cooked_relative_path(const char* sceneId) {");
+        builder.AppendLine("    if (sceneId == nullptr || sceneId[0] == '\\0') {");
+        builder.AppendLine("        throw std::invalid_argument(\"Runtime scene id is required.\");");
+        builder.AppendLine("    }");
+        builder.AppendLine();
+        builder.AppendLine("    for (std::size_t index = 0; index < kRuntimeSceneCatalogEntryCount; index++) {");
+        builder.AppendLine("        const HERuntimeSceneCatalogEntry& entry = kRuntimeSceneCatalogEntries[index];");
+        builder.AppendLine("        if (std::strcmp(entry.SceneId, sceneId) == 0) {");
+        builder.AppendLine("            return entry.CookedRelativePath;");
+        builder.AppendLine("        }");
+        builder.AppendLine("    }");
+        builder.AppendLine();
+        builder.AppendLine("    throw std::runtime_error(\"Runtime scene id was not found in the scene catalog manifest.\");");
         builder.AppendLine("}");
         return builder.ToString();
     }
@@ -250,6 +342,34 @@ public sealed class WindowsRuntimeNativeManifestWriter {
         }
 
         throw new InvalidOperationException($"Startup scene '{startupSceneId}' was not found in the build manifest.");
+    }
+
+    /// <summary>
+    /// Resolves the cooked runtime scene path for one manifest scene.
+    /// </summary>
+    /// <param name="scene">Manifest scene whose cooked-relative path should be resolved.</param>
+    /// <returns>Runtime-relative cooked scene path.</returns>
+    static string ResolveCookedRelativePath(PlatformBuildScene scene) {
+        if (scene == null) {
+            throw new ArgumentNullException(nameof(scene));
+        }
+
+        if (scene.ResolvedMetadata != null) {
+            for (int index = 0; index < scene.ResolvedMetadata.Length; index++) {
+                KeyValuePair<string, string> entry = scene.ResolvedMetadata[index];
+                if (string.Equals(entry.Key, "cooked-relative-path", StringComparison.OrdinalIgnoreCase)
+                    && !string.IsNullOrWhiteSpace(entry.Value)) {
+                    return entry.Value.Replace('\\', '/');
+                }
+            }
+        }
+
+        PlatformBuildPayloadReference payloadReference = scene.PayloadReferences.FirstOrDefault();
+        if (payloadReference != null && !string.IsNullOrWhiteSpace(payloadReference.SourceIdentity)) {
+            return payloadReference.SourceIdentity.Replace('\\', '/');
+        }
+
+        throw new InvalidOperationException($"Scene '{scene.SceneId}' did not resolve a cooked-relative-path metadata entry.");
     }
 
     /// <summary>

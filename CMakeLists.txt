@@ -3,6 +3,7 @@ cmake_minimum_required(VERSION 3.26)
 project(helengine_windows LANGUAGES CXX)
 
 set(HELENGINE_CORE_CPP_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/generated/helengine.core" CACHE PATH "Path to the generated helengine.core C++ output folder.")
+set(HELENGINE_CODE_ROOT "" CACHE PATH "Path to the staged generated code-module root folder.")
 set(HELENGINE_WINDOWS_RENDER_BACKEND "DirectX11" CACHE STRING "Windows rendering backend to compile.")
 option(HELENGINE_WINDOWS_INCLUDE_GENERATED_CORE "Build the Windows host with generated helengine.core sources." ON)
 set_property(CACHE HELENGINE_WINDOWS_RENDER_BACKEND PROPERTY STRINGS DirectX11 Vulkan)
@@ -51,6 +52,10 @@ if(HELENGINE_WINDOWS_INCLUDE_GENERATED_CORE)
 
     if(EXISTS "${HELENGINE_CORE_CPP_ROOT}/runtime/runtime_code_module_manifest.cpp")
         list(APPEND HELENGINE_WINDOWS_SOURCES "${HELENGINE_CORE_CPP_ROOT}/runtime/runtime_code_module_manifest.cpp")
+    endif()
+
+    if(EXISTS "${HELENGINE_CORE_CPP_ROOT}/runtime/runtime_scene_catalog_manifest.cpp")
+        list(APPEND HELENGINE_WINDOWS_SOURCES "${HELENGINE_CORE_CPP_ROOT}/runtime/runtime_scene_catalog_manifest.cpp")
     endif()
 endif()
 

@@ -129,7 +129,12 @@ public static class WindowsBuildWorkspace {
         string nativeBuildRoot = Path.Combine(builderWorkingRoot, "native");
 
         try {
-        string nativeExecutablePath = nativeBuildExecutor.Build(repositoryRoot, nativeBuildRoot, generatedCoreRoot, cancellationToken);
+            string nativeExecutablePath = nativeBuildExecutor.Build(
+                repositoryRoot,
+                nativeBuildRoot,
+                generatedCoreRoot,
+                Path.Combine(stagingRoot, "code"),
+                cancellationToken);
             string destinationExecutablePath = Path.Combine(request.OutputRoot, Path.GetFileName(nativeExecutablePath));
             Directory.CreateDirectory(request.OutputRoot);
             File.Copy(nativeExecutablePath, destinationExecutablePath, true);

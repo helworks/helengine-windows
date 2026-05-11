@@ -10,5 +10,9 @@
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="..\..\helengine\engine\helengine.baseplatform\helengine.baseplatform.csproj" />
+    <ProjectReference Include="..\..\helengine\engine\helengine.core\helengine.core.csproj" />
+    <ProjectReference Include="..\..\helengine\engine\helengine.files\helengine.files.csproj" />
   </ItemGroup>
 </Project>
+
+

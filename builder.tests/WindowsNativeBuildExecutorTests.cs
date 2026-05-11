@@ -17,9 +17,26 @@ public sealed class WindowsNativeBuildExecutorTests {
             @"C:\repo",
             @"C:\build",
             @"C:\generated",
+            @"C:\staged-code",
             @"C:\vs\VsDevCmd.bat");
 
         Assert.Contains("call \"C:\\vs\\VsDevCmd.bat\" -arch=amd64 -host_arch=amd64", arguments, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// Verifies the CMake configure command forwards the staged generated code-module root to the native player build.
+    /// </summary>
+    [Fact]
+    public void BuildConfigureArguments_forwards_staged_code_root() {
+        string arguments = InvokePrivateCommandBuilder(
+            "BuildConfigureArguments",
+            @"C:\repo",
+            @"C:\build",
+            @"C:\generated",
+            @"C:\staged-code",
+            @"C:\vs\VsDevCmd.bat");
+
+        Assert.Contains("-DHELENGINE_CODE_ROOT=\"C:\\staged-code\"", arguments, StringComparison.Ordinal);
     }
 
     /// <summary>

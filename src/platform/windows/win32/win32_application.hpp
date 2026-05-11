@@ -15,6 +15,7 @@ class FontAsset;
 class MeshComponent;
 class RenderManager2D;
 class RenderManager3D;
+class RuntimeSceneCatalog;
 class SceneAsset;
 class float4;
 
@@ -56,6 +57,9 @@ namespace helengine::windows {
 
         /// Loads the packaged startup scene from the built content root when one is present.
         void LoadPackagedStartupScene();
+
+        /// Builds the runtime scene catalog consumed by scene-loading menu actions in packaged players.
+        RuntimeSceneCatalog* BuildRuntimeSceneCatalog();
 
         /// Loads one packaged serialized asset from a build-relative path.
         Asset* LoadPackagedAsset(const std::string& relativePath);

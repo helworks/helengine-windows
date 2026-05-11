@@ -14,9 +14,10 @@ internal interface IWindowsNativeBuildExecutor {
     /// <param name="repositoryRoot">Absolute path to the Windows player repository root.</param>
     /// <param name="buildRoot">Absolute path to the native build directory.</param>
     /// <param name="generatedCoreCppRootPath">Absolute path to the generated core C++ root.</param>
+    /// <param name="stagedCodeRootPath">Absolute path to the staged generated code-module root.</param>
     /// <param name="cancellationToken">Cancellation token that can stop the native build.</param>
     /// <returns>Absolute path to the produced native executable.</returns>
-    string Build(string repositoryRoot, string buildRoot, string generatedCoreCppRootPath, CancellationToken cancellationToken);
+    string Build(string repositoryRoot, string buildRoot, string generatedCoreCppRootPath, string stagedCodeRootPath, CancellationToken cancellationToken);
 }
 
 /// <summary>
@@ -44,9 +45,10 @@ internal sealed class WindowsNativeBuildExecutor : IWindowsNativeBuildExecutor {
     /// <param name="repositoryRoot">Absolute path to the Windows player repository root.</param>
     /// <param name="buildRoot">Absolute path to the native build directory.</param>
     /// <param name="generatedCoreCppRootPath">Absolute path to the generated core C++ root.</param>
+    /// <param name="stagedCodeRootPath">Absolute path to the staged generated code-module root.</param>
     /// <param name="cancellationToken">Cancellation token that can stop the native build.</param>
     /// <returns>Absolute path to the produced native executable.</returns>
-    public string Build(string repositoryRoot, string buildRoot, string generatedCoreCppRootPath, CancellationToken cancellationToken) {
+    public string Build(string repositoryRoot, string buildRoot, string generatedCoreCppRootPath, string stagedCodeRootPath, CancellationToken cancellationToken) {
         if (string.IsNullOrWhiteSpace(repositoryRoot)) {
             throw new ArgumentException("Repository root must be provided.", nameof(repositoryRoot));
         }
@@ -56,6 +58,9 @@ internal sealed class WindowsNativeBuildExecutor : IWindowsNativeBuildExecutor {
         if (string.IsNullOrWhiteSpace(generatedCoreCppRootPath)) {
             throw new ArgumentException("Generated core root must be provided.", nameof(generatedCoreCppRootPath));
         }
+        if (string.IsNullOrWhiteSpace(stagedCodeRootPath)) {
+            throw new ArgumentException("Staged code root must be provided.", nameof(stagedCodeRootPath));
+        }
 
         Directory.CreateDirectory(buildRoot);
 
@@ -63,7 +68,7 @@ internal sealed class WindowsNativeBuildExecutor : IWindowsNativeBuildExecutor {
 
         RunProcess(
             "cmd.exe",
-            BuildConfigureArguments(repositoryRoot, buildRoot, generatedCoreCppRootPath, vsDevCmdPath),
+            BuildConfigureArguments(repositoryRoot, buildRoot, generatedCoreCppRootPath, stagedCodeRootPath, vsDevCmdPath),
             repositoryRoot,
             Path.Combine(buildRoot, "native-configure.log"),
             cancellationToken);
@@ -86,10 +91,16 @@ internal sealed class WindowsNativeBuildExecutor : IWindowsNativeBuildExecutor {
     /// <summary>
     /// Builds the CMake configure command line for the current Windows player source tree.
     /// </summary>
-    static string BuildConfigureArguments(string repositoryRoot, string buildRoot, string generatedCoreCppRootPath, string vsDevCmdPath) {
+    /// <param name="repositoryRoot">Absolute path to the Windows player repository root.</param>
+    /// <param name="buildRoot">Absolute path to the native build directory.</param>
+    /// <param name="generatedCoreCppRootPath">Absolute path to the generated core C++ root.</param>
+    /// <param name="stagedCodeRootPath">Absolute path to the staged generated code-module root.</param>
+    /// <param name="vsDevCmdPath">Absolute path to the Visual Studio developer command prompt.</param>
+    /// <returns>Windows command-line arguments for the configure step.</returns>
+    static string BuildConfigureArguments(string repositoryRoot, string buildRoot, string generatedCoreCppRootPath, string stagedCodeRootPath, string vsDevCmdPath) {
         return string.Join(" ", [
             "/c",
-            $"call \"{vsDevCmdPath}\" -arch=amd64 -host_arch=amd64 && cmake -S \"{repositoryRoot}\" -B \"{buildRoot}\" -G Ninja -DHELENGINE_WINDOWS_INCLUDE_GENERATED_CORE=ON -DHELENGINE_CORE_CPP_ROOT=\"{generatedCoreCppRootPath}\" -DHELENGINE_WINDOWS_RENDER_BACKEND=DirectX11"
+            $"call \"{vsDevCmdPath}\" -arch=amd64 -host_arch=amd64 && cmake -S \"{repositoryRoot}\" -B \"{buildRoot}\" -G Ninja -DHELENGINE_WINDOWS_INCLUDE_GENERATED_CORE=ON -DHELENGINE_CORE_CPP_ROOT=\"{generatedCoreCppRootPath}\" -DHELENGINE_CODE_ROOT=\"{stagedCodeRootPath}\" -DHELENGINE_WINDOWS_RENDER_BACKEND=DirectX11"
         ]);
     }
 

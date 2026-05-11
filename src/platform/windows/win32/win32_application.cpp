@@ -28,7 +28,11 @@
 #include "RenderManager2D.hpp"
 #include "RenderManager3D.hpp"
 #include "SceneAsset.hpp"
+#include "RuntimeSceneCatalog.hpp"
+#include "RuntimeSceneCatalogEntry.hpp"
 #include "runtime/runtime_startup_manifest.hpp"
+#include "runtime/runtime_scene_catalog_manifest.hpp"
+#include "runtime/array.hpp"
 #include "runtime/native_exceptions.hpp"
 #include "system/io/file.hpp"
 #endif
@@ -144,6 +148,7 @@ namespace helengine::windows {
         options->UpdateListInitialCapacity = 64;
         options->RenderList2DInitialCapacity = 64;
         options->RenderList3DInitialCapacity = 64;
+        options->SceneCatalog = BuildRuntimeSceneCatalog();
 
         EngineRenderManager3D = new Win32RenderManager3D(*Bootstrap);
         EngineRenderManager2D = new Win32RenderManager2D(*Bootstrap);
@@ -208,7 +213,47 @@ namespace helengine::windows {
         }
 
         SceneAsset* startupScene = static_cast<SceneAsset*>(LoadPackagedAsset(startupSceneRelativePath));
+        WriteLifecycleLog("Handing packaged startup scene to scene load service.");
         EngineCore->get_SceneLoadService()->Load(startupScene);
+        WriteLifecycleLog("Packaged startup scene applied to scene load service.");
+#endif
+    }
+
+    /// Builds the runtime scene catalog consumed by packaged menu scene transitions.
+    RuntimeSceneCatalog* Win32Application::BuildRuntimeSceneCatalog() {
+#if __has_include("Core.hpp")
+        std::size_t entryCount = 0;
+        const HERuntimeSceneCatalogEntry* manifestEntries = he_runtime_scene_catalog_entries(&entryCount);
+        if (manifestEntries == nullptr || entryCount == 0) {
+            WriteLifecycleLog("No runtime scene catalog entries were embedded into this build.");
+            return nullptr;
+        }
+
+        Array<RuntimeSceneCatalogEntry*>* catalogEntries = new Array<RuntimeSceneCatalogEntry*>(static_cast<int32_t>(entryCount));
+        for (std::size_t index = 0; index < entryCount; index++) {
+            const HERuntimeSceneCatalogEntry& manifestEntry = manifestEntries[index];
+            if (manifestEntry.SceneId == nullptr || manifestEntry.SceneId[0] == '\0') {
+                throw std::runtime_error("Runtime scene catalog entries must define a scene id.");
+            }
+            if (manifestEntry.CookedRelativePath == nullptr || manifestEntry.CookedRelativePath[0] == '\0') {
+                throw std::runtime_error("Runtime scene catalog entries must define a cooked relative path.");
+            }
+
+            (*catalogEntries)[static_cast<int32_t>(index)] = new RuntimeSceneCatalogEntry(
+                std::string(manifestEntry.SceneId),
+                std::string(manifestEntry.CookedRelativePath));
+        }
+
+        {
+            std::ostringstream messageBuilder;
+            messageBuilder << "Runtime scene catalog initialized with " << entryCount << " scene entries.";
+            std::string message = messageBuilder.str();
+            WriteLifecycleLog(message.c_str());
+        }
+
+        return new RuntimeSceneCatalog(catalogEntries);
+#else
+        return nullptr;
 #endif
     }
 
@@ -230,6 +275,7 @@ namespace helengine::windows {
         WriteLifecycleLog("Packaged asset file opened.");
         WriteLifecycleLog("Deserializing packaged asset.");
         Asset* asset = AssetSerializer::Deserialize(stream);
+        WriteLifecycleLog("Packaged asset deserialized.");
         WriteLifecycleLog("Packaged asset load completed.");
         return asset;
 #else

@@ -13,6 +13,9 @@
 #include <vector>
 
 #if __has_include("RenderManager2D.hpp")
+class LightComponent;
+class DirectionalLightComponent;
+
 #include "Core.hpp"
 #include "ICamera.hpp"
 #include "IRenderVisitor2D.hpp"
@@ -102,6 +105,9 @@ namespace helengine::windows {
         /// Creates the shaders, input layout, and fixed pipeline state on first use.
         void EnsurePipelineState();
 
+        /// Creates the shaders, constant buffers, and textures required by the directional shadow path.
+        void EnsureShadowPipelineState();
+
         /// Creates the default sampler used by material texture bindings.
         void EnsureTextureSamplerState();
 
@@ -123,17 +129,47 @@ namespace helengine::windows {
         /// Clears and renders one camera directly into the main back buffer.
         void RenderCamera(ICamera* camera, bool clearColorBuffer);
 
+        /// Copies the currently visible authored lights relevant to one camera into a render-ready list.
+        std::vector<LightComponent*> SnapshotVisibleLights(ICamera* camera) const;
+
+        /// Uploads the packed forward-light constant buffer used by built-in forward scene shaders.
+        void PrepareForwardLightState(const std::vector<LightComponent*>& lights);
+
+        /// Uploads the packed shadow constant buffer and bindings for the active directional shadow light.
+        void PrepareShadowState(ICamera* camera, const std::vector<LightComponent*>& lights);
+
+        /// Finds the first visible shadow-enabled directional light affecting the current camera.
+        DirectionalLightComponent* FindPrimaryDirectionalShadowLight(const std::vector<LightComponent*>& lights) const;
+
+        /// Renders the current scene depth from the active directional light into the shared shadow map.
+        void RenderDirectionalShadowMap(ICamera* camera, DirectionalLightComponent* light);
+
+        /// Draws one shadow-casting mesh into the active directional shadow map.
+        void DrawDirectionalShadowCaster(IDrawable3D* drawable, ::float4x4& lightViewProjection);
+
+        /// Builds the light-space view-projection matrix used by the active directional shadow pass.
+        ::float4x4 BuildDirectionalShadowViewProjection(ICamera* camera, DirectionalLightComponent* light) const;
+
         /// Draws one clip-space debug triangle to validate the native pipeline independently from scene transforms.
         void DrawDebugTriangle();
 
         /// Applies the shader and resource bindings for one runtime material.
         void ApplyMaterial(RuntimeMaterial* material);
 
-        /// Binds one runtime material texture to the pixel shader if the texture has been uploaded.
-        void BindMaterialTexture(RuntimeMaterial* material, int32_t bindingIndex, int32_t slot);
+        /// Applies authored material constant-buffer payloads for one runtime material while leaving engine-managed buffers untouched.
+        void BindMaterialConstantBuffers(RuntimeMaterial* material);
+
+        /// Binds the resolved runtime material texture to the pixel shader slot consumed by the Windows forward path.
+        void BindMaterialTexture(RuntimeMaterial* material);
 
         /// Resolves an uploaded shader resource view for one runtime texture.
         ID3D11ShaderResourceView* ResolveTextureResourceView(RuntimeTexture* texture) const;
+
+        /// Resolves or creates one Direct3D constant buffer matching the requested shader slot and byte size.
+        ID3D11Buffer* GetOrCreateMaterialConstantBuffer(int32_t slot, int32_t sizeInBytes);
+
+        /// Returns whether one constant-buffer binding is owned by the renderer instead of material-authored property data.
+        static bool IsEngineManagedConstantBufferBinding(std::string bindingName);
 
         /// Clears the back buffer to a solid fallback color when nothing else renders.
         void ClearBackBuffer(float red, float green, float blue, float alpha);
@@ -150,8 +186,17 @@ namespace helengine::windows {
         /// Stores the simple fixed pixel shader for the first Windows mesh pass.
         Microsoft::WRL::ComPtr<ID3D11PixelShader> PixelShader;
 
+        /// Stores the built-in constant buffer consumed by forward-light scene shaders.
+        Microsoft::WRL::ComPtr<ID3D11Buffer> ForwardLightConstantBuffer;
+
+        /// Stores the built-in constant buffer consumed by shadow-aware scene shaders.
+        Microsoft::WRL::ComPtr<ID3D11Buffer> ShadowConstantBuffer;
+
         /// Stores the default sampler state used by material texture bindings.
         Microsoft::WRL::ComPtr<ID3D11SamplerState> TextureSamplerState;
+
+        /// Stores the sampler state used by the directional shadow atlas texture.
+        Microsoft::WRL::ComPtr<ID3D11SamplerState> ShadowSamplerState;
 
         /// Stores the diagnostic vertex shader that bypasses vertex buffers and emits a fullscreen triangle.
         Microsoft::WRL::ComPtr<ID3D11VertexShader> DiagnosticVertexShader;
@@ -165,8 +210,14 @@ namespace helengine::windows {
         /// Stores the input layout for position/normal/uv mesh vertices.
         Microsoft::WRL::ComPtr<ID3D11InputLayout> InputLayout;
 
+        /// Stores the input layout for the directional shadow depth pass.
+        Microsoft::WRL::ComPtr<ID3D11InputLayout> ShadowInputLayout;
+
         /// Stores the constant buffer used for world and view-projection transforms.
         Microsoft::WRL::ComPtr<ID3D11Buffer> TransformBuffer;
+
+        /// Stores the constant buffer used by the directional shadow depth pass.
+        Microsoft::WRL::ComPtr<ID3D11Buffer> ShadowTransformBuffer;
 
         /// Stores a tiny clip-space vertex buffer used for renderer diagnostics.
         Microsoft::WRL::ComPtr<ID3D11Buffer> DebugTriangleBuffer;
@@ -177,11 +228,44 @@ namespace helengine::windows {
         /// Stores the depth-stencil state for normal opaque 3D drawing.
         Microsoft::WRL::ComPtr<ID3D11DepthStencilState> DepthStencilState;
 
+        /// Stores the rasterizer state used by the directional shadow depth pass.
+        Microsoft::WRL::ComPtr<ID3D11RasterizerState> ShadowRasterizerState;
+
+        /// Stores the depth-stencil state used by the directional shadow depth pass.
+        Microsoft::WRL::ComPtr<ID3D11DepthStencilState> ShadowDepthStencilState;
+
+        /// Stores the vertex shader used by the directional shadow depth pass.
+        Microsoft::WRL::ComPtr<ID3D11VertexShader> ShadowVertexShader;
+
+        /// Stores the pixel shader used by the directional shadow depth pass.
+        Microsoft::WRL::ComPtr<ID3D11PixelShader> ShadowPixelShader;
+
+        /// Stores the typeless texture that backs the directional shadow depth atlas.
+        Microsoft::WRL::ComPtr<ID3D11Texture2D> ShadowMapTexture;
+
+        /// Stores the shader resource view used by forward shaders to sample the directional shadow atlas.
+        Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> ShadowMapShaderResourceView;
+
+        /// Stores the depth-stencil view used while rendering the directional shadow atlas.
+        Microsoft::WRL::ComPtr<ID3D11DepthStencilView> ShadowMapDepthStencilView;
+
         /// Caches the active camera view-projection matrix while visiting one render queue.
         ::float4x4 CurrentViewProjection;
 
+        /// Caches the active directional shadow view-projection matrix while the shadow pass visits the scene.
+        ::float4x4 CurrentShadowViewProjection;
+
+        /// Caches the active camera world-space position for the current 3D pass.
+        ::float3 CurrentCameraPosition;
+
+        /// Tracks whether the renderer is currently visiting drawables for the directional shadow pass.
+        bool IsShadowPassActive = false;
+
         /// Caches uploaded shader resources by material id.
         std::unordered_map<std::string, std::unique_ptr<Win32ShaderResource>> MaterialShaderResources;
+
+        /// Caches authored material constant buffers by slot and byte size.
+        std::unordered_map<uint64_t, Microsoft::WRL::ComPtr<ID3D11Buffer>> MaterialConstantBuffers;
 
     };
 
@@ -312,3 +396,4 @@ namespace helengine::windows {
     };
 #endif
 }
+
