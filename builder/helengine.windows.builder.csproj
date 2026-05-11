@@ -7,11 +7,12 @@
     <NuGetAudit>false</NuGetAudit>
     <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
     <GenerateTargetFrameworkAttribute>false</GenerateTargetFrameworkAttribute>
+    <HelEngineRoot Condition="'$(HelEngineRoot)' == ''">..\..\helengine</HelEngineRoot>
   </PropertyGroup>
   <ItemGroup>
-    <ProjectReference Include="..\..\helengine\engine\helengine.baseplatform\helengine.baseplatform.csproj" />
-    <ProjectReference Include="..\..\helengine\engine\helengine.core\helengine.core.csproj" />
-    <ProjectReference Include="..\..\helengine\engine\helengine.files\helengine.files.csproj" />
+    <ProjectReference Include="$(HelEngineRoot)\engine\helengine.baseplatform\helengine.baseplatform.csproj" />
+    <ProjectReference Include="$(HelEngineRoot)\engine\helengine.core\helengine.core.csproj" />
+    <ProjectReference Include="$(HelEngineRoot)\engine\helengine.files\helengine.files.csproj" />
   </ItemGroup>
 </Project>
 

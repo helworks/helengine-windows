@@ -32,12 +32,12 @@ public class WindowsPlatformAssetBuilderTests {
         Assert.Contains(builder.Definition.StorageProfiles, profile =>
             profile.ProfileId == "loose-files" &&
             profile.RuntimeSpecializationId == "windows-loose-files");
-        Assert.Contains(builder.Definition.ComponentCompatibilities, compatibility =>
-            compatibility.ComponentTypeId == "helengine.fpscomponent" &&
-            compatibility.CompatibilityKind == PlatformComponentCompatibilityKind.Transform);
-        Assert.Contains(builder.Definition.ComponentCompatibilities, compatibility =>
-            compatibility.ComponentTypeId == "helengine.meshcomponent" &&
-            compatibility.CompatibilityKind == PlatformComponentCompatibilityKind.Transform);
+        Assert.Contains(builder.Definition.ComponentSupportRules, supportRule =>
+            supportRule.ComponentTypeId == "helengine.fpscomponent" &&
+            supportRule.SupportKind == PlatformComponentSupportKind.Transform);
+        Assert.Contains(builder.Definition.ComponentSupportRules, supportRule =>
+            supportRule.ComponentTypeId == "helengine.meshcomponent" &&
+            supportRule.SupportKind == PlatformComponentSupportKind.Transform);
     }
 
     /// <summary>

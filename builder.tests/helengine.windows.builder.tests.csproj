@@ -4,6 +4,7 @@
     <IsPackable>false</IsPackable>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>disable</Nullable>
+    <HelEngineRoot Condition="'$(HelEngineRoot)' == ''">..\..\helengine</HelEngineRoot>
   </PropertyGroup>
 
   <ItemGroup>
@@ -19,6 +20,6 @@
 
   <ItemGroup>
     <ProjectReference Include="..\builder\helengine.windows.builder.csproj" SkipGetTargetFrameworkProperties="true" />
-    <ProjectReference Include="..\..\helengine\engine\helengine.baseplatform\helengine.baseplatform.csproj" SkipGetTargetFrameworkProperties="true" />
+    <ProjectReference Include="$(HelEngineRoot)\engine\helengine.baseplatform\helengine.baseplatform.csproj" SkipGetTargetFrameworkProperties="true" />
   </ItemGroup>
 </Project>

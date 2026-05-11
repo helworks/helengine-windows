@@ -174,39 +174,39 @@ public static class WindowsPlatformDefinitionFactory {
                     ])
             ],
             [
-                new PlatformComponentCompatibilityDefinition(
+                new PlatformComponentSupportRule(
                     "helengine.meshcomponent",
-                    PlatformComponentCompatibilityKind.Transform,
+                    PlatformComponentSupportKind.Transform,
                     "Mesh components are normalized during packaging.",
                     string.Empty),
-                new PlatformComponentCompatibilityDefinition(
+                new PlatformComponentSupportRule(
                     "helengine.cameracomponent",
-                    PlatformComponentCompatibilityKind.Transform,
+                    PlatformComponentSupportKind.Transform,
                     "Camera components are normalized during packaging.",
                     string.Empty),
-                new PlatformComponentCompatibilityDefinition(
+                new PlatformComponentSupportRule(
                     "helengine.fpscomponent",
-                    PlatformComponentCompatibilityKind.Transform,
+                    PlatformComponentSupportKind.Transform,
                     "Font references are rewritten during packaging.",
                     string.Empty),
-                new PlatformComponentCompatibilityDefinition(
+                new PlatformComponentSupportRule(
                     "helengine.textcomponent",
-                    PlatformComponentCompatibilityKind.Transform,
+                    PlatformComponentSupportKind.Transform,
                     "Font references are rewritten during packaging.",
                     string.Empty),
-                new PlatformComponentCompatibilityDefinition(
+                new PlatformComponentSupportRule(
                     "helengine.directionallightcomponent",
-                    PlatformComponentCompatibilityKind.PassThrough,
+                    PlatformComponentSupportKind.PassThrough,
                     "Directional light payloads are emitted unchanged for runtime light extraction.",
                     string.Empty),
-                new PlatformComponentCompatibilityDefinition(
+                new PlatformComponentSupportRule(
                     "helengine.pointlightcomponent",
-                    PlatformComponentCompatibilityKind.PassThrough,
+                    PlatformComponentSupportKind.PassThrough,
                     "Point light payloads are emitted unchanged for runtime light extraction.",
                     string.Empty),
-                new PlatformComponentCompatibilityDefinition(
+                new PlatformComponentSupportRule(
                     "helengine.spotlightcomponent",
-                    PlatformComponentCompatibilityKind.PassThrough,
+                    PlatformComponentSupportKind.PassThrough,
                     "Spot light payloads are emitted unchanged for runtime light extraction.",
                     string.Empty)
             ],
