@@ -7,6 +7,8 @@
 #include <memory>
 #include <string>
 
+#include "platform/windows/runtime/runtime_player_profile.hpp"
+
 class CameraClearSettings;
 class CameraComponent;
 class Asset;
@@ -57,6 +59,9 @@ namespace helengine::windows {
 
         /// Loads the packaged startup scene from the built content root when one is present.
         void LoadPackagedStartupScene();
+
+        /// Resolves the runtime player profile that controls initial window sizing.
+        RuntimePlayerProfile ResolveRuntimePlayerProfile() const;
 
         /// Builds the runtime scene catalog consumed by scene-loading menu actions in packaged players.
         RuntimeSceneCatalog* BuildRuntimeSceneCatalog();

@@ -124,4 +124,46 @@ public sealed class WindowsRuntimeNativeManifestWriterTests : IDisposable {
         Assert.Contains("640", settingsSource, StringComparison.Ordinal);
         Assert.Contains("480", settingsSource, StringComparison.Ordinal);
     }
+
+    /// <summary>
+    /// Ensures runtime player profile seeding keeps using the generated deployment defaults.
+    /// </summary>
+    [Fact]
+    public void Write_when_graphics_options_define_default_resolution_emits_runtime_profile_seed_values() {
+        PlatformBuildManifest manifest = new(
+            2,
+            "project",
+            "1.0.0",
+            "1.0.0",
+            "DemoDiscMainMenu",
+            [
+                new PlatformBuildScene(
+                    "DemoDiscMainMenu",
+                    "DemoDiscMainMenu",
+                    "cooked/scenes/DemoDiscMainMenu.hasset",
+                    [],
+                    [new KeyValuePair<string, string>("cooked-relative-path", "cooked/scenes/DemoDiscMainMenu.hasset")])
+            ],
+            [],
+            [],
+            [],
+            [],
+            new PlatformContainerWritePlan(string.Empty, []));
+        Dictionary<string, string> graphicsOptionValues = new(StringComparer.OrdinalIgnoreCase) {
+            ["default-width"] = "640",
+            ["default-height"] = "480"
+        };
+
+        WindowsRuntimeNativeManifestWriter writer = new();
+        writer.Write(GeneratedCoreRootPath, manifest, graphicsOptionValues);
+
+        string runtimeRootPath = Path.Combine(GeneratedCoreRootPath, "runtime");
+        string settingsSourcePath = Path.Combine(runtimeRootPath, "runtime_player_settings_manifest.cpp");
+        string settingsSource = File.ReadAllText(settingsSourcePath);
+
+        Assert.Contains("kRuntimeDefaultWindowWidth = 640", settingsSource, StringComparison.Ordinal);
+        Assert.Contains("kRuntimeDefaultWindowHeight = 480", settingsSource, StringComparison.Ordinal);
+        Assert.Contains("he_get_runtime_default_window_width", settingsSource, StringComparison.Ordinal);
+        Assert.Contains("he_get_runtime_default_window_height", settingsSource, StringComparison.Ordinal);
+    }
 }

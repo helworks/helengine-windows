@@ -16,6 +16,7 @@
 
 #include "platform/windows/directx11/directx11_bootstrap.hpp"
 #include "platform/windows/directx11/directx11_presenter.hpp"
+#include "platform/windows/runtime/runtime_player_profile_loader.hpp"
 #include "platform/windows/win32/win32_input_bridge.hpp"
 #include "platform/windows/win32/win32_render_bridge.hpp"
 #include "platform/windows/win32/win32_window.hpp"
@@ -125,23 +126,16 @@ namespace helengine::windows {
 
     /// Creates the main native window for the player host.
     void Win32Application::CreateMainWindow() {
-        int defaultWindowWidth = 1280;
-        int defaultWindowHeight = 720;
-
-#if __has_include("runtime/runtime_player_settings_manifest.hpp")
-        defaultWindowWidth = he_get_runtime_default_window_width();
-        defaultWindowHeight = he_get_runtime_default_window_height();
-#endif
-
-        MainWindow = std::make_unique<Win32Window>(L"HelEngine Windows Host", defaultWindowWidth, defaultWindowHeight);
+        RuntimePlayerProfile profile = ResolveRuntimePlayerProfile();
+        MainWindow = std::make_unique<Win32Window>(L"HelEngine Windows Host", profile.ResolutionWidth, profile.ResolutionHeight);
         MainWindow->Create();
         MainWindow->Show();
         {
             std::ostringstream messageBuilder;
             messageBuilder << "Main window configured to default client size "
-                << defaultWindowWidth
+                << profile.ResolutionWidth
                 << "x"
-                << defaultWindowHeight
+                << profile.ResolutionHeight
                 << '.';
             std::string message = messageBuilder.str();
             WriteLifecycleLog(message.c_str());
@@ -239,6 +233,30 @@ namespace helengine::windows {
         EngineCore->get_SceneLoadService()->Load(startupScene);
         WriteLifecycleLog("Packaged startup scene applied to scene load service.");
 #endif
+    }
+
+    /// Resolves the runtime player profile that controls initial window sizing.
+    RuntimePlayerProfile Win32Application::ResolveRuntimePlayerProfile() const {
+        int defaultWindowWidth = 1280;
+        int defaultWindowHeight = 720;
+
+#if __has_include("runtime/runtime_player_settings_manifest.hpp")
+        defaultWindowWidth = he_get_runtime_default_window_width();
+        defaultWindowHeight = he_get_runtime_default_window_height();
+#endif
+
+        RuntimePlayerProfileLoader loader;
+        std::string lifecycleMessage;
+        RuntimePlayerProfile profile = loader.LoadOrCreateProfile(
+            ResolveApplicationDirectoryPath(),
+            defaultWindowWidth,
+            defaultWindowHeight,
+            lifecycleMessage);
+        if (!lifecycleMessage.empty()) {
+            WriteLifecycleLog(lifecycleMessage.c_str());
+        }
+
+        return profile;
     }
 
     /// Builds the runtime scene catalog consumed by packaged menu scene transitions.

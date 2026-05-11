@@ -228,11 +228,14 @@ public class WindowsPlatformAssetBuilderTests {
                         PlatformSerializationEndianness.LittleEndian))],
                 outputRoot,
                 Path.Combine(workingRoot, "tmp"),
-                string.Empty,
-                string.Empty,
+                "debug",
+                "directx11",
                 string.Empty,
                 new Dictionary<string, string>(),
-                new Dictionary<string, string>(),
+                new Dictionary<string, string> {
+                    ["default-width"] = "1280",
+                    ["default-height"] = "720"
+                },
                 new Dictionary<string, string>(),
                 generatedCoreRoot);
 
@@ -315,11 +318,14 @@ public class WindowsPlatformAssetBuilderTests {
                         PlatformSerializationEndianness.LittleEndian))],
                 outputRoot,
                 Path.Combine(workingRoot, "tmp"),
-                string.Empty,
-                string.Empty,
+                "debug",
+                "directx11",
                 string.Empty,
                 new Dictionary<string, string>(),
-                new Dictionary<string, string>(),
+                new Dictionary<string, string> {
+                    ["default-width"] = "1280",
+                    ["default-height"] = "720"
+                },
                 new Dictionary<string, string>(),
                 generatedCoreRoot);
 
@@ -402,11 +408,14 @@ public class WindowsPlatformAssetBuilderTests {
                         PlatformSerializationEndianness.LittleEndian))],
                 outputRoot,
                 sourceRoot,
-                string.Empty,
-                string.Empty,
+                "debug",
+                "directx11",
                 string.Empty,
                 new Dictionary<string, string>(),
-                new Dictionary<string, string>(),
+                new Dictionary<string, string> {
+                    ["default-width"] = "1280",
+                    ["default-height"] = "720"
+                },
                 new Dictionary<string, string>(),
                 generatedCoreRoot);
 
