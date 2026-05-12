@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cstddef>
 #include <cmath>
 #include <cstring>
 #include <filesystem>
@@ -103,12 +104,16 @@ namespace helengine::windows {
 
         /// Stores the packed forward-light constant buffer consumed by built-in scene shaders.
         struct Win32ForwardLightConstants {
+            DirectX::XMFLOAT4 AmbientLightColor;
             DirectX::XMFLOAT4 LightMetadata;
             Win32ForwardLightSlotConstants Light0;
             Win32ForwardLightSlotConstants Light1;
             Win32ForwardLightSlotConstants Light2;
             Win32ForwardLightSlotConstants Light3;
         };
+
+        static_assert(offsetof(Win32ForwardLightConstants, AmbientLightColor) == 0, "Ambient-light color must remain the first forward-light field.");
+        static_assert(offsetof(Win32ForwardLightConstants, LightMetadata) == sizeof(DirectX::XMFLOAT4), "Forward-light metadata must remain immediately after the ambient-light color.");
 
         /// Stores one packed shadow slot matching the built-in Windows forward shader contract.
         struct Win32ShadowLightSlotConstants {
@@ -1419,7 +1424,10 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
     void Win32RenderManager3D::PrepareForwardLightState(const std::vector<LightComponent*>& lights) {
         EnsureShadowPipelineState();
 
+        constexpr int32_t AmbientLightTypeValue = 3;
+
         Win32ForwardLightConstants constants {};
+        DirectX::XMFLOAT3 ambientLightColor(0.0f, 0.0f, 0.0f);
         int32_t packedLightCount = 0;
         for (std::size_t lightIndex = 0; lightIndex < lights.size() && packedLightCount < 4; lightIndex++) {
             LightComponent* light = lights[lightIndex];
@@ -1427,9 +1435,16 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
                 continue;
             }
 
-            Win32ForwardLightSlotConstants slot {};
             float4 color = light->get_Color();
             float intensity = light->get_Intensity();
+            if (static_cast<int32_t>(light->get_LightType()) == AmbientLightTypeValue) {
+                ambientLightColor.x += color.X * intensity;
+                ambientLightColor.y += color.Y * intensity;
+                ambientLightColor.z += color.Z * intensity;
+                continue;
+            }
+
+            Win32ForwardLightSlotConstants slot {};
             slot.ColorAndType = DirectX::XMFLOAT4(
                 color.X * intensity,
                 color.Y * intensity,
@@ -1480,8 +1495,14 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
             packedLightCount++;
         }
 
+        constants.AmbientLightColor = DirectX::XMFLOAT4(
+            ambientLightColor.x,
+            ambientLightColor.y,
+            ambientLightColor.z,
+            0.0f);
         constants.LightMetadata = DirectX::XMFLOAT4(static_cast<float>(packedLightCount), 0.0f, 0.0f, 0.0f);
         if (!HasWrittenRenderSnapshot) {
+            AppendRenderDiagnosticsLine("3d.ambient_light=" + std::to_string(constants.AmbientLightColor.x) + "," + std::to_string(constants.AmbientLightColor.y) + "," + std::to_string(constants.AmbientLightColor.z));
             AppendRenderDiagnosticsLine("3d.packed_lights=" + std::to_string(packedLightCount));
             if (packedLightCount > 0) {
                 AppendRenderSnapshotLine(
