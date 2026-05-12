@@ -2966,9 +2966,9 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
             return;
         }
 
-        int2* size = sprite->get_Size();
-        const float width = size != nullptr && size->X > 0 ? static_cast<float>(size->X) : static_cast<float>(texture->get_Width());
-        const float height = size != nullptr && size->Y > 0 ? static_cast<float>(size->Y) : static_cast<float>(texture->get_Height());
+        int2 size = sprite->get_Size();
+        const float width = size.X > 0 ? static_cast<float>(size.X) : static_cast<float>(texture->get_Width());
+        const float height = size.Y > 0 ? static_cast<float>(size.Y) : static_cast<float>(texture->get_Height());
         const float3 position = sprite->get_Parent()->get_Position();
         if (!HasWritten2DDraw) {
             AppendRenderDiagnosticsLine(
@@ -3076,14 +3076,13 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
             Logged2DRectCount++;
         }
 
-        int2* size = shape->get_Size();
-        if (size == nullptr || size->X <= 0 || size->Y <= 0) {
+        int2 size = shape->get_Size();
+        if (size.X <= 0 || size.Y <= 0) {
             return;
         }
-
         const float3 position = shape->get_Parent()->get_Position();
-        const float width = static_cast<float>(size->X);
-        const float height = static_cast<float>(size->Y);
+        const float width = static_cast<float>(size.X);
+        const float height = static_cast<float>(size.Y);
         if (!HasWritten2DDraw) {
             AppendRenderDiagnosticsLine(
                 "2d.draw_rect pos="
@@ -3104,6 +3103,8 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
     }
 #endif
 }
+
+
 
 
 

@@ -49,7 +49,7 @@ public sealed class WindowsRuntimeNativeManifestWriter {
         string sourcePath = Path.Combine(runtimeRootPath, "runtime_startup_manifest.cpp");
 
         File.WriteAllText(headerPath, BuildStartupManifestHeaderContents());
-        File.WriteAllText(sourcePath, BuildStartupManifestSourceContents(startupSceneRelativePath));
+        File.WriteAllText(sourcePath, BuildStartupManifestSourceContents(manifest, startupSceneRelativePath));
     }
 
     /// <summary>
@@ -102,6 +102,8 @@ public sealed class WindowsRuntimeNativeManifestWriter {
         builder.AppendLine("#pragma once");
         builder.AppendLine();
         builder.AppendLine("const char* he_get_runtime_startup_scene_relative_path();");
+        builder.AppendLine("const char* he_get_runtime_platform_name();");
+        builder.AppendLine("const char* he_get_runtime_platform_version();");
         return builder.ToString();
     }
 
@@ -128,16 +130,31 @@ public sealed class WindowsRuntimeNativeManifestWriter {
     /// <summary>
     /// Builds the generated runtime startup manifest implementation.
     /// </summary>
+    /// <param name="manifest">Build manifest whose platform metadata should be embedded into native source.</param>
     /// <param name="startupSceneRelativePath">Cooked runtime scene path embedded into the native player.</param>
     /// <returns>Generated C++ implementation text.</returns>
-    static string BuildStartupManifestSourceContents(string startupSceneRelativePath) {
+    static string BuildStartupManifestSourceContents(PlatformBuildManifest manifest, string startupSceneRelativePath) {
+        if (manifest == null) {
+            throw new ArgumentNullException(nameof(manifest));
+        }
+
         StringBuilder builder = new();
         builder.AppendLine("#include \"runtime/runtime_startup_manifest.hpp\"");
         builder.AppendLine();
         builder.AppendLine("static const char kRuntimeStartupSceneRelativePath[] = \"" + EscapeCppStringLiteral(startupSceneRelativePath) + "\";");
+        builder.AppendLine("static const char kRuntimePlatformName[] = \"" + EscapeCppStringLiteral(manifest.PlatformName) + "\";");
+        builder.AppendLine("static const char kRuntimePlatformVersion[] = \"" + EscapeCppStringLiteral(manifest.PlatformVersion) + "\";");
         builder.AppendLine();
         builder.AppendLine("const char* he_get_runtime_startup_scene_relative_path() {");
         builder.AppendLine("    return kRuntimeStartupSceneRelativePath;");
+        builder.AppendLine("}");
+        builder.AppendLine();
+        builder.AppendLine("const char* he_get_runtime_platform_name() {");
+        builder.AppendLine("    return kRuntimePlatformName;");
+        builder.AppendLine("}");
+        builder.AppendLine();
+        builder.AppendLine("const char* he_get_runtime_platform_version() {");
+        builder.AppendLine("    return kRuntimePlatformVersion;");
         builder.AppendLine("}");
         return builder.ToString();
     }
@@ -531,3 +548,6 @@ public sealed class WindowsRuntimeNativeManifestWriter {
         return builder.ToString();
     }
 }
+
+
+

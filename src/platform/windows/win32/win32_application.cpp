@@ -30,6 +30,7 @@
 #include "AssetSerializer.hpp"
 #include "Core.hpp"
 #include "Logger.hpp"
+#include "PlatformInfo.hpp"
 #include "RenderManager2D.hpp"
 #include "RenderManager3D.hpp"
 #include "SceneAsset.hpp"
@@ -175,7 +176,8 @@ namespace helengine::windows {
             MainWindow->GetClientWidth(),
             MainWindow->GetClientHeight());
 
-        EngineCore->Initialize(EngineRenderManager3D, EngineRenderManager2D, EngineInputBackend, options);
+        PlatformInfo* platformInfo = BuildRuntimePlatformInfo();
+        EngineCore->Initialize(EngineRenderManager3D, EngineRenderManager2D, EngineInputBackend, platformInfo, options);
         std::chrono::steady_clock::time_point sceneLoadStart = std::chrono::steady_clock::now();
         try {
             WriteLifecycleLog("Loading packaged startup scene.");
@@ -204,6 +206,32 @@ namespace helengine::windows {
         WriteLifecycleLog("Engine core initialized.");
 #else
         WriteLifecycleLog("Generated engine core is not included in this build.");
+#endif
+    }
+
+    /// Builds the runtime platform metadata stamped into the packaged player.
+    PlatformInfo* Win32Application::BuildRuntimePlatformInfo() {
+#if __has_include("Core.hpp")
+        const char* platformName = he_get_runtime_platform_name();
+        if (platformName == nullptr || platformName[0] == '\0') {
+            throw std::runtime_error("Packaged runtime platform name was not embedded into this build.");
+        }
+
+        const char* platformVersion = he_get_runtime_platform_version();
+        if (platformVersion == nullptr || platformVersion[0] == '\0') {
+            throw std::runtime_error("Packaged runtime platform version was not embedded into this build.");
+        }
+
+        {
+            std::ostringstream messageBuilder;
+            messageBuilder << "Runtime platform info resolved to '" << platformName << "' version '" << platformVersion << "'.";
+            std::string message = messageBuilder.str();
+            WriteLifecycleLog(message.c_str());
+        }
+
+        return new PlatformInfo(std::string(platformName), std::string(platformVersion));
+#else
+        throw std::runtime_error("Generated engine core is not included in this Windows build.");
 #endif
     }
 
@@ -425,3 +453,4 @@ namespace helengine::windows {
         FramesSinceLastStatisticLog = 0;
     }
 }
+

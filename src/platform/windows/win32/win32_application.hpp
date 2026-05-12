@@ -15,6 +15,7 @@ class Asset;
 class Core;
 class FontAsset;
 class MeshComponent;
+class PlatformInfo;
 class RenderManager2D;
 class RenderManager3D;
 class RuntimeSceneCatalog;
@@ -56,6 +57,9 @@ namespace helengine::windows {
 
         /// Initializes the generated engine core when it is available in the current build.
         void InitializeEngineCore();
+
+        /// Builds the runtime platform metadata stamped into the packaged player.
+        PlatformInfo* BuildRuntimePlatformInfo();
 
         /// Loads the packaged startup scene from the built content root when one is present.
         void LoadPackagedStartupScene();
@@ -124,3 +128,4 @@ namespace helengine::windows {
         mutable std::ofstream LifecycleLogFile;
     };
 }
+
