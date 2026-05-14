@@ -7,7 +7,9 @@
 #include <memory>
 #include <string>
 
+#include "platform/windows/runtime/runtime_render_diagnostics.hpp"
 #include "platform/windows/runtime/runtime_player_profile.hpp"
+#include "platform/windows/runtime/runtime_memory_diagnostics_provider.hpp"
 
 class CameraClearSettings;
 class CameraComponent;
@@ -70,6 +72,21 @@ namespace helengine::windows {
         /// Builds the runtime scene catalog consumed by scene-loading menu actions in packaged players.
         RuntimeSceneCatalog* BuildRuntimeSceneCatalog();
 
+        /// Samples the current renderer cache counters exposed by the Windows bridge.
+        RuntimeRenderCounters BuildRenderCounters() const;
+
+        /// Writes one named scene diagnostics checkpoint into the Windows diagnostics log.
+        void WriteSceneDiagnosticsCheckpoint(const char* label);
+
+        /// Captures the current runtime memory snapshot using shared diagnostics when available.
+        RuntimeMemorySnapshot CaptureRuntimeMemorySnapshot(std::string* detailMetrics = nullptr) const;
+
+        /// Builds the currently tracked loaded scene id list from shared runtime state.
+        std::string BuildTrackedLoadedSceneIds() const;
+
+        /// Polls generated core scene-transition trace fields and emits checkpoints when they change.
+        void PollSceneTransitionDiagnostics();
+
         /// Loads one packaged serialized asset from a build-relative path.
         Asset* LoadPackagedAsset(const std::string& relativePath);
 
@@ -126,6 +143,44 @@ namespace helengine::windows {
 
         /// Streams lifecycle logs into a file beside the executable for crash debugging.
         mutable std::ofstream LifecycleLogFile;
+
+        /// Stores the last observed core-owned scene transition stage.
+        std::string LastObservedCoreSceneTransitionStage;
+
+        /// Stores the last observed scene-manager trace stage.
+        std::string LastObservedSceneManagerTraceStage;
+
+        /// Stores the last observed scene-manager scene id.
+        std::string LastObservedSceneManagerSceneId;
+
+        /// Stores the last observed scene-manager loaded-scene count.
+        int LastObservedLoadedSceneCount;
+
+        /// Stores the last observed scene-manager pending-operation count.
+        int LastObservedPendingOperationCount;
+
+        /// Stores the last observed scene-load-service trace stage.
+        std::string LastObservedSceneLoadStage;
+
+        /// Stores the last observed scene-load-service component type.
+        std::string LastObservedSceneLoadComponentTypeId;
+
+        /// Stores the last observed root-entity index reported by the scene-load service.
+        int LastObservedSceneLoadRootEntityIndex;
+
+        /// Stores the last observed entity depth reported by the scene-load service.
+        int LastObservedSceneLoadEntityDepth;
+
+        /// Counts frames since the most recent observed scene-transition trace change.
+        std::uint32_t FramesSinceSceneTraceChange;
+
+        /// Tracks whether one steady-state checkpoint should be emitted after the current scene transition settles.
+        bool PendingSteadyStateCheckpoint;
+
+#if defined(HELENGINE_WINDOWS_DEBUG_RUNTIME_DIAGNOSTICS) && __has_include("IRuntimeDiagnosticsProvider.hpp") && __has_include("RuntimeMemoryDiagnosticsSnapshot.hpp")
+        /// Stores the debug-build Windows runtime diagnostics provider exposed to the shared core service.
+        std::unique_ptr<RuntimeMemoryDiagnosticsProvider> RuntimeDiagnosticsProvider;
+#endif
     };
 }
 

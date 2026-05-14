@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <array>
 #include <cstddef>
+#include <cstdint>
 #include <cmath>
 #include <cstring>
 #include <filesystem>
@@ -14,18 +15,26 @@
 #include <numbers>
 #include <string>
 #include <stdexcept>
+#include <unordered_set>
 #include <vector>
 
 #include "MaterialLayoutBuilder.hpp"
 #include "platform/windows/directx11/directx11_bootstrap.hpp"
+#include "platform/windows/runtime/runtime_render_diagnostics.hpp"
 
 #if __has_include("CameraRenderSettings.hpp")
 #include "BuiltInMaterialIds.hpp"
 #include "CameraRenderSettings.hpp"
 #include "DirectionalLightComponent.hpp"
+#if __has_include("FontAssetBinarySerializer.hpp")
+#include "FontAssetBinarySerializer.hpp"
+#endif
 #include "LightComponent.hpp"
 #include "LightDirectionUtility.hpp"
 #include "PointLightComponent.hpp"
+#if __has_include("RuntimeSceneAssetReferenceResolver.hpp")
+#include "RuntimeSceneAssetReferenceResolver.hpp"
+#endif
 #include "SpotLightComponent.hpp"
 #if __has_include("StandardMaterialTextureBindingDefaults.hpp")
 #include "StandardMaterialTextureBindingDefaults.hpp"
@@ -73,6 +82,9 @@ namespace helengine::windows {
 
         /// Caches uploaded textures so both the texture loader and material binder resolve the same GPU resources.
         std::unordered_map<std::string, std::unique_ptr<Win32TextureResource>> TextureResources;
+
+        /// Tracks runtime texture ids owned by engine-wide helper caches rather than by a scene.
+        std::unordered_set<std::string> EngineOwnedTextureResourceIds;
 
         /// Packs one mesh vertex into the fixed Windows DirectX11 bridge layout.
         struct Win32VertexPositionNormalUV {
@@ -634,6 +646,51 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
             return "__generated_runtime_texture_" + std::to_string(GeneratedTextureResourceId);
         }
 
+        /// Builds one richer diagnostics detail string for a runtime texture upload.
+        std::string BuildTextureDiagnosticsDetail(TextureAsset* data, const std::string& textureId) {
+            if (data == nullptr) {
+                return "source=unknown";
+            }
+
+            std::ostringstream builder;
+            builder << "width=" << data->Width
+                << " height=" << data->Height
+                << " runtime_asset_id=" << data->get_RuntimeAssetId();
+
+            if (!textureId.empty() && textureId.rfind("__generated_runtime_texture_", 0) != 0) {
+                builder << " source=authored";
+                return builder.str();
+            }
+
+            builder << " source=generated";
+#if __has_include("FontAssetBinarySerializer.hpp")
+            const std::string fontDeserializeStage = FontAssetBinarySerializer::get_LastDeserializeStage();
+            if (fontDeserializeStage == "BuildRuntimeTexture") {
+                builder << " generated_kind=font_atlas";
+                builder << " font_deserialize_stage=" << fontDeserializeStage;
+#if __has_include("RuntimeSceneAssetReferenceResolver.hpp")
+                if (Core::get_Instance() != nullptr && Core::get_Instance()->get_SceneAssetReferenceResolver() != nullptr) {
+                    RuntimeSceneAssetReferenceResolver* referenceResolver = Core::get_Instance()->get_SceneAssetReferenceResolver();
+                    builder << " text_font_relative_path=" << referenceResolver->get_LastTextFontRelativePath();
+                    builder << " text_font_load_stage=" << referenceResolver->get_LastTextLoadStage();
+                }
+#endif
+                return builder.str();
+            }
+
+            if (!fontDeserializeStage.empty()) {
+                builder << " font_deserialize_stage=" << fontDeserializeStage;
+            }
+#endif
+            if (data->IsEngineOwned) {
+                builder << " generated_kind=engine_owned";
+                return builder.str();
+            }
+
+            builder << " generated_kind=unlabeled";
+            return builder.str();
+        }
+
         /// Creates a descriptor for one default mesh vertex input layout.
         std::vector<D3D11_INPUT_ELEMENT_DESC> BuildDefaultInputElements() {
             std::vector<D3D11_INPUT_ELEMENT_DESC> elements;
@@ -652,16 +709,62 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
         , CurrentCameraPosition(0.0f, 0.0f, 0.0f) {
     }
 
+    /// Returns the number of uploaded texture resources currently cached by the Windows bridge.
+    std::size_t Win32RenderManager3D::GetTextureResourceCount() const {
+        return TextureResources.size();
+    }
+
+    /// Returns the number of compiled material shader resources currently cached by the Windows bridge.
+    std::size_t Win32RenderManager3D::GetMaterialShaderResourceCount() const {
+        return MaterialShaderResources.size();
+    }
+
+    /// Returns the number of authored material constant buffers currently cached by the Windows bridge.
+    std::size_t Win32RenderManager3D::GetMaterialConstantBufferCount() const {
+        return MaterialConstantBuffers.size();
+    }
+
+    /// Returns the number of uploaded runtime models currently retaining native vertex or index buffers.
+    std::size_t Win32RenderManager3D::GetModelBufferCount() const {
+        return LiveModelBufferCount;
+    }
+
+    /// Returns the total native bytes currently retained by uploaded model vertex buffers.
+    std::size_t Win32RenderManager3D::GetModelVertexBufferBytes() const {
+        return LiveModelVertexBufferBytes;
+    }
+
+    /// Returns the total native bytes currently retained by uploaded model index buffers.
+    std::size_t Win32RenderManager3D::GetModelIndexBufferBytes() const {
+        return LiveModelIndexBufferBytes;
+    }
+
+    /// Returns the total native bytes currently retained by authored material constant buffers.
+    std::size_t Win32RenderManager3D::GetMaterialConstantBufferBytes() const {
+        return LiveMaterialConstantBufferBytes;
+    }
+
     /// Builds a GPU-ready runtime model from raw mesh asset metadata.
     RuntimeModel* Win32RenderManager3D::BuildModelFromRaw(ModelAsset* data) {
         Win32RuntimeModel* runtimeModel = new Win32RuntimeModel();
         if (data != nullptr) {
-            runtimeModel->set_Id(data->get_Id());
+            std::string modelId = data->get_Id();
+            runtimeModel->set_Id(modelId);
 
             const int32_t positionCount = data->Positions != nullptr ? data->Positions->Length : 0;
             const int32_t normalCount = data->Normals != nullptr ? data->Normals->Length : 0;
             const int32_t texCoordCount = data->TexCoords != nullptr ? data->TexCoords->Length : 0;
             const int32_t vertexCount = std::min(positionCount, std::min(normalCount, texCoordCount));
+            runtimeModel->SourceVertexBytes =
+                static_cast<std::size_t>(positionCount) * sizeof(float3)
+                + static_cast<std::size_t>(normalCount) * sizeof(float3)
+                + static_cast<std::size_t>(texCoordCount) * sizeof(float2);
+            runtimeModel->SourceIndexBytes =
+                data->Indices32 != nullptr && data->Indices32->Length > 0
+                    ? static_cast<std::size_t>(data->Indices32->Length) * sizeof(uint32_t)
+                    : (data->Indices16 != nullptr && data->Indices16->Length > 0
+                        ? static_cast<std::size_t>(data->Indices16->Length) * sizeof(uint16_t)
+                        : 0);
             if (vertexCount > 0) {
                 std::vector<Win32VertexPositionNormalUV> vertices(static_cast<std::size_t>(vertexCount));
                 for (int32_t index = 0; index < vertexCount; index++) {
@@ -688,6 +791,7 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
                     Bootstrap.GetDevice()->CreateBuffer(&vertexBufferDescription, &vertexData, runtimeModel->VertexBuffer.GetAddressOf()),
                     "ID3D11Device::CreateBuffer failed for the Windows mesh vertex buffer.");
                 runtimeModel->VertexCount = static_cast<UINT>(vertices.size());
+                runtimeModel->VertexBufferBytes = vertexBufferDescription.ByteWidth;
             }
 
             if (data->Indices32 != nullptr && data->Indices32->Length > 0) {
@@ -704,6 +808,7 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
                     "ID3D11Device::CreateBuffer failed for the Windows mesh 32-bit index buffer.");
                 runtimeModel->IndexCount = static_cast<UINT>(data->Indices32->Length);
                 runtimeModel->IndexFormat = DXGI_FORMAT_R32_UINT;
+                runtimeModel->IndexBufferBytes = indexBufferDescription.ByteWidth;
             } else if (data->Indices16 != nullptr && data->Indices16->Length > 0) {
                 D3D11_BUFFER_DESC indexBufferDescription {};
                 indexBufferDescription.ByteWidth = static_cast<UINT>(sizeof(uint16_t) * data->Indices16->Length);
@@ -718,7 +823,29 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
                     "ID3D11Device::CreateBuffer failed for the Windows mesh 16-bit index buffer.");
                 runtimeModel->IndexCount = static_cast<UINT>(data->Indices16->Length);
                 runtimeModel->IndexFormat = DXGI_FORMAT_R16_UINT;
+                runtimeModel->IndexBufferBytes = indexBufferDescription.ByteWidth;
             }
+
+            if (runtimeModel->VertexBufferBytes > 0 || runtimeModel->IndexBufferBytes > 0) {
+                LiveModelBufferCount++;
+                LiveModelVertexBufferBytes += runtimeModel->VertexBufferBytes;
+                LiveModelIndexBufferBytes += runtimeModel->IndexBufferBytes;
+            }
+
+            RuntimeRenderDiagnostics::RecordAssetBuild(
+                "model",
+                modelId,
+                "positions=" + std::to_string(positionCount)
+                    + " normals=" + std::to_string(normalCount)
+                    + " texcoords=" + std::to_string(texCoordCount)
+                    + " source_vertex_bytes=" + std::to_string(runtimeModel->SourceVertexBytes)
+                    + " source_index_bytes=" + std::to_string(runtimeModel->SourceIndexBytes)
+                    + " vertex_buffer_bytes=" + std::to_string(runtimeModel->VertexBufferBytes)
+                    + " index_buffer_bytes=" + std::to_string(runtimeModel->IndexBufferBytes)
+                    + " live_model_buffers=" + std::to_string(LiveModelBufferCount)
+                    + " live_model_vertex_buffer_bytes=" + std::to_string(LiveModelVertexBufferBytes)
+                    + " live_model_index_buffer_bytes=" + std::to_string(LiveModelIndexBufferBytes),
+                LiveModelBufferCount);
         }
 
         return runtimeModel;
@@ -753,8 +880,138 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
         StandardMaterialTextureBindingDefaults::Apply(runtimeMaterial);
 #endif
 
+        std::size_t authoredConstantBufferCount = 0;
+        std::size_t authoredConstantBufferBytes = 0;
+        if (materialAsset->ConstantBuffers != nullptr) {
+            authoredConstantBufferCount = static_cast<std::size_t>(materialAsset->ConstantBuffers->Length);
+            for (int32_t constantBufferIndex = 0; constantBufferIndex < materialAsset->ConstantBuffers->Length; constantBufferIndex++) {
+                MaterialConstantBufferAsset* constantBufferAsset = (*materialAsset->ConstantBuffers)[constantBufferIndex];
+                if (constantBufferAsset == nullptr || constantBufferAsset->Data == nullptr) {
+                    continue;
+                }
+
+                authoredConstantBufferBytes += static_cast<std::size_t>(constantBufferAsset->Data->Length);
+            }
+        }
+
         MaterialShaderResources[materialId] = std::make_unique<Win32ShaderResource>(BuildShaderResource(materialAsset, shaderAsset));
+        RuntimeRenderDiagnostics::RecordAssetBuild(
+            "material",
+            materialId,
+            "shader_asset_id=" + shaderAsset->get_Id()
+                + " authored_constant_buffer_count=" + std::to_string(authoredConstantBufferCount)
+                + " authored_constant_buffer_bytes=" + std::to_string(authoredConstantBufferBytes)
+                + " live_material_shader_resources=" + std::to_string(MaterialShaderResources.size())
+                + " live_material_constant_buffers=" + std::to_string(MaterialConstantBuffers.size())
+                + " live_material_constant_buffer_bytes=" + std::to_string(LiveMaterialConstantBufferBytes),
+            MaterialShaderResources.size());
         return runtimeMaterial;
+    }
+
+    /// Releases one runtime model previously created by the Windows renderer.
+    void Win32RenderManager3D::ReleaseModel(RuntimeModel* model) {
+        if (model == nullptr) {
+            throw std::invalid_argument("Runtime model must be provided for release.");
+        }
+
+        const std::string modelId = model->get_Id();
+        Win32RuntimeModel* win32Model = static_cast<Win32RuntimeModel*>(model);
+        RuntimeRenderDiagnostics::RecordAssetReleaseRequested(
+            "model",
+            modelId,
+            "renderer=windows vertex_buffer_bytes=" + std::to_string(win32Model != nullptr ? win32Model->VertexBufferBytes : 0)
+                + " index_buffer_bytes=" + std::to_string(win32Model != nullptr ? win32Model->IndexBufferBytes : 0)
+                + " source_vertex_bytes=" + std::to_string(win32Model != nullptr ? win32Model->SourceVertexBytes : 0)
+                + " source_index_bytes=" + std::to_string(win32Model != nullptr ? win32Model->SourceIndexBytes : 0));
+        if (win32Model != nullptr) {
+            if (win32Model->VertexBufferBytes > 0 || win32Model->IndexBufferBytes > 0) {
+                if (LiveModelBufferCount > 0) {
+                    LiveModelBufferCount--;
+                }
+                if (LiveModelVertexBufferBytes >= win32Model->VertexBufferBytes) {
+                    LiveModelVertexBufferBytes -= win32Model->VertexBufferBytes;
+                } else {
+                    LiveModelVertexBufferBytes = 0;
+                }
+                if (LiveModelIndexBufferBytes >= win32Model->IndexBufferBytes) {
+                    LiveModelIndexBufferBytes -= win32Model->IndexBufferBytes;
+                } else {
+                    LiveModelIndexBufferBytes = 0;
+                }
+            }
+            win32Model->VertexBuffer.Reset();
+            win32Model->IndexBuffer.Reset();
+            win32Model->VertexCount = 0;
+            win32Model->IndexCount = 0;
+            win32Model->IndexFormat = DXGI_FORMAT_UNKNOWN;
+            win32Model->VertexBufferBytes = 0;
+            win32Model->IndexBufferBytes = 0;
+        }
+
+        RuntimeRenderDiagnostics::RecordAssetReleaseCompleted(
+            "model",
+            modelId,
+            "renderer=windows live_model_buffers=" + std::to_string(LiveModelBufferCount)
+                + " live_model_vertex_buffer_bytes=" + std::to_string(LiveModelVertexBufferBytes)
+                + " live_model_index_buffer_bytes=" + std::to_string(LiveModelIndexBufferBytes));
+    }
+
+    /// Releases one runtime material previously created by the Windows renderer.
+    void Win32RenderManager3D::ReleaseMaterial(RuntimeMaterial* material) {
+        if (material == nullptr) {
+            throw std::invalid_argument("Runtime material must be provided for release.");
+        }
+
+        const std::string materialId = material->get_Id();
+        RuntimeRenderDiagnostics::RecordAssetReleaseRequested("material", materialId, "renderer=windows");
+        if (!materialId.empty()) {
+            MaterialShaderResources.erase(materialId);
+        }
+
+        RuntimeRenderDiagnostics::RecordAssetReleaseCompleted(
+            "material",
+            materialId,
+            "renderer=windows material_shader_resources=" + std::to_string(MaterialShaderResources.size())
+                + " material_constant_buffers=" + std::to_string(MaterialConstantBuffers.size())
+                + " material_constant_buffer_bytes=" + std::to_string(LiveMaterialConstantBufferBytes));
+    }
+
+    /// Flushes any deferred Windows runtime asset releases.
+    void Win32RenderManager3D::FlushReleasedAssets() {
+        MaterialConstantBuffers.clear();
+        LiveMaterialConstantBufferBytes = 0;
+        RuntimeRenderDiagnostics::WriteHostEvent("asset-release", "Win32RenderManager3D flushed released assets.");
+    }
+
+    /// Releases Windows renderer-owned 3D resources.
+    void Win32RenderManager3D::Dispose() {
+        MaterialShaderResources.clear();
+        MaterialConstantBuffers.clear();
+        LiveModelBufferCount = 0;
+        LiveModelVertexBufferBytes = 0;
+        LiveModelIndexBufferBytes = 0;
+        LiveMaterialConstantBufferBytes = 0;
+        ForwardLightConstantBuffer.Reset();
+        ShadowConstantBuffer.Reset();
+        TextureSamplerState.Reset();
+        ShadowSamplerState.Reset();
+        DiagnosticVertexShader.Reset();
+        DiagnosticPixelShader.Reset();
+        DiagnosticInputLayout.Reset();
+        InputLayout.Reset();
+        ShadowInputLayout.Reset();
+        TransformBuffer.Reset();
+        ShadowTransformBuffer.Reset();
+        DebugTriangleBuffer.Reset();
+        RasterizerState.Reset();
+        DepthStencilState.Reset();
+        ShadowRasterizerState.Reset();
+        ShadowDepthStencilState.Reset();
+        ShadowVertexShader.Reset();
+        ShadowPixelShader.Reset();
+        ShadowMapTexture.Reset();
+        ShadowMapShaderResourceView.Reset();
+        ShadowMapDepthStencilView.Reset();
     }
 
     /// Draws every registered camera to the Windows back buffer in camera order.
@@ -2138,6 +2395,13 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
             Bootstrap.GetDevice()->CreateBuffer(&description, nullptr, constantBuffer.GetAddressOf()),
             "ID3D11Device::CreateBuffer failed for a Windows material constant buffer.");
         MaterialConstantBuffers[key] = constantBuffer;
+        LiveMaterialConstantBufferBytes += static_cast<std::size_t>(description.ByteWidth);
+        RuntimeRenderDiagnostics::WriteHostEvent(
+            "material-constant-buffer",
+            "slot=" + std::to_string(slot)
+                + " size_in_bytes=" + std::to_string(sizeInBytes)
+                + " live_material_constant_buffers=" + std::to_string(MaterialConstantBuffers.size())
+                + " live_material_constant_buffer_bytes=" + std::to_string(LiveMaterialConstantBufferBytes));
         return MaterialConstantBuffers[key].Get();
     }
 
@@ -2891,6 +3155,16 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
         return viewport;
     }
 
+    /// Returns the number of uploaded texture resources currently cached by the Windows bridge.
+    std::size_t Win32RenderManager2D::GetTextureResourceCount() const {
+        return TextureResources.size();
+    }
+
+    /// Returns the number of engine-owned uploaded texture resources currently cached by the Windows bridge.
+    std::size_t Win32RenderManager2D::GetEngineOwnedTextureResourceCount() const {
+        return EngineOwnedTextureResourceIds.size();
+    }
+
     /// Builds a placeholder runtime texture from raw asset metadata.
     RuntimeTexture* Win32RenderManager2D::BuildTextureFromRaw(TextureAsset* data) {
         RuntimeTexture* runtimeTexture = new RuntimeTexture();
@@ -2903,6 +3177,7 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
             runtimeTexture->set_Id(textureId);
             runtimeTexture->set_Width(data->Width);
             runtimeTexture->set_Height(data->Height);
+            runtimeTexture->set_IsEngineOwned(data->IsEngineOwned);
 
             if (data->Colors == nullptr || data->Colors->Length == 0) {
                 throw new InvalidOperationException("Texture assets must include embedded color data.");
@@ -2941,9 +3216,76 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
                 "ID3D11Device::CreateShaderResourceView failed for a packaged texture asset.");
 
             TextureResources[textureId] = std::make_unique<Win32TextureResource>(std::move(textureResource));
+            if (data->IsEngineOwned) {
+                EngineOwnedTextureResourceIds.insert(textureId);
+            } else {
+                EngineOwnedTextureResourceIds.erase(textureId);
+            }
+            RuntimeRenderDiagnostics::RecordAssetBuild(
+                "texture",
+                textureId,
+                BuildTextureDiagnosticsDetail(data, textureId),
+                TextureResources.size());
         }
 
         return runtimeTexture;
+    }
+
+    /// Releases one runtime texture previously created by the Windows renderer.
+    void Win32RenderManager2D::ReleaseTexture(RuntimeTexture* texture) {
+        if (texture == nullptr) {
+            throw std::invalid_argument("Runtime texture must be provided for release.");
+        }
+
+        const std::string textureId = texture->get_Id();
+        RuntimeRenderDiagnostics::RecordAssetReleaseRequested("texture", textureId, "renderer=windows");
+        if (!textureId.empty()) {
+            TextureResources.erase(textureId);
+            EngineOwnedTextureResourceIds.erase(textureId);
+        }
+
+        RuntimeRenderDiagnostics::RecordAssetReleaseCompleted(
+            "texture",
+            textureId,
+            "renderer=windows texture_resources=" + std::to_string(TextureResources.size()));
+    }
+
+    /// Releases one font asset previously materialized for the Windows renderer.
+    void Win32RenderManager2D::ReleaseFont(FontAsset* font) {
+        if (font == nullptr) {
+            throw std::invalid_argument("Font asset must be provided for release.");
+        }
+
+        const std::string fontId = "font@" + std::to_string(reinterpret_cast<std::uintptr_t>(font));
+        RuntimeRenderDiagnostics::RecordAssetReleaseRequested("font", fontId, "renderer=windows");
+        RenderManager2D::ReleaseFont(font);
+        RuntimeRenderDiagnostics::RecordAssetReleaseCompleted("font", fontId, "renderer=windows");
+    }
+
+    /// Flushes any deferred Windows runtime texture releases.
+    void Win32RenderManager2D::FlushReleasedTextures() {
+    }
+
+    /// Releases Windows renderer-owned 2D resources.
+    void Win32RenderManager2D::Dispose() {
+        TextureResources.clear();
+        EngineOwnedTextureResourceIds.clear();
+        QuadVertexBuffer.Reset();
+        QuadInputLayout.Reset();
+        QuadVertexShader.Reset();
+        QuadPixelShader.Reset();
+        RoundedRectVertexShader.Reset();
+        RoundedRectPixelShader.Reset();
+        TextureSamplerState.Reset();
+        AlphaBlendState.Reset();
+        RasterizerState.Reset();
+        DepthStencilState.Reset();
+        WhiteTexture.Reset();
+        WhiteShaderResourceView.Reset();
+        RoundedRectConstantBuffer.Reset();
+        ClipRectStack.clear();
+        HasActiveViewport = false;
+        HasActiveClipRect = false;
     }
 
     /// Accepts a sprite draw request without issuing backend rendering yet.

@@ -5,8 +5,8 @@
                                "name":  "helengine_windows generated core",
                                "type":  "cppvsdbg",
                                "request":  "launch",
-                               "program":  "C:\\dev\\helprojs\\city\\windows-build\\Build\\helengine_windows.exe",
-                               "cwd":  "C:\\dev\\helprojs\\city\\windows-build\\Build",
+                               "program":  "C:\\tmp\\city-windows-shared-runtime-diagnostics\\helengine_windows.exe",
+                               "cwd":  "C:\\tmp\\city-windows-shared-runtime-diagnostics",
                                "externalConsole":  false,
                                "stopAtEntry":  true
                            }

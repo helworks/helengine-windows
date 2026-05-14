@@ -17,6 +17,7 @@ class LightComponent;
 class DirectionalLightComponent;
 
 #include "Core.hpp"
+#include "FontAsset.hpp"
 #include "ICamera.hpp"
 #include "IRenderVisitor2D.hpp"
 #include "IDrawable3D.hpp"
@@ -58,6 +59,18 @@ namespace helengine::windows {
 
         /// Stores the DirectX index-buffer format for indexed draws.
         DXGI_FORMAT IndexFormat = DXGI_FORMAT_UNKNOWN;
+
+        /// Stores the number of native bytes retained by the uploaded vertex buffer.
+        std::size_t VertexBufferBytes = 0;
+
+        /// Stores the number of native bytes retained by the uploaded index buffer.
+        std::size_t IndexBufferBytes = 0;
+
+        /// Stores the estimated source CPU bytes consumed by authored vertex arrays before upload.
+        std::size_t SourceVertexBytes = 0;
+
+        /// Stores the estimated source CPU bytes consumed by authored index arrays before upload.
+        std::size_t SourceIndexBytes = 0;
     };
 
     /// Stores one compiled shader pair and matching input layout for a Windows material.
@@ -89,11 +102,44 @@ namespace helengine::windows {
         /// Creates the native renderer bridge for one DirectX11 bootstrap.
         explicit Win32RenderManager3D(DirectX11Bootstrap& bootstrap);
 
+        /// Returns the number of uploaded texture resources currently cached by the Windows bridge.
+        std::size_t GetTextureResourceCount() const;
+
+        /// Returns the number of compiled material shader resources currently cached by the Windows bridge.
+        std::size_t GetMaterialShaderResourceCount() const;
+
+        /// Returns the number of authored material constant buffers currently cached by the Windows bridge.
+        std::size_t GetMaterialConstantBufferCount() const;
+
+        /// Returns the number of uploaded runtime models currently retaining native vertex or index buffers.
+        std::size_t GetModelBufferCount() const;
+
+        /// Returns the total native bytes currently retained by uploaded model vertex buffers.
+        std::size_t GetModelVertexBufferBytes() const;
+
+        /// Returns the total native bytes currently retained by uploaded model index buffers.
+        std::size_t GetModelIndexBufferBytes() const;
+
+        /// Returns the total native bytes currently retained by authored material constant buffers.
+        std::size_t GetMaterialConstantBufferBytes() const;
+
         /// Builds a GPU-ready runtime model from raw mesh asset metadata.
         RuntimeModel* BuildModelFromRaw(ModelAsset* data) override;
 
         /// Builds a runtime material placeholder that keeps the packaged material identity.
         RuntimeMaterial* BuildMaterialFromRaw(MaterialAsset* materialAsset, ShaderAsset* shaderAsset) override;
+
+        /// Releases one runtime model previously created by the Windows renderer.
+        void ReleaseModel(RuntimeModel* model) override;
+
+        /// Releases one runtime material previously created by the Windows renderer.
+        void ReleaseMaterial(RuntimeMaterial* material) override;
+
+        /// Flushes any deferred Windows runtime asset releases.
+        void FlushReleasedAssets() override;
+
+        /// Releases Windows renderer-owned 3D resources.
+        void Dispose() override;
 
         /// Draws every registered camera to the Windows back buffer in camera order.
         void Draw() override;
@@ -267,6 +313,18 @@ namespace helengine::windows {
         /// Caches authored material constant buffers by slot and byte size.
         std::unordered_map<uint64_t, Microsoft::WRL::ComPtr<ID3D11Buffer>> MaterialConstantBuffers;
 
+        /// Tracks how many uploaded runtime models currently retain native vertex or index buffers.
+        std::size_t LiveModelBufferCount = 0;
+
+        /// Tracks the total native bytes currently retained by uploaded model vertex buffers.
+        std::size_t LiveModelVertexBufferBytes = 0;
+
+        /// Tracks the total native bytes currently retained by uploaded model index buffers.
+        std::size_t LiveModelIndexBufferBytes = 0;
+
+        /// Tracks the total native bytes currently retained by authored material constant buffers.
+        std::size_t LiveMaterialConstantBufferBytes = 0;
+
     };
 
     /// Provides a native 2D renderer bridge that can draw packaged sprites, text, and UI shapes on Windows.
@@ -275,8 +333,26 @@ namespace helengine::windows {
         /// Creates the native 2D bridge for one DirectX11 bootstrap.
         explicit Win32RenderManager2D(DirectX11Bootstrap& bootstrap);
 
+        /// Returns the number of uploaded texture resources currently cached by the Windows bridge.
+        std::size_t GetTextureResourceCount() const;
+
+        /// Returns the number of engine-owned uploaded texture resources currently cached by the Windows bridge.
+        std::size_t GetEngineOwnedTextureResourceCount() const;
+
         /// Builds a placeholder runtime texture from raw asset metadata.
         RuntimeTexture* BuildTextureFromRaw(TextureAsset* data) override;
+
+        /// Releases one runtime texture previously created by the Windows renderer.
+        void ReleaseTexture(RuntimeTexture* texture) override;
+
+        /// Releases one font asset previously materialized for the Windows renderer.
+        void ReleaseFont(FontAsset* font) override;
+
+        /// Flushes any deferred Windows runtime texture releases.
+        void FlushReleasedTextures() override;
+
+        /// Releases Windows renderer-owned 2D resources.
+        void Dispose() override;
 
         /// Draws every queued 2D drawable for one camera.
         void RenderCamera(ICamera* camera);

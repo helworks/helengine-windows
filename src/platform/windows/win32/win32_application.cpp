@@ -16,7 +16,10 @@
 
 #include "platform/windows/directx11/directx11_bootstrap.hpp"
 #include "platform/windows/directx11/directx11_presenter.hpp"
+#include "platform/windows/runtime/runtime_memory_snapshot.hpp"
+#include "platform/windows/runtime/runtime_memory_diagnostics_provider.hpp"
 #include "platform/windows/runtime/runtime_player_profile_loader.hpp"
+#include "platform/windows/runtime/runtime_render_diagnostics.hpp"
 #include "platform/windows/win32/win32_input_bridge.hpp"
 #include "platform/windows/win32/win32_render_bridge.hpp"
 #include "platform/windows/win32/win32_window.hpp"
@@ -41,6 +44,15 @@
 #include "runtime/array.hpp"
 #include "runtime/native_exceptions.hpp"
 #include "system/io/file.hpp"
+#if __has_include("RuntimeDiagnosticsMetric.hpp")
+#include "RuntimeDiagnosticsMetric.hpp"
+#endif
+#if __has_include("FontAssetBinarySerializer.hpp")
+#include "FontAssetBinarySerializer.hpp"
+#endif
+#if __has_include("RuntimeSceneAssetReferenceResolver.hpp")
+#include "RuntimeSceneAssetReferenceResolver.hpp"
+#endif
 #endif
 
 namespace helengine::windows {
@@ -53,12 +65,21 @@ namespace helengine::windows {
           EngineInputBackend(nullptr),
           EngineInitialized(false),
           FrameStatisticStartTime(std::chrono::steady_clock::now()),
-          FramesSinceLastStatisticLog(0) {
+          FramesSinceLastStatisticLog(0),
+          LastObservedLoadedSceneCount(-1),
+          LastObservedPendingOperationCount(-1),
+          LastObservedSceneLoadRootEntityIndex(-1),
+          LastObservedSceneLoadEntityDepth(-1),
+          FramesSinceSceneTraceChange(0),
+          PendingSteadyStateCheckpoint(false) {
     }
 
     /// Releases native bootstrap objects after the application loop finishes.
     Win32Application::~Win32Application() {
 #if __has_include("Core.hpp")
+        if (EngineCore != nullptr) {
+            EngineCore->Dispose();
+        }
         delete EngineCore;
         delete EngineInputBackend;
         delete EngineRenderManager2D;
@@ -70,6 +91,8 @@ namespace helengine::windows {
     int Win32Application::Run() {
         try {
             InitializeConsole();
+            RuntimeRenderDiagnostics::Initialize(ResolveApplicationDirectoryPath());
+            RuntimeRenderDiagnostics::Reset();
             InitializeFileLog();
             WriteLifecycleLog("Host startup began.");
             CreateMainWindow();
@@ -166,6 +189,10 @@ namespace helengine::windows {
         options->RenderList2DInitialCapacity = 64;
         options->RenderList3DInitialCapacity = 64;
         options->SceneCatalog = BuildRuntimeSceneCatalog();
+#if defined(HELENGINE_WINDOWS_DEBUG_RUNTIME_DIAGNOSTICS) && __has_include("IRuntimeDiagnosticsProvider.hpp") && __has_include("RuntimeMemoryDiagnosticsSnapshot.hpp")
+        RuntimeDiagnosticsProvider = std::make_unique<RuntimeMemoryDiagnosticsProvider>();
+        options->set_RuntimeDiagnosticsProvider(RuntimeDiagnosticsProvider.get());
+#endif
 
         EngineRenderManager3D = new Win32RenderManager3D(*Bootstrap);
         EngineRenderManager2D = new Win32RenderManager2D(*Bootstrap);
@@ -178,6 +205,7 @@ namespace helengine::windows {
 
         PlatformInfo* platformInfo = BuildRuntimePlatformInfo();
         EngineCore->Initialize(EngineRenderManager3D, EngineRenderManager2D, EngineInputBackend, platformInfo, options);
+        WriteSceneDiagnosticsCheckpoint("after_core_initialize");
         std::chrono::steady_clock::time_point sceneLoadStart = std::chrono::steady_clock::now();
         try {
             WriteLifecycleLog("Loading packaged startup scene.");
@@ -204,6 +232,9 @@ namespace helengine::windows {
             WriteLifecycleLog(message.c_str());
         }
         WriteLifecycleLog("Engine core initialized.");
+        WriteSceneDiagnosticsCheckpoint("after_startup_scene_load");
+        PendingSteadyStateCheckpoint = true;
+        FramesSinceSceneTraceChange = 0;
 #else
         WriteLifecycleLog("Generated engine core is not included in this build.");
 #endif
@@ -238,28 +269,39 @@ namespace helengine::windows {
     /// Loads the packaged startup scene from the built content root when one is present.
     void Win32Application::LoadPackagedStartupScene() {
 #if __has_include("Core.hpp")
-        const char* startupSceneRelativePath = he_get_runtime_startup_scene_relative_path();
-        if (startupSceneRelativePath == nullptr || startupSceneRelativePath[0] == '\0') {
-            WriteLifecycleLog("No packaged startup scene was configured.");
-            return;
+        if (EngineCore == nullptr) {
+            throw std::runtime_error("Windows startup scene loading requires an initialized engine core.");
         }
 
-        std::filesystem::path startupScenePath = ResolveApplicationDirectoryPath() / startupSceneRelativePath;
+        CoreInitializationOptions* initializationOptions = EngineCore->get_InitializationOptions();
+        if (initializationOptions == nullptr || initializationOptions->get_SceneCatalog() == nullptr) {
+            throw std::runtime_error("Windows startup requires a runtime scene catalog.");
+        }
+
+        RuntimeSceneCatalog* runtimeSceneCatalog = initializationOptions->get_SceneCatalog();
+        Array<RuntimeSceneCatalogEntry*>* catalogEntries = runtimeSceneCatalog->get_Entries();
+        if (catalogEntries == nullptr || catalogEntries->get_Length() == 0) {
+            throw std::runtime_error("Windows startup requires at least one runtime scene catalog entry.");
+        }
+
+        RuntimeSceneCatalogEntry* startupEntry = (*catalogEntries)[0];
+        if (startupEntry == nullptr || startupEntry->get_SceneId().empty()) {
+            throw std::runtime_error("Windows startup requires the first runtime scene catalog entry to define a scene id.");
+        }
+
         {
             std::ostringstream messageBuilder;
-            messageBuilder << "Startup scene path resolved to '" << startupScenePath.string() << "'.";
+            messageBuilder << "Loading startup scene from runtime scene catalog entry '" << startupEntry->get_SceneId() << "'.";
             std::string message = messageBuilder.str();
             WriteLifecycleLog(message.c_str());
         }
-        if (!std::filesystem::exists(startupScenePath)) {
-            WriteLifecycleLog("No packaged startup scene was found.");
-            return;
+
+        if (EngineCore->get_SceneManager() == nullptr) {
+            throw std::runtime_error("Windows startup scene loading requires an initialized scene manager.");
         }
 
-        SceneAsset* startupScene = static_cast<SceneAsset*>(LoadPackagedAsset(startupSceneRelativePath));
-        WriteLifecycleLog("Handing packaged startup scene to scene load service.");
-        EngineCore->get_SceneLoadService()->Load(startupScene);
-        WriteLifecycleLog("Packaged startup scene applied to scene load service.");
+        EngineCore->get_SceneManager()->LoadScene(startupEntry->get_SceneId(), SceneLoadMode::Single);
+        WriteLifecycleLog("Packaged startup scene applied through scene manager.");
 #endif
     }
 
@@ -325,6 +367,261 @@ namespace helengine::windows {
 #endif
     }
 
+    /// Samples the current renderer cache counters exposed by the Windows bridge.
+    RuntimeRenderCounters Win32Application::BuildRenderCounters() const {
+        RuntimeRenderCounters counters;
+        if (EngineRenderManager2D != nullptr) {
+            counters.TextureResourceCount = EngineRenderManager2D->GetTextureResourceCount();
+            counters.EngineOwnedTextureResourceCount = EngineRenderManager2D->GetEngineOwnedTextureResourceCount();
+            counters.SceneOwnedTextureResourceCount = counters.TextureResourceCount >= counters.EngineOwnedTextureResourceCount
+                ? counters.TextureResourceCount - counters.EngineOwnedTextureResourceCount
+                : 0;
+        } else if (EngineRenderManager3D != nullptr) {
+            counters.TextureResourceCount = EngineRenderManager3D->GetTextureResourceCount();
+            counters.SceneOwnedTextureResourceCount = counters.TextureResourceCount;
+        }
+
+        if (EngineRenderManager3D != nullptr) {
+            counters.MaterialShaderResourceCount = EngineRenderManager3D->GetMaterialShaderResourceCount();
+            counters.MaterialConstantBufferCount = EngineRenderManager3D->GetMaterialConstantBufferCount();
+            counters.ModelBufferCount = EngineRenderManager3D->GetModelBufferCount();
+            counters.ModelVertexBufferBytes = EngineRenderManager3D->GetModelVertexBufferBytes();
+            counters.ModelIndexBufferBytes = EngineRenderManager3D->GetModelIndexBufferBytes();
+            counters.MaterialConstantBufferBytes = EngineRenderManager3D->GetMaterialConstantBufferBytes();
+        }
+
+        return counters;
+    }
+
+    /// Captures the current runtime memory snapshot using shared diagnostics when available.
+    RuntimeMemorySnapshot Win32Application::CaptureRuntimeMemorySnapshot(std::string* detailMetrics) const {
+#if defined(HELENGINE_WINDOWS_DEBUG_RUNTIME_DIAGNOSTICS) && __has_include("Core.hpp") && __has_include("RuntimeMemoryDiagnosticsSnapshot.hpp")
+        if (EngineCore != nullptr && EngineCore->get_RuntimeDiagnosticsService() != nullptr) {
+            RuntimeMemoryDiagnosticsSnapshot* sharedSnapshot = EngineCore->get_RuntimeDiagnosticsService()->CaptureSnapshot();
+            if (sharedSnapshot != nullptr) {
+                RuntimeMemorySnapshot nativeSnapshot;
+                nativeSnapshot.WorkingSetBytes = sharedSnapshot->get_ResidentBytes();
+                nativeSnapshot.PeakWorkingSetBytes = sharedSnapshot->get_PeakResidentBytes();
+                nativeSnapshot.PrivateUsageBytes = sharedSnapshot->get_CommittedBytes();
+                nativeSnapshot.PagefileUsageBytes = sharedSnapshot->get_CommittedBytes();
+                nativeSnapshot.PeakPagefileUsageBytes = sharedSnapshot->get_PeakCommittedBytes();
+                nativeSnapshot.AvailablePhysicalBytes = sharedSnapshot->get_AvailablePhysicalBytes();
+                nativeSnapshot.PageFaultCount = sharedSnapshot->get_PageFaultCount();
+
+                List<RuntimeDiagnosticsMetric*>* snapshotDetailMetrics = sharedSnapshot->get_DetailMetrics();
+                if (snapshotDetailMetrics != nullptr) {
+                    std::ostringstream detailMetricsBuilder;
+                    for (int32_t index = 0; index < snapshotDetailMetrics->get_Count(); index++) {
+                        RuntimeDiagnosticsMetric* detailMetric = (*snapshotDetailMetrics)[index];
+                        if (detailMetric == nullptr) {
+                            continue;
+                        }
+
+                        const std::string& metricName = detailMetric->get_Name();
+                        std::uint64_t metricValue = detailMetric->get_Value();
+                        if (metricName == "pagefile_usage_bytes") {
+                            nativeSnapshot.PagefileUsageBytes = metricValue;
+                        } else if (metricName == "quota_paged_pool_bytes") {
+                            nativeSnapshot.QuotaPagedPoolBytes = metricValue;
+                        } else if (metricName == "quota_nonpaged_pool_bytes") {
+                            nativeSnapshot.QuotaNonPagedPoolBytes = metricValue;
+                        } else if (metricName == "system_commit_total_bytes") {
+                            nativeSnapshot.SystemCommitTotalBytes = metricValue;
+                        } else if (metricName == "system_commit_limit_bytes") {
+                            nativeSnapshot.SystemCommitLimitBytes = metricValue;
+                        } else if (detailMetrics != nullptr && !metricName.empty()) {
+                            detailMetricsBuilder
+                                << " "
+                                << metricName
+                                << "="
+                                << metricValue;
+                        }
+                    }
+
+                    if (detailMetrics != nullptr) {
+                        *detailMetrics = detailMetricsBuilder.str();
+                    }
+                }
+
+                return nativeSnapshot;
+            }
+        }
+#endif
+
+        return RuntimeMemorySnapshot::Capture();
+    }
+
+    /// Builds the currently tracked loaded scene id list from shared runtime state.
+    std::string Win32Application::BuildTrackedLoadedSceneIds() const {
+#if __has_include("Core.hpp")
+        if (EngineCore == nullptr || EngineCore->get_SceneManager() == nullptr) {
+            return std::string();
+        }
+
+        List<std::string>* sceneIds = EngineCore->get_SceneManager()->GetLoadedSceneIds();
+        if (sceneIds == nullptr || sceneIds->get_Count() == 0) {
+            return std::string();
+        }
+
+        std::ostringstream builder;
+        for (int32_t index = 0; index < sceneIds->get_Count(); index++) {
+            if (index > 0) {
+                builder << ",";
+            }
+
+            builder << (*sceneIds)[index];
+        }
+
+        return builder.str();
+#else
+        return std::string();
+#endif
+    }
+
+    /// Writes one named scene diagnostics checkpoint into the Windows diagnostics log.
+    void Win32Application::WriteSceneDiagnosticsCheckpoint(const char* label) {
+#if __has_include("Core.hpp")
+        std::string detailMetrics;
+        RuntimeMemorySnapshot memorySnapshot = CaptureRuntimeMemorySnapshot(&detailMetrics);
+        RuntimeRenderCounters renderCounters = BuildRenderCounters();
+
+        std::string coreStage;
+        std::string sceneManagerStage;
+        std::string sceneManagerSceneId;
+        int loadedSceneCount = -1;
+        int pendingOperationCount = -1;
+        std::string sceneLoadStage;
+        int rootEntityIndex = -1;
+        int entityDepth = -1;
+        std::string componentTypeId;
+        std::string textFontRelativePath;
+        std::string textFontLoadStage;
+        std::string fontDeserializeStage;
+
+        if (EngineCore != nullptr) {
+            coreStage = EngineCore->get_LastSceneTransitionStage();
+            SceneManager* sceneManager = EngineCore->get_SceneManager();
+            if (sceneManager != nullptr) {
+                sceneManagerStage = sceneManager->get_LastTraceStage();
+                sceneManagerSceneId = sceneManager->get_LastTraceSceneId();
+                loadedSceneCount = sceneManager->get_LastTraceLoadedSceneCount();
+                pendingOperationCount = sceneManager->get_LastTracePendingOperationCount();
+            }
+
+            RuntimeSceneLoadService* sceneLoadService = EngineCore->get_SceneLoadService();
+            if (sceneLoadService != nullptr) {
+                sceneLoadStage = sceneLoadService->get_LastTraceStage();
+                rootEntityIndex = sceneLoadService->get_LastTraceRootEntityIndex();
+                entityDepth = sceneLoadService->get_LastTraceEntityDepth();
+                componentTypeId = sceneLoadService->get_LastTraceComponentTypeId();
+            }
+
+#if __has_include("RuntimeSceneAssetReferenceResolver.hpp")
+            RuntimeSceneAssetReferenceResolver* referenceResolver = EngineCore->get_SceneAssetReferenceResolver();
+            if (referenceResolver != nullptr) {
+                textFontRelativePath = referenceResolver->get_LastTextFontRelativePath();
+                textFontLoadStage = referenceResolver->get_LastTextLoadStage();
+            }
+#endif
+#if __has_include("FontAssetBinarySerializer.hpp")
+            fontDeserializeStage = FontAssetBinarySerializer::get_LastDeserializeStage();
+#endif
+        }
+
+        RuntimeRenderDiagnostics::WriteSceneCheckpoint(
+            label != nullptr ? std::string(label) : std::string(),
+            memorySnapshot,
+            renderCounters,
+            detailMetrics,
+            coreStage,
+            BuildTrackedLoadedSceneIds(),
+            sceneManagerStage,
+            sceneManagerSceneId,
+            loadedSceneCount,
+            pendingOperationCount,
+            sceneLoadStage,
+            rootEntityIndex,
+            entityDepth,
+            componentTypeId,
+            textFontRelativePath,
+            textFontLoadStage,
+            fontDeserializeStage);
+#else
+        (void)label;
+#endif
+    }
+
+    /// Polls generated core scene-transition trace fields and emits checkpoints when they change.
+    void Win32Application::PollSceneTransitionDiagnostics() {
+#if __has_include("Core.hpp")
+        if (!EngineInitialized || EngineCore == nullptr) {
+            return;
+        }
+
+        std::string coreStage = EngineCore->get_LastSceneTransitionStage();
+        std::string sceneManagerStage;
+        std::string sceneManagerSceneId;
+        int loadedSceneCount = -1;
+        int pendingOperationCount = -1;
+        std::string sceneLoadStage;
+        std::string componentTypeId;
+        int rootEntityIndex = -1;
+        int entityDepth = -1;
+
+        SceneManager* sceneManager = EngineCore->get_SceneManager();
+        if (sceneManager != nullptr) {
+            sceneManagerStage = sceneManager->get_LastTraceStage();
+            sceneManagerSceneId = sceneManager->get_LastTraceSceneId();
+            loadedSceneCount = sceneManager->get_LastTraceLoadedSceneCount();
+            pendingOperationCount = sceneManager->get_LastTracePendingOperationCount();
+        }
+
+        RuntimeSceneLoadService* sceneLoadService = EngineCore->get_SceneLoadService();
+        if (sceneLoadService != nullptr) {
+            sceneLoadStage = sceneLoadService->get_LastTraceStage();
+            componentTypeId = sceneLoadService->get_LastTraceComponentTypeId();
+            rootEntityIndex = sceneLoadService->get_LastTraceRootEntityIndex();
+            entityDepth = sceneLoadService->get_LastTraceEntityDepth();
+        }
+
+        bool hasChanged = coreStage != LastObservedCoreSceneTransitionStage
+            || sceneManagerStage != LastObservedSceneManagerTraceStage
+            || sceneManagerSceneId != LastObservedSceneManagerSceneId
+            || loadedSceneCount != LastObservedLoadedSceneCount
+            || pendingOperationCount != LastObservedPendingOperationCount
+            || sceneLoadStage != LastObservedSceneLoadStage
+            || componentTypeId != LastObservedSceneLoadComponentTypeId
+            || rootEntityIndex != LastObservedSceneLoadRootEntityIndex
+            || entityDepth != LastObservedSceneLoadEntityDepth;
+
+        if (hasChanged) {
+            LastObservedCoreSceneTransitionStage = coreStage;
+            LastObservedSceneManagerTraceStage = sceneManagerStage;
+            LastObservedSceneManagerSceneId = sceneManagerSceneId;
+            LastObservedLoadedSceneCount = loadedSceneCount;
+            LastObservedPendingOperationCount = pendingOperationCount;
+            LastObservedSceneLoadStage = sceneLoadStage;
+            LastObservedSceneLoadComponentTypeId = componentTypeId;
+            LastObservedSceneLoadRootEntityIndex = rootEntityIndex;
+            LastObservedSceneLoadEntityDepth = entityDepth;
+            FramesSinceSceneTraceChange = 0;
+            PendingSteadyStateCheckpoint = true;
+            WriteSceneDiagnosticsCheckpoint("scene_trace_change");
+            return;
+        }
+
+        if (!PendingSteadyStateCheckpoint) {
+            return;
+        }
+
+        FramesSinceSceneTraceChange++;
+        if (FramesSinceSceneTraceChange >= 120) {
+            PendingSteadyStateCheckpoint = false;
+            WriteSceneDiagnosticsCheckpoint("scene_steady_state");
+        }
+#endif
+    }
+
     /// Loads one packaged serialized asset from a build-relative path.
     Asset* Win32Application::LoadPackagedAsset(const std::string& relativePath) {
 #if __has_include("Core.hpp")
@@ -339,6 +636,7 @@ namespace helengine::windows {
             throw std::runtime_error(std::string("Required packaged asset was not found: ") + fullPath.string());
         }
 
+        RuntimeRenderDiagnostics::RecordPackagedAssetLoad(relativePath, fullPath.string());
         FileStream* stream = File::OpenRead(fullPath.string());
         WriteLifecycleLog("Packaged asset file opened.");
         WriteLifecycleLog("Deserializing packaged asset.");
@@ -407,6 +705,7 @@ namespace helengine::windows {
         if (EngineInitialized && EngineCore != nullptr) {
 #if __has_include("Core.hpp")
             EngineCore->Update();
+            PollSceneTransitionDiagnostics();
             EngineCore->Draw();
 #endif
         }
@@ -418,6 +717,7 @@ namespace helengine::windows {
     /// Writes one lifecycle message to the host console.
     void Win32Application::WriteLifecycleLog(const char* message) const {
         std::cout << "[Host] " << message << std::endl;
+        RuntimeRenderDiagnostics::WriteHostEvent("lifecycle", message != nullptr ? std::string(message) : std::string());
         if (LifecycleLogFile.is_open()) {
             LifecycleLogFile << "[Host] " << message << '\n';
             LifecycleLogFile.flush();
@@ -445,6 +745,18 @@ namespace helengine::windows {
         messageBuilder << std::setprecision(2) << averageFrameTimeMs
             << " ms"
             << " | Frames: " << FramesSinceLastStatisticLog;
+        try {
+            RuntimeMemorySnapshot memorySnapshot = CaptureRuntimeMemorySnapshot();
+            RuntimeRenderCounters renderCounters = BuildRenderCounters();
+            messageBuilder
+                << " | " << memorySnapshot.ToSummaryString()
+                << " | texture_resources=" << renderCounters.TextureResourceCount
+                << " | scene_owned_texture_resources=" << renderCounters.SceneOwnedTextureResourceCount
+                << " | engine_owned_texture_resources=" << renderCounters.EngineOwnedTextureResourceCount
+                << " | material_shader_resources=" << renderCounters.MaterialShaderResourceCount
+                << " | material_constant_buffers=" << renderCounters.MaterialConstantBufferCount;
+        } catch (const std::exception&) {
+        }
 
         std::string message = messageBuilder.str();
         WriteLifecycleLog(message.c_str());

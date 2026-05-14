@@ -32,8 +32,11 @@ endif()
 
 set(HELENGINE_WINDOWS_SOURCES
     src/main.cpp
+    src/platform/windows/runtime/runtime_memory_diagnostics_provider.cpp
+    src/platform/windows/runtime/runtime_memory_snapshot.cpp
     src/platform/windows/runtime/runtime_player_profile.cpp
     src/platform/windows/runtime/runtime_player_profile_loader.cpp
+    src/platform/windows/runtime/runtime_render_diagnostics.cpp
     src/platform/windows/win32/win32_application.cpp
     src/platform/windows/win32/win32_window.cpp
     src/platform/windows/directx11/directx11_bootstrap.cpp
@@ -72,6 +75,7 @@ target_compile_features(helengine_windows PRIVATE cxx_std_20)
 target_compile_definitions(helengine_windows PRIVATE
     WIN32_LEAN_AND_MEAN
     NOMINMAX
+    $<$<CONFIG:Debug>:HELENGINE_WINDOWS_DEBUG_RUNTIME_DIAGNOSTICS>
 )
 
 target_include_directories(helengine_windows PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
@@ -84,6 +88,7 @@ target_link_libraries(helengine_windows PRIVATE
     d3d11
     d3dcompiler
     dxgi
+    psapi
     user32
     gdi32
 )
