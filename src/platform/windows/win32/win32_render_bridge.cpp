@@ -1025,12 +1025,19 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
 
         if (Core::get_Instance() == nullptr || Core::get_Instance()->get_ObjectManager() == nullptr) {
             ClearBackBuffer(0.0f, 0.0f, 0.0f, 1.0f);
+            HasWrittenRenderSnapshot = true;
             return;
         }
 
         List<ICamera*>* cameras = Core::get_Instance()->get_ObjectManager()->get_Cameras();
         if (cameras == nullptr || cameras->Count() == 0) {
+            if (!HasWrittenRenderSnapshot) {
+                AppendRenderSnapshotLine("camera count=0");
+                AppendRenderDiagnosticsLine("3d.camera_count=0");
+            }
+
             ClearBackBuffer(0.0f, 0.0f, 0.0f, 1.0f);
+            HasWrittenRenderSnapshot = true;
             return;
         }
 
@@ -1068,6 +1075,8 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
         if (!renderedAnyCamera) {
             ClearBackBuffer(0.0f, 0.0f, 0.0f, 1.0f);
         }
+
+        HasWrittenRenderSnapshot = true;
     }
 
     /// Draws one queued mesh for the currently active camera.

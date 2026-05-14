@@ -44,6 +44,9 @@
 #include "runtime/array.hpp"
 #include "runtime/native_exceptions.hpp"
 #include "system/io/file.hpp"
+#if __has_include("RuntimeMemoryDiagnosticsSnapshot.hpp")
+#include "RuntimeMemoryDiagnosticsSnapshot.hpp"
+#endif
 #if __has_include("RuntimeDiagnosticsMetric.hpp")
 #include "RuntimeDiagnosticsMetric.hpp"
 #endif
@@ -56,6 +59,35 @@
 #endif
 
 namespace helengine::windows {
+    namespace {
+#if defined(HELENGINE_WINDOWS_DEBUG_RUNTIME_DIAGNOSTICS) && __has_include("RuntimeMemoryDiagnosticsSnapshot.hpp") && __has_include("RuntimeDiagnosticsMetric.hpp")
+        /// Releases one shared runtime diagnostics snapshot together with the nested metric and scene-id lists it owns.
+        void DeleteRuntimeMemoryDiagnosticsSnapshot(RuntimeMemoryDiagnosticsSnapshot* snapshot) {
+            if (snapshot == nullptr) {
+                return;
+            }
+
+            List<RuntimeDiagnosticsMetric*>* detailMetrics = snapshot->get_DetailMetrics();
+            if (detailMetrics != nullptr) {
+                for (int32_t index = 0; index < detailMetrics->get_Count(); index++) {
+                    delete (*detailMetrics)[index];
+                }
+
+                delete detailMetrics;
+                snapshot->set_DetailMetrics(nullptr);
+            }
+
+            List<std::string>* trackedSceneIds = snapshot->get_TrackedSceneIds();
+            if (trackedSceneIds != nullptr) {
+                delete trackedSceneIds;
+                snapshot->set_TrackedSceneIds(nullptr);
+            }
+
+            delete snapshot;
+        }
+#endif
+    }
+
     /// Creates the application runner with no initialized native resources.
     Win32Application::Win32Application()
         : ExitCode(0),
@@ -443,6 +475,7 @@ namespace helengine::windows {
                     }
                 }
 
+                DeleteRuntimeMemoryDiagnosticsSnapshot(sharedSnapshot);
                 return nativeSnapshot;
             }
         }
