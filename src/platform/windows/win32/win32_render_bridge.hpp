@@ -15,6 +15,7 @@
 #if __has_include("RenderManager2D.hpp")
 class LightComponent;
 class DirectionalLightComponent;
+class RenderCommandListBuilder2D;
 
 #include "Core.hpp"
 #include "FontAsset.hpp"
@@ -469,6 +470,9 @@ namespace helengine::windows {
 
         /// Tracks whether the current 2D pass has an active clipped scissor rectangle.
         bool HasActiveClipRect = false;
+
+        /// Reuses one generated 2D command-list builder so the Windows bridge does not recreate a leaking builder graph every frame.
+        std::unique_ptr<RenderCommandListBuilder2D> CommandListBuilder;
     };
 #endif
 }

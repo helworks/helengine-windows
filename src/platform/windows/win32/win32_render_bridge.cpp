@@ -1572,7 +1572,7 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
 
         const D3D11_VIEWPORT viewport = ResolveViewport(camera);
         context->RSSetViewports(1, &viewport);
-        if (!HasWritten2DSummary) {
+        if (!HasWrittenRenderSnapshot) {
             AppendRenderDiagnosticsLine(
                 "3d.render_camera viewport="
                 + std::to_string(viewport.TopLeftX) + ","
@@ -2447,6 +2447,9 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
     /// Creates the native 2D bridge for one DirectX11 bootstrap.
     Win32RenderManager2D::Win32RenderManager2D(DirectX11Bootstrap& bootstrap)
         : Bootstrap(bootstrap) {
+#if __has_include("RenderCommandListBuilder2D.hpp")
+        CommandListBuilder = std::make_unique<RenderCommandListBuilder2D>();
+#endif
     }
 
     /// Creates the DirectX11 shaders, buffers, and fixed pipeline state needed for 2D rendering.
@@ -2964,8 +2967,11 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
         }
 
 #if __has_include("RenderCommandListBuilder2D.hpp")
-        RenderCommandListBuilder2D commandListBuilder;
-        RenderCommandList2D* commandList = commandListBuilder.Build(renderQueue);
+        if (!CommandListBuilder) {
+            CommandListBuilder = std::make_unique<RenderCommandListBuilder2D>();
+        }
+
+        RenderCommandList2D* commandList = CommandListBuilder->Build(renderQueue);
         if (commandList == nullptr || commandList->get_Count() <= 0) {
             return;
         }
@@ -3293,6 +3299,7 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
         WhiteShaderResourceView.Reset();
         RoundedRectConstantBuffer.Reset();
         ClipRectStack.clear();
+        CommandListBuilder.reset();
         HasActiveViewport = false;
         HasActiveClipRect = false;
     }
