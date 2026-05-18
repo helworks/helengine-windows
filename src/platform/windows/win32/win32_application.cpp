@@ -82,16 +82,51 @@ namespace helengine::windows {
         constexpr bool EnableDebugHeapBlockAttribution = false;
 
         /// Controls whether periodic frame-statistic logs are mirrored through the general lifecycle logging path.
-        constexpr bool EnableFrameStatisticLifecycleLogging = true;
+        constexpr bool EnableFrameStatisticLifecycleLogging = false;
 
         /// Controls whether periodic frame-statistic logs capture runtime memory and render counters.
-        constexpr bool EnableFrameStatisticRuntimeSampling = true;
+        constexpr bool EnableFrameStatisticRuntimeSampling = false;
 
         /// Controls whether the debug host captures and logs in-process CRT and Win32 heap deltas.
         constexpr bool EnableDebugAllocationTracking = false;
 
+        /// Controls whether the debug host emits scene-transition diagnostics checkpoints.
+        constexpr bool EnableSceneDiagnosticsCheckpointLogging = false;
+
         /// Controls whether debug allocation tracking samples Win32 process heaps in addition to CRT checkpoints.
         constexpr bool EnableDebugWin32HeapSampling = false;
+
+        /// Controls whether CRT normal-block allocations are aggregated by live call stack deltas.
+        constexpr bool EnableDebugAllocationCallsiteTracking = false;
+
+        /// Maximum number of frames retained for one tracked allocation call stack.
+        constexpr USHORT DebugAllocationTrackedFrameCapacity = 20;
+
+        /// Fixed-capacity request table size used for live CRT allocation tracking.
+        constexpr std::size_t DebugAllocationTrackedRequestCapacity = 524288;
+
+        /// Fixed-capacity stack table size used for live CRT allocation tracking.
+        constexpr std::size_t DebugAllocationTrackedStackCapacity = 32768;
+
+        /// One open-addressing request entry keyed by CRT allocation request number.
+        struct DebugTrackedAllocationRequest {
+            long RequestNumber;
+            std::uint32_t StackIndex;
+            std::uint64_t Size;
+            std::uint8_t State;
+        };
+
+        /// One aggregated live-allocation stack bucket.
+        struct DebugTrackedAllocationStack {
+            std::uint64_t Hash;
+            std::uint64_t LiveBytes;
+            std::uint64_t BaselineLiveBytes;
+            std::uint32_t LiveAllocations;
+            std::uint32_t BaselineLiveAllocations;
+            USHORT FrameCount;
+            bool Occupied;
+            void* Frames[DebugAllocationTrackedFrameCapacity];
+        };
 
         /// Stores the currently running application instance used by the debug crash handler.
         Win32Application* ActiveCrashLoggingApplication = nullptr;
@@ -104,6 +139,30 @@ namespace helengine::windows {
 
         /// Tracks whether the DbgHelp symbol engine initialized successfully.
         bool DebugSymbolsInitialized = false;
+
+        /// Tracks whether the live CRT request tracker has been initialized successfully.
+        bool DebugAllocationCallsiteTrackerInitialized = false;
+
+        /// Tracks whether the CRT allocation hook has already been installed.
+        bool DebugAllocationCallsiteHookInstalled = false;
+
+        /// Tracks whether the request tracker overflowed and dropped entries.
+        bool DebugAllocationCallsiteTrackerOverflowed = false;
+
+        /// Temporarily suppresses allocation-hook bookkeeping while diagnostics formatting runs.
+        bool DebugAllocationCallsiteTrackingSuspended = false;
+
+        /// Heap used to allocate fixed-capacity tracking tables without recursing through the CRT debug heap.
+        HANDLE DebugAllocationCallsiteTrackerHeap = nullptr;
+
+        /// Fixed-capacity table of live CRT requests keyed by request number.
+        DebugTrackedAllocationRequest* DebugTrackedAllocationRequests = nullptr;
+
+        /// Fixed-capacity table of aggregated call stacks keyed by stack hash.
+        DebugTrackedAllocationStack* DebugTrackedAllocationStacks = nullptr;
+
+        /// Prevents recursive allocation-hook tracking on the current thread.
+        thread_local bool DebugAllocationCallsiteTrackingReentry = false;
 
         /// Stores the previously registered terminate handler.
         std::terminate_handler PreviousTerminateHandler = nullptr;
@@ -143,6 +202,220 @@ namespace helengine::windows {
             }
 
             delete snapshot;
+        }
+#endif
+
+#if defined(HELENGINE_WINDOWS_DEBUG_RUNTIME_DIAGNOSTICS)
+        /// Resolves one fixed-capacity request slot for the supplied CRT allocation request number.
+        DebugTrackedAllocationRequest* FindTrackedAllocationRequestSlot(long requestNumber, bool createIfMissing) {
+            if (requestNumber <= 0 || DebugTrackedAllocationRequests == nullptr) {
+                return nullptr;
+            }
+
+            std::size_t initialIndex = static_cast<std::size_t>(requestNumber) & (DebugAllocationTrackedRequestCapacity - 1);
+            DebugTrackedAllocationRequest* firstTombstone = nullptr;
+            for (std::size_t probeOffset = 0; probeOffset < DebugAllocationTrackedRequestCapacity; probeOffset++) {
+                DebugTrackedAllocationRequest* entry = &DebugTrackedAllocationRequests[(initialIndex + probeOffset) & (DebugAllocationTrackedRequestCapacity - 1)];
+                if (entry->State == 1 && entry->RequestNumber == requestNumber) {
+                    return entry;
+                }
+
+                if (entry->State == 2 && firstTombstone == nullptr) {
+                    firstTombstone = entry;
+                }
+
+                if (entry->State == 0) {
+                    return createIfMissing ? (firstTombstone != nullptr ? firstTombstone : entry) : nullptr;
+                }
+            }
+
+            return createIfMissing ? firstTombstone : nullptr;
+        }
+
+        /// Computes one stable hash for a captured stack-trace prefix.
+        std::uint64_t HashTrackedAllocationFrames(const void* const* frames, USHORT frameCount) {
+            std::uint64_t hash = 1469598103934665603ull;
+            for (USHORT frameIndex = 0; frameIndex < frameCount; frameIndex++) {
+                hash ^= static_cast<std::uint64_t>(reinterpret_cast<std::uintptr_t>(frames[frameIndex]));
+                hash *= 1099511628211ull;
+            }
+
+            return hash;
+        }
+
+        /// Resolves one aggregated live-stack slot for the supplied captured frames.
+        std::uint32_t FindOrCreateTrackedAllocationStack(const void* const* frames, USHORT frameCount) {
+            if (DebugTrackedAllocationStacks == nullptr || frameCount == 0) {
+                return UINT32_MAX;
+            }
+
+            std::uint64_t hash = HashTrackedAllocationFrames(frames, frameCount);
+            std::size_t initialIndex = static_cast<std::size_t>(hash) & (DebugAllocationTrackedStackCapacity - 1);
+            for (std::size_t probeOffset = 0; probeOffset < DebugAllocationTrackedStackCapacity; probeOffset++) {
+                std::uint32_t index = static_cast<std::uint32_t>((initialIndex + probeOffset) & (DebugAllocationTrackedStackCapacity - 1));
+                DebugTrackedAllocationStack* entry = &DebugTrackedAllocationStacks[index];
+                if (entry->Occupied) {
+                    if (entry->Hash != hash || entry->FrameCount != frameCount) {
+                        continue;
+                    }
+
+                    bool allFramesMatch = true;
+                    for (USHORT frameIndex = 0; frameIndex < frameCount; frameIndex++) {
+                        if (entry->Frames[frameIndex] != frames[frameIndex]) {
+                            allFramesMatch = false;
+                            break;
+                        }
+                    }
+
+                    if (allFramesMatch) {
+                        return index;
+                    }
+
+                    continue;
+                }
+
+                entry->Occupied = true;
+                entry->Hash = hash;
+                entry->LiveBytes = 0;
+                entry->BaselineLiveBytes = 0;
+                entry->LiveAllocations = 0;
+                entry->BaselineLiveAllocations = 0;
+                entry->FrameCount = frameCount;
+                for (USHORT frameIndex = 0; frameIndex < frameCount; frameIndex++) {
+                    entry->Frames[frameIndex] = const_cast<void*>(frames[frameIndex]);
+                }
+                return index;
+            }
+
+            return UINT32_MAX;
+        }
+
+        /// Records one CRT normal-block allocation into the fixed-capacity live request tracker.
+        void TrackDebugAllocationCallsite(long requestNumber, size_t size) {
+            if (size == 0 || requestNumber <= 0) {
+                return;
+            }
+
+            std::array<void*, DebugAllocationTrackedFrameCapacity> frames {};
+            USHORT frameCount = CaptureStackBackTrace(2, DebugAllocationTrackedFrameCapacity, frames.data(), nullptr);
+            if (frameCount == 0) {
+                return;
+            }
+
+            std::uint32_t stackIndex = FindOrCreateTrackedAllocationStack(frames.data(), frameCount);
+            DebugTrackedAllocationRequest* requestEntry = FindTrackedAllocationRequestSlot(requestNumber, true);
+            if (stackIndex == UINT32_MAX || requestEntry == nullptr) {
+                DebugAllocationCallsiteTrackerOverflowed = true;
+                return;
+            }
+
+            if (requestEntry->State == 1 && requestEntry->StackIndex < DebugAllocationTrackedStackCapacity) {
+                DebugTrackedAllocationStack* previousStack = &DebugTrackedAllocationStacks[requestEntry->StackIndex];
+                if (previousStack->LiveBytes >= requestEntry->Size) {
+                    previousStack->LiveBytes -= requestEntry->Size;
+                } else {
+                    previousStack->LiveBytes = 0;
+                }
+                if (previousStack->LiveAllocations > 0) {
+                    previousStack->LiveAllocations--;
+                }
+            }
+
+            requestEntry->RequestNumber = requestNumber;
+            requestEntry->StackIndex = stackIndex;
+            requestEntry->Size = static_cast<std::uint64_t>(size);
+            requestEntry->State = 1;
+
+            DebugTrackedAllocationStack* stackEntry = &DebugTrackedAllocationStacks[stackIndex];
+            stackEntry->LiveBytes += static_cast<std::uint64_t>(size);
+            stackEntry->LiveAllocations++;
+        }
+
+        /// Removes one CRT normal-block allocation from the live request tracker.
+        void UntrackDebugAllocationCallsite(long requestNumber) {
+            DebugTrackedAllocationRequest* requestEntry = FindTrackedAllocationRequestSlot(requestNumber, false);
+            if (requestEntry == nullptr || requestEntry->State != 1 || requestEntry->StackIndex >= DebugAllocationTrackedStackCapacity) {
+                return;
+            }
+
+            DebugTrackedAllocationStack* stackEntry = &DebugTrackedAllocationStacks[requestEntry->StackIndex];
+            if (stackEntry->LiveBytes >= requestEntry->Size) {
+                stackEntry->LiveBytes -= requestEntry->Size;
+            } else {
+                stackEntry->LiveBytes = 0;
+            }
+            if (stackEntry->LiveAllocations > 0) {
+                stackEntry->LiveAllocations--;
+            }
+
+            requestEntry->RequestNumber = 0;
+            requestEntry->StackIndex = 0;
+            requestEntry->Size = 0;
+            requestEntry->State = 2;
+        }
+
+        /// CRT debug allocation hook that attributes live normal-block deltas to call stacks.
+        int __cdecl DebugTrackedAllocationHook(
+            int allocType,
+            void* userData,
+            size_t size,
+            int blockType,
+            long requestNumber,
+            const unsigned char* filename,
+            int lineNumber) {
+            (void)userData;
+            (void)filename;
+            (void)lineNumber;
+
+            if (!EnableDebugAllocationTracking ||
+                !EnableDebugAllocationCallsiteTracking ||
+                DebugAllocationCallsiteTrackingSuspended ||
+                DebugAllocationCallsiteTrackingReentry ||
+                blockType != _NORMAL_BLOCK ||
+                !DebugAllocationCallsiteTrackerInitialized) {
+                return TRUE;
+            }
+
+            DebugAllocationCallsiteTrackingReentry = true;
+            if (allocType == _HOOK_ALLOC || allocType == _HOOK_REALLOC) {
+                TrackDebugAllocationCallsite(requestNumber, size);
+            } else if (allocType == _HOOK_FREE) {
+                UntrackDebugAllocationCallsite(requestNumber);
+            }
+            DebugAllocationCallsiteTrackingReentry = false;
+            return TRUE;
+        }
+
+        /// Allocates fixed-capacity tracking tables and installs the CRT debug allocation hook on first use.
+        void EnsureDebugAllocationCallsiteTrackerInitialized() {
+            if (!EnableDebugAllocationTracking ||
+                !EnableDebugAllocationCallsiteTracking ||
+                DebugAllocationCallsiteTrackerInitialized) {
+                return;
+            }
+
+            DebugAllocationCallsiteTrackerHeap = GetProcessHeap();
+            if (DebugAllocationCallsiteTrackerHeap == nullptr) {
+                DebugAllocationCallsiteTrackerOverflowed = true;
+                return;
+            }
+
+            DebugTrackedAllocationRequests = static_cast<DebugTrackedAllocationRequest*>(HeapAlloc(
+                DebugAllocationCallsiteTrackerHeap,
+                HEAP_ZERO_MEMORY,
+                sizeof(DebugTrackedAllocationRequest) * DebugAllocationTrackedRequestCapacity));
+            DebugTrackedAllocationStacks = static_cast<DebugTrackedAllocationStack*>(HeapAlloc(
+                DebugAllocationCallsiteTrackerHeap,
+                HEAP_ZERO_MEMORY,
+                sizeof(DebugTrackedAllocationStack) * DebugAllocationTrackedStackCapacity));
+            if (DebugTrackedAllocationRequests == nullptr || DebugTrackedAllocationStacks == nullptr) {
+                DebugAllocationCallsiteTrackerOverflowed = true;
+                return;
+            }
+
+            _CrtSetAllocHook(DebugTrackedAllocationHook);
+            DebugAllocationCallsiteHookInstalled = true;
+            DebugAllocationCallsiteTrackerInitialized = true;
         }
 #endif
     }
@@ -322,6 +595,9 @@ namespace helengine::windows {
 
         PlatformInfo* platformInfo = BuildRuntimePlatformInfo();
         EngineCore->Initialize(EngineRenderManager3D, EngineRenderManager2D, EngineInputBackend, platformInfo, options);
+#if defined(HELENGINE_WINDOWS_DEBUG_RUNTIME_DIAGNOSTICS)
+        EnsureDebugAllocationCallsiteTrackerInitialized();
+#endif
         WriteSceneDiagnosticsCheckpoint("after_core_initialize");
         std::chrono::steady_clock::time_point sceneLoadStart = std::chrono::steady_clock::now();
         try {
@@ -937,9 +1213,33 @@ namespace helengine::windows {
     /// Writes one named scene diagnostics checkpoint into the Windows diagnostics log.
     void Win32Application::WriteSceneDiagnosticsCheckpoint(const char* label) {
 #if __has_include("Core.hpp")
+        if (!EnableSceneDiagnosticsCheckpointLogging) {
+            return;
+        }
+
         std::string detailMetrics;
         RuntimeMemorySnapshot memorySnapshot = CaptureRuntimeMemorySnapshot(&detailMetrics);
         RuntimeRenderCounters renderCounters = BuildRenderCounters();
+#if defined(HELENGINE_WINDOWS_DEBUG_RUNTIME_DIAGNOSTICS)
+        if (EnableDebugAllocationTracking) {
+            if (!DebugAllocationBaselineCaptured) {
+                CaptureDebugAllocationBaseline();
+            } else {
+                _CrtMemState currentState {};
+                _CrtMemState deltaState {};
+                _CrtMemCheckpoint(&currentState);
+                if (_CrtMemDifference(&deltaState, &DebugAllocationBaselineState, &currentState) != FALSE) {
+                    std::ostringstream allocationMetricsBuilder;
+                    allocationMetricsBuilder
+                        << " debug_normal_blocks_delta=" << deltaState.lCounts[_NORMAL_BLOCK]
+                        << " debug_normal_bytes_delta=" << deltaState.lSizes[_NORMAL_BLOCK]
+                        << " debug_crt_blocks_delta=" << deltaState.lCounts[_CRT_BLOCK]
+                        << " debug_crt_bytes_delta=" << deltaState.lSizes[_CRT_BLOCK];
+                    detailMetrics += allocationMetricsBuilder.str();
+                }
+            }
+        }
+#endif
 
         std::string coreStage;
         std::string sceneManagerStage;
@@ -1010,6 +1310,10 @@ namespace helengine::windows {
     /// Polls generated core scene-transition trace fields and emits checkpoints when they change.
     void Win32Application::PollSceneTransitionDiagnostics() {
 #if __has_include("Core.hpp")
+        if (!EnableSceneDiagnosticsCheckpointLogging) {
+            return;
+        }
+
         if (!EngineInitialized || EngineCore == nullptr) {
             return;
         }
@@ -1238,6 +1542,7 @@ namespace helengine::windows {
 #if defined(HELENGINE_WINDOWS_DEBUG_RUNTIME_DIAGNOSTICS)
     /// Captures the CRT debug heap state used as the steady-state allocation baseline.
     void Win32Application::CaptureDebugAllocationBaseline() {
+        EnsureDebugAllocationCallsiteTrackerInitialized();
         _CrtMemCheckpoint(&DebugAllocationBaselineState);
         if (EnableDebugWin32HeapSampling) {
             DebugWin32HeapBaseline = CaptureDebugWin32HeapSummary();
@@ -1248,6 +1553,17 @@ namespace helengine::windows {
             DebugWin32HeapBaselineSnapshotCount = CaptureDebugWin32HeapSnapshots(DebugWin32HeapBaselineSnapshots);
         } else {
             DebugWin32HeapBaselineSnapshotCount = 0;
+        }
+        if (EnableDebugAllocationCallsiteTracking && DebugTrackedAllocationStacks != nullptr) {
+            for (std::size_t stackIndex = 0; stackIndex < DebugAllocationTrackedStackCapacity; stackIndex++) {
+                DebugTrackedAllocationStack* stackEntry = &DebugTrackedAllocationStacks[stackIndex];
+                if (!stackEntry->Occupied) {
+                    continue;
+                }
+
+                stackEntry->BaselineLiveBytes = stackEntry->LiveBytes;
+                stackEntry->BaselineLiveAllocations = stackEntry->LiveAllocations;
+            }
         }
         DebugAllocationBaselineCaptured = true;
 
@@ -1330,6 +1646,68 @@ namespace helengine::windows {
             AppendDebugWin32HeapBlockDelta(message, sizeof(message), writtenLength, currentHeapSnapshots, currentHeapSnapshotCount);
         }
         WriteDebugAllocationLog(message);
+        if (EnableDebugAllocationCallsiteTracking &&
+            DebugTrackedAllocationStacks != nullptr &&
+            EnsureDebugSymbolsInitialized()) {
+            struct TopTrackedAllocationStack {
+                std::uint32_t StackIndex;
+                std::uint64_t DeltaBytes;
+                std::uint32_t DeltaAllocations;
+            };
+
+            std::array<TopTrackedAllocationStack, 5> topStacks {};
+            for (std::size_t stackIndex = 0; stackIndex < DebugAllocationTrackedStackCapacity; stackIndex++) {
+                DebugTrackedAllocationStack* stackEntry = &DebugTrackedAllocationStacks[stackIndex];
+                if (!stackEntry->Occupied || stackEntry->LiveBytes <= stackEntry->BaselineLiveBytes) {
+                    continue;
+                }
+
+                std::uint64_t deltaBytes = stackEntry->LiveBytes - stackEntry->BaselineLiveBytes;
+                std::uint32_t deltaAllocations = stackEntry->LiveAllocations >= stackEntry->BaselineLiveAllocations
+                    ? stackEntry->LiveAllocations - stackEntry->BaselineLiveAllocations
+                    : 0;
+                for (std::size_t topIndex = 0; topIndex < topStacks.size(); topIndex++) {
+                    if (deltaBytes <= topStacks[topIndex].DeltaBytes) {
+                        continue;
+                    }
+
+                    for (std::size_t shiftIndex = topStacks.size() - 1; shiftIndex > topIndex; shiftIndex--) {
+                        topStacks[shiftIndex] = topStacks[shiftIndex - 1];
+                    }
+
+                    topStacks[topIndex].StackIndex = static_cast<std::uint32_t>(stackIndex);
+                    topStacks[topIndex].DeltaBytes = deltaBytes;
+                    topStacks[topIndex].DeltaAllocations = deltaAllocations;
+                    break;
+                }
+            }
+
+            DebugAllocationCallsiteTrackingSuspended = true;
+            for (std::size_t topIndex = 0; topIndex < topStacks.size(); topIndex++) {
+                if (topStacks[topIndex].DeltaBytes == 0 || topStacks[topIndex].StackIndex >= DebugAllocationTrackedStackCapacity) {
+                    continue;
+                }
+
+                DebugTrackedAllocationStack* stackEntry = &DebugTrackedAllocationStacks[topStacks[topIndex].StackIndex];
+                std::ostringstream stackMessageBuilder;
+                stackMessageBuilder
+                    << "Debug allocation top stack #" << (topIndex + 1)
+                    << ": delta_bytes=" << topStacks[topIndex].DeltaBytes
+                    << " delta_allocations=" << topStacks[topIndex].DeltaAllocations
+                    << " live_bytes=" << stackEntry->LiveBytes
+                    << " live_allocations=" << stackEntry->LiveAllocations;
+                if (DebugAllocationCallsiteTrackerOverflowed) {
+                    stackMessageBuilder << " tracker_overflowed=true";
+                }
+                std::string stackMessage = stackMessageBuilder.str();
+                WriteDebugAllocationLog(stackMessage.c_str());
+
+                for (USHORT frameIndex = 0; frameIndex < stackEntry->FrameCount; frameIndex++) {
+                    WriteResolvedStackFrame(frameIndex, reinterpret_cast<std::uint64_t>(stackEntry->Frames[frameIndex]));
+                }
+            }
+            DebugAllocationCallsiteTrackingSuspended = false;
+        }
     }
 
     /// Captures the current Win32 process-heap summary used by debug allocation diagnostics.

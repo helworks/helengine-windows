@@ -9,6 +9,8 @@ option(HELENGINE_WINDOWS_INCLUDE_GENERATED_CORE "Build the Windows host with gen
 set_property(CACHE HELENGINE_WINDOWS_RENDER_BACKEND PROPERTY STRINGS DirectX11 Vulkan)
 
 if(HELENGINE_WINDOWS_INCLUDE_GENERATED_CORE)
+    set(HELENGINE_CORE_TRANSLATION_UNIT "")
+
     if("${HELENGINE_CORE_CPP_ROOT}" STREQUAL "")
         message(FATAL_ERROR "HELENGINE_CORE_CPP_ROOT must point at the generated helengine.core C++ output folder.")
     endif()
@@ -21,8 +23,12 @@ if(HELENGINE_WINDOWS_INCLUDE_GENERATED_CORE)
         include("${HELENGINE_CORE_CPP_ROOT}/helengine_windows_handoff.cmake")
     endif()
 
-    if(NOT EXISTS "${HELENGINE_CORE_CPP_ROOT}/helengine_core_amalgamated.cpp")
-        message(FATAL_ERROR "HELENGINE_CORE_CPP_ROOT does not contain helengine_core_amalgamated.cpp. Regenerate helengine.core C++ output first.")
+    if(EXISTS "${HELENGINE_CORE_CPP_ROOT}/helengine_core_unity.cpp")
+        set(HELENGINE_CORE_TRANSLATION_UNIT "${HELENGINE_CORE_CPP_ROOT}/helengine_core_unity.cpp")
+    elseif(EXISTS "${HELENGINE_CORE_CPP_ROOT}/helengine_core_amalgamated.cpp")
+        set(HELENGINE_CORE_TRANSLATION_UNIT "${HELENGINE_CORE_CPP_ROOT}/helengine_core_amalgamated.cpp")
+    else()
+        message(FATAL_ERROR "HELENGINE_CORE_CPP_ROOT does not contain helengine_core_unity.cpp or helengine_core_amalgamated.cpp. Regenerate helengine.core C++ output first.")
     endif()
 endif()
 
@@ -49,7 +55,7 @@ if(HELENGINE_WINDOWS_INCLUDE_GENERATED_CORE)
         src/platform/windows/win32/win32_render_bridge.cpp
     )
 
-    list(APPEND HELENGINE_WINDOWS_SOURCES "${HELENGINE_CORE_CPP_ROOT}/helengine_core_amalgamated.cpp")
+    list(APPEND HELENGINE_WINDOWS_SOURCES "${HELENGINE_CORE_TRANSLATION_UNIT}")
 
     if(EXISTS "${HELENGINE_CORE_CPP_ROOT}/runtime/runtime_startup_manifest.cpp")
         list(APPEND HELENGINE_WINDOWS_SOURCES "${HELENGINE_CORE_CPP_ROOT}/runtime/runtime_startup_manifest.cpp")
@@ -87,6 +93,7 @@ endif()
 target_link_libraries(helengine_windows PRIVATE
     d3d11
     d3dcompiler
+    dbghelp
     dxgi
     psapi
     user32

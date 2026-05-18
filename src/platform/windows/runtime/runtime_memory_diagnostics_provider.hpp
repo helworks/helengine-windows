@@ -10,8 +10,16 @@
 #include "RuntimeMemoryDiagnosticsSnapshot.hpp"
 #endif
 
+#if defined(HELENGINE_WINDOWS_DEBUG_RUNTIME_DIAGNOSTICS) && __has_include("RuntimeMemoryCounters.hpp")
+#include "RuntimeMemoryCounters.hpp"
+#endif
+
 #if defined(HELENGINE_WINDOWS_DEBUG_RUNTIME_DIAGNOSTICS) && __has_include("RuntimeDiagnosticsMetric.hpp")
 #include "RuntimeDiagnosticsMetric.hpp"
+#endif
+
+#if defined(HELENGINE_WINDOWS_DEBUG_RUNTIME_DIAGNOSTICS) && __has_include("IRuntimeMemoryCounterProvider.hpp")
+#include "IRuntimeMemoryCounterProvider.hpp"
 #endif
 
 #if defined(HELENGINE_WINDOWS_DEBUG_RUNTIME_DIAGNOSTICS)
@@ -19,12 +27,15 @@
 #endif
 
 namespace helengine::windows {
-#if defined(HELENGINE_WINDOWS_DEBUG_RUNTIME_DIAGNOSTICS) && __has_include("IRuntimeDiagnosticsProvider.hpp") && __has_include("RuntimeMemoryDiagnosticsSnapshot.hpp")
+#if defined(HELENGINE_WINDOWS_DEBUG_RUNTIME_DIAGNOSTICS) && __has_include("IRuntimeDiagnosticsProvider.hpp") && __has_include("IRuntimeMemoryCounterProvider.hpp") && __has_include("RuntimeMemoryDiagnosticsSnapshot.hpp")
     /// Captures Windows process memory counters for the shared engine runtime diagnostics service.
-    class RuntimeMemoryDiagnosticsProvider : public IRuntimeDiagnosticsProvider {
+    class RuntimeMemoryDiagnosticsProvider : public IRuntimeDiagnosticsProvider, public IRuntimeMemoryCounterProvider {
     public:
         /// Captures the current Windows runtime diagnostics snapshot for the shared engine service.
         RuntimeMemoryDiagnosticsSnapshot* CaptureSnapshot() override;
+
+        /// Captures the current Windows scalar memory counters into one reusable container.
+        void CaptureMemoryCounters(RuntimeMemoryCounters* counters) override;
     };
 #endif
 }

@@ -31,9 +31,21 @@
 #endif
 #include "LightComponent.hpp"
 #include "LightDirectionUtility.hpp"
+#if __has_include("MaterialConstantBufferAsset.hpp")
+#include "MaterialConstantBufferAsset.hpp"
+#endif
 #include "PointLightComponent.hpp"
+#if __has_include("RuntimeDiagnosticsService.hpp")
+#include "RuntimeDiagnosticsService.hpp"
+#endif
 #if __has_include("RuntimeSceneAssetReferenceResolver.hpp")
 #include "RuntimeSceneAssetReferenceResolver.hpp"
+#endif
+#if __has_include("ShaderBinaryAsset.hpp")
+#include "ShaderBinaryAsset.hpp"
+#endif
+#if __has_include("ShaderVertexElementAsset.hpp")
+#include "ShaderVertexElementAsset.hpp"
 #endif
 #include "SpotLightComponent.hpp"
 #if __has_include("StandardMaterialTextureBindingDefaults.hpp")
@@ -61,6 +73,9 @@ namespace helengine::windows {
 
         /// Tracks whether one native 2D draw call has already been written.
         bool HasWritten2DDraw = false;
+
+        /// Tracks whether the directional-shadow plaza tower face-view probe has already been written.
+        bool HasWrittenPlazaTowerViewDebug = false;
 
         /// Counts 2D visitor dispatches for the first logged frame.
         int Logged2DVisitCount = 0;
@@ -640,6 +655,27 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
             stream << line << '\n';
         }
 
+        /// Returns whether one scalar is within the supplied tolerance of the expected value.
+        bool IsApproximately(float value, float expectedValue, float tolerance) {
+            return std::abs(value - expectedValue) <= tolerance;
+        }
+
+        /// Returns whether one entity transform matches the authored central directional-shadow plaza tower.
+        bool IsDirectionalShadowCentralTower(Entity* entity) {
+            if (entity == nullptr) {
+                return false;
+            }
+
+            const float3 position = entity->get_Position();
+            const float3 scale = entity->get_Scale();
+            return IsApproximately(position.X, 0.0f, 0.5f)
+                && IsApproximately(position.Y, 9.0f, 0.5f)
+                && IsApproximately(position.Z, -12.0f, 0.5f)
+                && IsApproximately(scale.X, 7.0f, 0.5f)
+                && IsApproximately(scale.Y, 18.0f, 0.5f)
+                && IsApproximately(scale.Z, 7.0f, 0.5f);
+        }
+
         /// Builds one stable generated identifier for a runtime texture that was created from embedded raw data.
         std::string BuildGeneratedTextureResourceId() {
             GeneratedTextureResourceId++;
@@ -656,6 +692,16 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
             builder << "width=" << data->Width
                 << " height=" << data->Height
                 << " runtime_asset_id=" << data->get_RuntimeAssetId();
+
+#if __has_include("RuntimeSceneLoadService.hpp")
+            if (Core::get_Instance() != nullptr && Core::get_Instance()->get_SceneLoadService() != nullptr) {
+                RuntimeSceneLoadService* sceneLoadService = Core::get_Instance()->get_SceneLoadService();
+                builder << " scene_load_stage=" << sceneLoadService->get_LastTraceStage();
+                builder << " root_entity_index=" << sceneLoadService->get_LastTraceRootEntityIndex();
+                builder << " entity_depth=" << sceneLoadService->get_LastTraceEntityDepth();
+                builder << " component_type=" << sceneLoadService->get_LastTraceComponentTypeId();
+            }
+#endif
 
             if (!textureId.empty() && textureId.rfind("__generated_runtime_texture_", 0) != 0) {
                 builder << " source=authored";
@@ -980,6 +1026,11 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
     void Win32RenderManager3D::FlushReleasedAssets() {
         MaterialConstantBuffers.clear();
         LiveMaterialConstantBufferBytes = 0;
+        ID3D11DeviceContext* context = Bootstrap.GetDeviceContext();
+        if (context != nullptr) {
+            context->ClearState();
+            context->Flush();
+        }
         RuntimeRenderDiagnostics::WriteHostEvent("asset-release", "Win32RenderManager3D flushed released assets.");
     }
 
@@ -1124,6 +1175,34 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
         }
 
         Entity* parent = drawable->get_Parent();
+        if (!HasWrittenPlazaTowerViewDebug && IsDirectionalShadowCentralTower(parent)) {
+            HasWrittenPlazaTowerViewDebug = true;
+            const float3 entityPosition = parent->get_Position();
+            const float3 entityScale = parent->get_Scale();
+            const float4 entityOrientation = parent->get_Orientation();
+            const float3 cameraToTower = float3::Normalize(CurrentCameraPosition - entityPosition);
+            const float3 positiveX = float4::RotateVector(float3(1.0f, 0.0f, 0.0f), entityOrientation);
+            const float3 negativeX = float4::RotateVector(float3(-1.0f, 0.0f, 0.0f), entityOrientation);
+            const float3 positiveZ = float4::RotateVector(float3(0.0f, 0.0f, 1.0f), entityOrientation);
+            const float3 negativeZ = float4::RotateVector(float3(0.0f, 0.0f, -1.0f), entityOrientation);
+            AppendRenderDiagnosticsLine(
+                "PlazaTowerViewDebug position="
+                + std::to_string(entityPosition.X) + ","
+                + std::to_string(entityPosition.Y) + ","
+                + std::to_string(entityPosition.Z)
+                + " scale="
+                + std::to_string(entityScale.X) + ","
+                + std::to_string(entityScale.Y) + ","
+                + std::to_string(entityScale.Z)
+                + " cameraToTower="
+                + std::to_string(cameraToTower.X) + ","
+                + std::to_string(cameraToTower.Y) + ","
+                + std::to_string(cameraToTower.Z)
+                + " pxView=" + std::to_string(float3::Dot(positiveX, cameraToTower))
+                + " nxView=" + std::to_string(float3::Dot(negativeX, cameraToTower))
+                + " pzView=" + std::to_string(float3::Dot(positiveZ, cameraToTower))
+                + " nzView=" + std::to_string(float3::Dot(negativeZ, cameraToTower)));
+        }
         float4 orientation = parent->get_Orientation();
         float3 scale = parent->get_Scale();
         float3 position = parent->get_Position();

@@ -48,7 +48,7 @@ namespace helengine::windows {
             return KeyboardState();
         }
 
-        List<Keys>* pressedKeys = new List<Keys>();
+        List<Keys> pressedKeys;
         std::array<BYTE, 256> keyStates {};
         if (::GetKeyboardState(keyStates.data())) {
             for (int keyCode = 1; keyCode <= 255; keyCode++) {
@@ -56,14 +56,13 @@ namespace helengine::windows {
                     continue;
                 }
 
-                pressedKeys->Add(static_cast<Keys>(keyCode));
+                pressedKeys.Add(static_cast<Keys>(keyCode));
             }
         }
 
         bool capsLock = (::GetKeyState(VK_CAPITAL) & 0x0001) != 0;
         bool numLock = (::GetKeyState(VK_NUMLOCK) & 0x0001) != 0;
-        KeyboardState keyboardState = KeyboardState(pressedKeys, capsLock, numLock);
-        delete pressedKeys;
+        KeyboardState keyboardState = KeyboardState(&pressedKeys, capsLock, numLock);
         return keyboardState;
     }
 

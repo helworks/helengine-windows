@@ -19,5 +19,20 @@ namespace helengine::windows {
         snapshot->get_DetailMetrics()->Add(new RuntimeDiagnosticsMetric("system_commit_limit_bytes", nativeSnapshot.SystemCommitLimitBytes));
         return snapshot;
     }
+
+    /// Captures the current Windows scalar memory counters into one reusable container.
+    void RuntimeMemoryDiagnosticsProvider::CaptureMemoryCounters(RuntimeMemoryCounters* counters) {
+        if (counters == nullptr) {
+            return;
+        }
+
+        RuntimeMemorySnapshot nativeSnapshot = RuntimeMemorySnapshot::Capture();
+        counters->set_ResidentBytes(nativeSnapshot.WorkingSetBytes);
+        counters->set_PeakResidentBytes(nativeSnapshot.PeakWorkingSetBytes);
+        counters->set_CommittedBytes(nativeSnapshot.PrivateUsageBytes);
+        counters->set_PeakCommittedBytes(nativeSnapshot.PeakPagefileUsageBytes);
+        counters->set_AvailablePhysicalBytes(nativeSnapshot.AvailablePhysicalBytes);
+        counters->set_PageFaultCount(nativeSnapshot.PageFaultCount);
+    }
 #endif
 }
