@@ -1,5 +1,8 @@
 #pragma once
 
+#include <Windows.h>
+
+#include <array>
 #include <chrono>
 #include <cstdint>
 #include <filesystem>
@@ -60,6 +63,63 @@ namespace helengine::windows {
         /// Initializes the generated engine core when it is available in the current build.
         void InitializeEngineCore();
 
+#if defined(HELENGINE_WINDOWS_DEBUG_RUNTIME_DIAGNOSTICS)
+        /// Installs the debug-build unhandled-exception hook used to record native crash stacks.
+        void InstallDebugCrashHandler();
+
+        /// Restores the previous unhandled-exception hook after the host exits normally.
+        void UninstallDebugCrashHandler();
+
+        /// Installs debug-build CRT and abort handlers used to record assertion and abort stacks.
+        void InstallDebugAbortHandlers();
+
+        /// Restores previous CRT and abort handlers after the host exits normally.
+        void UninstallDebugAbortHandlers();
+
+        /// Ensures DbgHelp symbol resolution is available for stack-frame logging.
+        bool EnsureDebugSymbolsInitialized() const;
+
+        /// Resolves and writes one stack frame into the lifecycle log.
+        /// <param name="frameIndex">Zero-based frame index being written.</param>
+        /// <param name="address">Instruction address for the frame.</param>
+        void WriteResolvedStackFrame(std::uint32_t frameIndex, std::uint64_t address) const;
+
+        /// Captures the current thread call stack and writes it into the lifecycle log.
+        /// <param name="context">High-level context describing why the stack was captured.</param>
+        /// <param name="framesToSkip">Number of leading frames to skip before logging.</param>
+        void WriteCurrentThreadStackTrace(const char* context, std::uint32_t framesToSkip = 0) const;
+
+        /// Writes one structured-exception summary and stack trace into the lifecycle log.
+        /// <param name="context">High-level context describing why the stack was captured.</param>
+        /// <param name="exceptionPointers">Structured-exception data captured by Windows.</param>
+        void WriteStructuredExceptionStackTrace(const char* context, struct _EXCEPTION_POINTERS* exceptionPointers) const;
+
+        /// Receives top-level Windows structured exceptions and forwards them into the lifecycle log.
+        /// <param name="exceptionPointers">Structured-exception data captured by Windows.</param>
+        /// <returns>Top-level filter action returned to Windows.</returns>
+        static LONG WINAPI HandleUnhandledStructuredException(struct _EXCEPTION_POINTERS* exceptionPointers);
+
+        /// Receives `std::terminate` callbacks and writes a stack trace before chaining to the previous handler.
+        static void HandleTerminate();
+
+        /// Receives CRT invalid-parameter failures and writes the associated diagnostics before chaining.
+        static void HandleInvalidParameter(
+            const wchar_t* expression,
+            const wchar_t* functionName,
+            const wchar_t* fileName,
+            unsigned int lineNumber,
+            uintptr_t reserved);
+
+        /// Receives pure-virtual-call failures and writes a stack trace before chaining.
+        static void HandlePureVirtualCall();
+
+        /// Receives `SIGABRT` notifications and writes a stack trace before re-raising the signal.
+        static void HandleAbortSignal(int signalValue);
+
+        /// Receives CRT debug-report text and mirrors it into the lifecycle log.
+        static int __cdecl HandleDebugReport(int reportType, char* message, int* returnValue);
+#endif
+
         /// Builds the runtime platform metadata stamped into the packaged player.
         PlatformInfo* BuildRuntimePlatformInfo();
 
@@ -107,6 +167,94 @@ namespace helengine::windows {
 
         /// Updates and emits periodic frame statistics for the host loop.
         void UpdateFrameStatistics();
+
+#if defined(HELENGINE_WINDOWS_DEBUG_RUNTIME_DIAGNOSTICS)
+        /// Stores one sampled summary of the Win32 process heaps.
+        struct DebugWin32HeapSummary {
+            /// Stores how many process heaps were enumerated successfully during the sample.
+            std::uint64_t HeapCount = 0;
+
+            /// Stores how many heaps could not be locked or walked during the sample.
+            std::uint64_t FailedHeapCount = 0;
+
+            /// Stores the number of busy heap blocks across all sampled heaps.
+            std::uint64_t BusyBlockCount = 0;
+
+            /// Stores the total busy block payload bytes across all sampled heaps.
+            std::uint64_t BusyBytes = 0;
+
+            /// Stores the total committed heap-region bytes across all sampled heaps.
+            std::uint64_t RegionCommittedBytes = 0;
+
+            /// Stores the total reserved heap-region bytes across all sampled heaps.
+            std::uint64_t RegionReservedBytes = 0;
+
+            /// Stores the total uncommitted heap-region bytes across all sampled heaps.
+            std::uint64_t RegionUncommittedBytes = 0;
+        };
+
+        /// Stores one busy block sampled from a Win32 process heap.
+        struct DebugWin32HeapBusyBlock {
+            /// Stores the raw block address returned by the heap walker.
+            std::uintptr_t Address = 0;
+
+            /// Stores the busy block payload size in bytes.
+            std::uint64_t Size = 0;
+        };
+
+        /// Stores one full sampled snapshot for a single Win32 process heap.
+        struct DebugWin32HeapSnapshot {
+            /// Stores the raw heap handle value used to identify the heap between samples.
+            std::uintptr_t HeapHandleValue = 0;
+
+            /// Stores the number of busy blocks discovered in this heap sample.
+            std::uint64_t BusyBlockCount = 0;
+
+            /// Stores the total busy payload bytes discovered in this heap sample.
+            std::uint64_t BusyBytes = 0;
+
+            /// Stores the committed heap-region bytes discovered in this heap sample.
+            std::uint64_t RegionCommittedBytes = 0;
+
+            /// Stores the reserved heap-region bytes discovered in this heap sample.
+            std::uint64_t RegionReservedBytes = 0;
+
+            /// Stores the uncommitted heap-region bytes discovered in this heap sample.
+            std::uint64_t RegionUncommittedBytes = 0;
+
+            /// Stores how many busy blocks were captured into the fixed sample buffer.
+            std::uint32_t BusyBlockSampleCount = 0;
+
+            /// Stores how many busy blocks were omitted because the fixed sample buffer filled up.
+            std::uint32_t BusyBlockOverflowCount = 0;
+
+            /// Stores every busy block discovered while walking the heap until the fixed sample buffer fills.
+            std::array<DebugWin32HeapBusyBlock, 256> BusyBlocks;
+        };
+
+        /// Captures the CRT debug heap state used as the steady-state allocation baseline.
+        void CaptureDebugAllocationBaseline();
+
+        /// Logs the live CRT debug heap delta relative to the captured steady-state baseline.
+        void LogDebugAllocationDelta();
+
+        /// Captures the current Win32 process-heap summary used by debug allocation diagnostics.
+        DebugWin32HeapSummary CaptureDebugWin32HeapSummary() const;
+
+        /// Captures the current Win32 process-heap snapshots used for block-level attribution.
+        std::uint32_t CaptureDebugWin32HeapSnapshots(std::array<DebugWin32HeapSnapshot, 32>& snapshots) const;
+
+        /// Writes one allocation-diagnostics line without mirroring it into structured runtime diagnostics.
+        void WriteDebugAllocationLog(const char* message) const;
+
+        /// Appends capped block-level Win32 heap delta attribution to the supplied diagnostics builder.
+        void AppendDebugWin32HeapBlockDelta(
+            char* buffer,
+            std::size_t bufferSize,
+            std::size_t& writtenLength,
+            const std::array<DebugWin32HeapSnapshot, 32>& currentHeapSnapshots,
+            std::uint32_t currentHeapSnapshotCount) const;
+#endif
 
         /// Stores the main native window instance.
         std::unique_ptr<Win32Window> MainWindow;
@@ -180,6 +328,23 @@ namespace helengine::windows {
 #if defined(HELENGINE_WINDOWS_DEBUG_RUNTIME_DIAGNOSTICS) && __has_include("IRuntimeDiagnosticsProvider.hpp") && __has_include("RuntimeMemoryDiagnosticsSnapshot.hpp")
         /// Stores the debug-build Windows runtime diagnostics provider exposed to the shared core service.
         std::unique_ptr<RuntimeMemoryDiagnosticsProvider> RuntimeDiagnosticsProvider;
+#endif
+
+#if defined(HELENGINE_WINDOWS_DEBUG_RUNTIME_DIAGNOSTICS)
+        /// Stores whether one steady-state CRT allocation baseline has already been captured for the current run.
+        bool DebugAllocationBaselineCaptured;
+
+        /// Stores the captured steady-state CRT allocation baseline.
+        _CrtMemState DebugAllocationBaselineState;
+
+        /// Stores the captured steady-state Win32 heap baseline.
+        DebugWin32HeapSummary DebugWin32HeapBaseline;
+
+        /// Stores the captured steady-state Win32 heap snapshots used for block-level attribution.
+        std::array<DebugWin32HeapSnapshot, 32> DebugWin32HeapBaselineSnapshots;
+
+        /// Stores how many baseline heap snapshots were captured into the fixed baseline array.
+        std::uint32_t DebugWin32HeapBaselineSnapshotCount;
 #endif
     };
 }
