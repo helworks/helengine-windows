@@ -5,6 +5,10 @@ project(helengine_windows LANGUAGES CXX)
 set(HELENGINE_CORE_CPP_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/generated/helengine.core" CACHE PATH "Path to the generated helengine.core C++ output folder.")
 set(HELENGINE_CODE_ROOT "" CACHE PATH "Path to the staged generated code-module root folder.")
 set(HELENGINE_WINDOWS_RENDER_BACKEND "DirectX11" CACHE STRING "Windows rendering backend to compile.")
+option(HELENGINE_WINDOWS_ENABLE_XINPUT "Compile XInput gamepad backend." ON)
+option(HELENGINE_WINDOWS_ENABLE_DIRECTINPUT "Compile DirectInput gamepad backend." ON)
+option(HELENGINE_WINDOWS_ENABLE_STEAMINPUT "Compile SteamInput gamepad backend." OFF)
+set(HELENGINE_STEAMWORKS_SDK_ROOT "" CACHE PATH "Steamworks SDK root used for SteamInput support.")
 option(HELENGINE_WINDOWS_INCLUDE_GENERATED_CORE "Build the Windows host with generated helengine.core sources." ON)
 set_property(CACHE HELENGINE_WINDOWS_RENDER_BACKEND PROPERTY STRINGS DirectX11 Vulkan)
 
@@ -34,6 +38,24 @@ endif()
 
 if(NOT HELENGINE_WINDOWS_RENDER_BACKEND STREQUAL "DirectX11")
     message(FATAL_ERROR "Only the DirectX11 bootstrap scaffold exists today. Add the Vulkan path before selecting that backend.")
+endif()
+
+if(HELENGINE_WINDOWS_ENABLE_STEAMINPUT)
+    if("${HELENGINE_STEAMWORKS_SDK_ROOT}" STREQUAL "")
+        message(FATAL_ERROR "HELENGINE_STEAMWORKS_SDK_ROOT is required when HELENGINE_WINDOWS_ENABLE_STEAMINPUT=ON.")
+    endif()
+
+    if(NOT EXISTS "${HELENGINE_STEAMWORKS_SDK_ROOT}/public/steam/steam_api.h")
+        message(FATAL_ERROR "HELENGINE_STEAMWORKS_SDK_ROOT does not contain public/steam/steam_api.h.")
+    endif()
+
+    if(NOT EXISTS "${HELENGINE_STEAMWORKS_SDK_ROOT}/public/steam/isteaminput.h")
+        message(FATAL_ERROR "HELENGINE_STEAMWORKS_SDK_ROOT does not contain public/steam/isteaminput.h.")
+    endif()
+
+    if(NOT EXISTS "${HELENGINE_STEAMWORKS_SDK_ROOT}/redistributable_bin/win64/steam_api64.lib")
+        message(FATAL_ERROR "HELENGINE_STEAMWORKS_SDK_ROOT does not contain redistributable_bin/win64/steam_api64.lib.")
+    endif()
 endif()
 
 set(HELENGINE_WINDOWS_SOURCES
@@ -72,6 +94,10 @@ if(HELENGINE_WINDOWS_INCLUDE_GENERATED_CORE)
     if(EXISTS "${HELENGINE_CORE_CPP_ROOT}/runtime/runtime_player_settings_manifest.cpp")
         list(APPEND HELENGINE_WINDOWS_SOURCES "${HELENGINE_CORE_CPP_ROOT}/runtime/runtime_player_settings_manifest.cpp")
     endif()
+
+    if(EXISTS "${HELENGINE_CORE_CPP_ROOT}/runtime/runtime_input_backends_manifest.cpp")
+        list(APPEND HELENGINE_WINDOWS_SOURCES "${HELENGINE_CORE_CPP_ROOT}/runtime/runtime_input_backends_manifest.cpp")
+    endif()
 endif()
 
 add_executable(helengine_windows WIN32 ${HELENGINE_WINDOWS_SOURCES})
@@ -81,6 +107,9 @@ target_compile_features(helengine_windows PRIVATE cxx_std_20)
 target_compile_definitions(helengine_windows PRIVATE
     WIN32_LEAN_AND_MEAN
     NOMINMAX
+    HELENGINE_WINDOWS_ENABLE_XINPUT=$<IF:$<BOOL:${HELENGINE_WINDOWS_ENABLE_XINPUT}>,1,0>
+    HELENGINE_WINDOWS_ENABLE_DIRECTINPUT=$<IF:$<BOOL:${HELENGINE_WINDOWS_ENABLE_DIRECTINPUT}>,1,0>
+    HELENGINE_WINDOWS_ENABLE_STEAMINPUT=$<IF:$<BOOL:${HELENGINE_WINDOWS_ENABLE_STEAMINPUT}>,1,0>
     $<$<CONFIG:Debug>:HELENGINE_WINDOWS_DEBUG_RUNTIME_DIAGNOSTICS>
 )
 
@@ -88,6 +117,10 @@ target_include_directories(helengine_windows PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
 
 if(HELENGINE_WINDOWS_INCLUDE_GENERATED_CORE)
     target_include_directories(helengine_windows PRIVATE ${HELENGINE_CORE_CPP_ROOT})
+endif()
+
+if(HELENGINE_WINDOWS_ENABLE_STEAMINPUT)
+    target_include_directories(helengine_windows PRIVATE "${HELENGINE_STEAMWORKS_SDK_ROOT}/public")
 endif()
 
 target_link_libraries(helengine_windows PRIVATE
@@ -99,3 +132,16 @@ target_link_libraries(helengine_windows PRIVATE
     user32
     gdi32
 )
+
+if(HELENGINE_WINDOWS_ENABLE_XINPUT)
+    target_link_libraries(helengine_windows PRIVATE xinput)
+endif()
+
+if(HELENGINE_WINDOWS_ENABLE_DIRECTINPUT)
+    target_link_libraries(helengine_windows PRIVATE dinput8 dxguid)
+endif()
+
+if(HELENGINE_WINDOWS_ENABLE_STEAMINPUT)
+    target_link_directories(helengine_windows PRIVATE "${HELENGINE_STEAMWORKS_SDK_ROOT}/redistributable_bin/win64")
+    target_link_libraries(helengine_windows PRIVATE steam_api64)
+endif()

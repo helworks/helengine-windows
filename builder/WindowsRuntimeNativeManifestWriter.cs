@@ -100,9 +100,9 @@ public sealed class WindowsRuntimeNativeManifestWriter {
     /// <param name="runtimeRootPath">Runtime source folder inside the generated core tree.</param>
     /// <param name="selectedGraphicsOptionValues">Resolved graphics-profile options selected for the build.</param>
     void WriteInputBackendsManifestSource(string runtimeRootPath, IReadOnlyDictionary<string, string> selectedGraphicsOptionValues) {
-        bool embedXInput = ResolveRequiredBooleanOption(selectedGraphicsOptionValues, "embed-xinput");
-        bool embedDirectInput = ResolveRequiredBooleanOption(selectedGraphicsOptionValues, "embed-directinput");
-        bool embedSteamInput = ResolveRequiredBooleanOption(selectedGraphicsOptionValues, "embed-steaminput");
+        bool embedXInput = ResolveBooleanOptionOrDefault(selectedGraphicsOptionValues, "embed-xinput", true);
+        bool embedDirectInput = ResolveBooleanOptionOrDefault(selectedGraphicsOptionValues, "embed-directinput", true);
+        bool embedSteamInput = ResolveBooleanOptionOrDefault(selectedGraphicsOptionValues, "embed-steaminput", false);
         string headerPath = Path.Combine(runtimeRootPath, "runtime_input_backends_manifest.hpp");
         string sourcePath = Path.Combine(runtimeRootPath, "runtime_input_backends_manifest.cpp");
 
@@ -556,9 +556,9 @@ public sealed class WindowsRuntimeNativeManifestWriter {
     /// <param name="selectedGraphicsOptionValues">Resolved graphics-profile option values selected for the build.</param>
     /// <param name="optionId">Stable option identifier to resolve.</param>
     /// <returns>Parsed boolean value.</returns>
-    static bool ResolveRequiredBooleanOption(IReadOnlyDictionary<string, string> selectedGraphicsOptionValues, string optionId) {
+    static bool ResolveBooleanOptionOrDefault(IReadOnlyDictionary<string, string> selectedGraphicsOptionValues, string optionId, bool defaultValue) {
         if (!TryGetOptionValue(selectedGraphicsOptionValues, optionId, out string value) || string.IsNullOrWhiteSpace(value)) {
-            throw new InvalidOperationException($"Required Windows graphics option '{optionId}' was not provided to the native manifest writer.");
+            return defaultValue;
         }
 
         if (!bool.TryParse(value, out bool parsedValue)) {

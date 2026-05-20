@@ -443,9 +443,9 @@ public static class WindowsBuildWorkspace {
         }
 
         return new WindowsNativeInputBackendSelection(
-            ResolveRequiredBooleanOption(selectedGraphicsOptionValues, "embed-xinput"),
-            ResolveRequiredBooleanOption(selectedGraphicsOptionValues, "embed-directinput"),
-            ResolveRequiredBooleanOption(selectedGraphicsOptionValues, "embed-steaminput"));
+            ResolveBooleanOptionOrDefault(selectedGraphicsOptionValues, "embed-xinput", true),
+            ResolveBooleanOptionOrDefault(selectedGraphicsOptionValues, "embed-directinput", true),
+            ResolveBooleanOptionOrDefault(selectedGraphicsOptionValues, "embed-steaminput", false));
     }
 
     /// <summary>
@@ -467,7 +467,7 @@ public static class WindowsBuildWorkspace {
     /// <param name="selectedGraphicsOptionValues">Selected Windows graphics option values.</param>
     /// <param name="optionId">Stable option identifier to resolve.</param>
     /// <returns>Parsed boolean value.</returns>
-    static bool ResolveRequiredBooleanOption(IReadOnlyDictionary<string, string> selectedGraphicsOptionValues, string optionId) {
+    static bool ResolveBooleanOptionOrDefault(IReadOnlyDictionary<string, string> selectedGraphicsOptionValues, string optionId, bool defaultValue) {
         if (string.IsNullOrWhiteSpace(optionId)) {
             throw new ArgumentException("Option id must be provided.", nameof(optionId));
         }
@@ -484,7 +484,7 @@ public static class WindowsBuildWorkspace {
             return parsedValue;
         }
 
-        throw new InvalidOperationException($"Required Windows graphics option '{optionId}' was not provided.");
+        return defaultValue;
     }
 
     /// <summary>
