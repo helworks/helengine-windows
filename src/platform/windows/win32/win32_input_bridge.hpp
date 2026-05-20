@@ -13,6 +13,9 @@
 #include "MouseState.hpp"
 #include "int2.hpp"
 
+#include "runtime/array.hpp"
+
+#include "platform/windows/input/windows_gamepad_backend_mux.hpp"
 #include "platform/windows/win32/win32_window.hpp"
 
 namespace helengine::windows {
@@ -22,11 +25,14 @@ namespace helengine::windows {
         /// Creates a backend bound to the host window.
         explicit Win32InputBackend(Win32Window* window);
 
+        /// Releases any gamepad-frame buffers owned by the backend.
+        ~Win32InputBackend();
+
         /// Returns whether the backend continues reporting input while the host window is inactive.
-        bool get_ReceiveInputInBackground() override;
+        bool get_ReceiveInputInBackground();
 
         /// Updates whether the backend continues reporting input while the host window is inactive.
-        void set_ReceiveInputInBackground(bool value) override;
+        void set_ReceiveInputInBackground(bool value);
 
         /// Captures one input frame from the current Windows host state.
         InputFrameState CaptureFrame() override;
@@ -43,6 +49,12 @@ namespace helengine::windows {
 
         /// Releases all button states when the host window is not foreground-active.
         void ReleaseAllButtons();
+
+        /// Stores the captured gamepad list in the backend-owned rotating frame buffers.
+        Array<InputGamepadState>* StoreCapturedGamepads(const List<InputGamepadState>& gamepads);
+
+        /// Releases one backend-owned gamepad-frame buffer.
+        void ReleaseGamepadFrameBuffer(Array<InputGamepadState>* buffer);
 
         /// Wraps the cursor across the host client area when edge wrapping is enabled.
         void ApplyPointerWrap(HWND windowHandle);
@@ -67,5 +79,14 @@ namespace helengine::windows {
 
         /// Stores the delta offset produced by the most recent wrap.
         int2 PointerWrapDeltaOffset;
+
+        /// Coordinates the enabled Windows gamepad backends for the current player build.
+        WindowsGamepadBackendMux GamepadBackendMux;
+
+        /// Stores the two rotating frame buffers used to preserve current and previous gamepad snapshots.
+        Array<InputGamepadState>* GamepadFrameBuffers[2];
+
+        /// Stores the active rotating gamepad buffer index.
+        int CurrentGamepadFrameBufferIndex;
     };
 }

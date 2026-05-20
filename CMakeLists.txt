@@ -73,6 +73,8 @@ set(HELENGINE_WINDOWS_SOURCES
 
 if(HELENGINE_WINDOWS_INCLUDE_GENERATED_CORE)
     list(APPEND HELENGINE_WINDOWS_SOURCES
+        src/platform/windows/input/windows_gamepad_backend_mux.cpp
+        src/platform/windows/input/windows_gamepad_dedupe_service.cpp
         src/platform/windows/win32/win32_input_bridge.cpp
         src/platform/windows/win32/win32_render_bridge.cpp
     )
@@ -98,6 +100,18 @@ if(HELENGINE_WINDOWS_INCLUDE_GENERATED_CORE)
     if(EXISTS "${HELENGINE_CORE_CPP_ROOT}/runtime/runtime_input_backends_manifest.cpp")
         list(APPEND HELENGINE_WINDOWS_SOURCES "${HELENGINE_CORE_CPP_ROOT}/runtime/runtime_input_backends_manifest.cpp")
     endif()
+endif()
+
+if(HELENGINE_WINDOWS_ENABLE_XINPUT)
+    list(APPEND HELENGINE_WINDOWS_SOURCES src/platform/windows/input/windows_xinput_backend.cpp)
+endif()
+
+if(HELENGINE_WINDOWS_ENABLE_DIRECTINPUT)
+    list(APPEND HELENGINE_WINDOWS_SOURCES src/platform/windows/input/windows_directinput_backend.cpp)
+endif()
+
+if(HELENGINE_WINDOWS_ENABLE_STEAMINPUT)
+    list(APPEND HELENGINE_WINDOWS_SOURCES src/platform/windows/input/windows_steam_input_backend.cpp)
 endif()
 
 add_executable(helengine_windows WIN32 ${HELENGINE_WINDOWS_SOURCES})
@@ -133,7 +147,7 @@ target_link_libraries(helengine_windows PRIVATE
     gdi32
 )
 
-if(HELENGINE_WINDOWS_ENABLE_XINPUT)
+if(HELENGINE_WINDOWS_ENABLE_XINPUT OR HELENGINE_WINDOWS_ENABLE_STEAMINPUT)
     target_link_libraries(helengine_windows PRIVATE xinput)
 endif()
 

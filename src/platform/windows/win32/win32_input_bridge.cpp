@@ -21,7 +21,18 @@ namespace helengine::windows {
         , State()
         , PointerWrapEnabled(false)
         , ReceiveInputInBackground(false)
-        , PointerWrapDeltaOffset() {
+        , PointerWrapDeltaOffset()
+        , GamepadBackendMux(window)
+        , GamepadFrameBuffers { Array<InputGamepadState>::Empty(), Array<InputGamepadState>::Empty() }
+        , CurrentGamepadFrameBufferIndex(0) {
+    }
+
+    /// Releases any gamepad-frame buffers owned by the backend.
+    Win32InputBackend::~Win32InputBackend() {
+        ReleaseGamepadFrameBuffer(GamepadFrameBuffers[0]);
+        ReleaseGamepadFrameBuffer(GamepadFrameBuffers[1]);
+        GamepadFrameBuffers[0] = Array<InputGamepadState>::Empty();
+        GamepadFrameBuffers[1] = Array<InputGamepadState>::Empty();
     }
 
     /// Returns whether the backend continues reporting input while the host window is inactive.
@@ -39,6 +50,11 @@ namespace helengine::windows {
         InputFrameState frame;
         frame.set_Keyboard(CaptureKeyboardState());
         frame.set_Mouse(CaptureMouseState());
+        List<InputGamepadState> mergedGamepads;
+        GamepadBackendMux.CaptureFrame(mergedGamepads);
+        Array<InputGamepadState>* gamepadArray = StoreCapturedGamepads(mergedGamepads);
+        frame.set_Gamepads(gamepadArray);
+        frame.set_GamepadCount(gamepadArray == nullptr ? 0 : gamepadArray->Length);
         return frame;
     }
 
@@ -118,6 +134,37 @@ namespace helengine::windows {
         State.set_RightButton(ButtonState::Released);
         State.set_XButton1(ButtonState::Released);
         State.set_XButton2(ButtonState::Released);
+    }
+
+    /// Stores the captured gamepad list in the backend-owned rotating frame buffers.
+    Array<InputGamepadState>* Win32InputBackend::StoreCapturedGamepads(const List<InputGamepadState>& gamepads) {
+        int nextBufferIndex = CurrentGamepadFrameBufferIndex == 0 ? 1 : 0;
+        ReleaseGamepadFrameBuffer(GamepadFrameBuffers[nextBufferIndex]);
+        if (gamepads.empty()) {
+            GamepadFrameBuffers[nextBufferIndex] = Array<InputGamepadState>::Empty();
+            CurrentGamepadFrameBufferIndex = nextBufferIndex;
+            return GamepadFrameBuffers[nextBufferIndex];
+        }
+
+        Array<InputGamepadState>* gamepadArray = new Array<InputGamepadState>(static_cast<int32_t>(gamepads.size()));
+        for (int32_t index = 0; index < gamepadArray->Length; index++) {
+            (*gamepadArray)[index] = gamepads[static_cast<std::size_t>(index)];
+        }
+
+        GamepadFrameBuffers[nextBufferIndex] = gamepadArray;
+        CurrentGamepadFrameBufferIndex = nextBufferIndex;
+        return GamepadFrameBuffers[nextBufferIndex];
+    }
+
+    /// Releases one backend-owned gamepad-frame buffer.
+    void Win32InputBackend::ReleaseGamepadFrameBuffer(Array<InputGamepadState>* buffer) {
+        if (buffer == nullptr || buffer == Array<InputGamepadState>::Empty()) {
+            return;
+        }
+
+        delete[] buffer->Data;
+        buffer->Data = nullptr;
+        delete buffer;
     }
 
     /// Wraps the cursor across the host client area when edge wrapping is enabled.
