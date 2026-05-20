@@ -13,3 +13,13 @@ The builder exposes the Windows platform metadata that the editor needs to rende
 This repository does not own generated engine C++ source.
 
 Platform builds are expected to consume generated output from an external deployment root, using the generated source path passed into the native build configuration.
+
+## Windows Gamepad Backends
+
+Windows player builds can embed any subset of the supported native gamepad backends:
+
+- `embed-xinput`: links the XInput backend into the player build.
+- `embed-directinput`: links the DirectInput 8 backend into the player build.
+- `embed-steaminput`: links the SteamInput backend into the player build and requires a valid Steamworks SDK install.
+
+When `embed-steaminput` is enabled, set `HELENGINE_STEAMWORKS_SDK_ROOT` to the Steamworks SDK `sdk` directory before the native build runs.
