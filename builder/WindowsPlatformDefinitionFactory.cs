@@ -94,6 +94,27 @@ public static class WindowsPlatformDefinitionFactory {
                             PlatformSettingKind.Boolean,
                             "false",
                             true,
+                            []),
+                        new PlatformSettingDefinition(
+                            "embed-xinput",
+                            "Embed XInput",
+                            PlatformSettingKind.Boolean,
+                            "true",
+                            true,
+                            []),
+                        new PlatformSettingDefinition(
+                            "embed-directinput",
+                            "Embed DirectInput",
+                            PlatformSettingKind.Boolean,
+                            "true",
+                            true,
+                            []),
+                        new PlatformSettingDefinition(
+                            "embed-steaminput",
+                            "Embed SteamInput",
+                            PlatformSettingKind.Boolean,
+                            "false",
+                            true,
                             [])
                     ])
             ],

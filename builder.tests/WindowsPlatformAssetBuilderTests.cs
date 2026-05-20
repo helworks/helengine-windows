@@ -41,6 +41,31 @@ public class WindowsPlatformAssetBuilderTests {
     }
 
     /// <summary>
+    /// Verifies the Windows graphics profile exposes independent runtime embedding toggles for the supported gamepad backends.
+    /// </summary>
+    [Fact]
+    public void Descriptor_and_definition_expose_input_backend_embedding_toggles() {
+        WindowsPlatformAssetBuilder builder = new();
+
+        PlatformGraphicsProfileDefinition graphicsProfile = Assert.Single(
+            builder.Definition.GraphicsProfiles,
+            profile => profile.ProfileId == "directx11");
+
+        Assert.Contains(graphicsProfile.Settings, setting =>
+            setting.SettingId == "embed-xinput" &&
+            setting.SettingKind == PlatformSettingKind.Boolean &&
+            setting.DefaultValue == "true");
+        Assert.Contains(graphicsProfile.Settings, setting =>
+            setting.SettingId == "embed-directinput" &&
+            setting.SettingKind == PlatformSettingKind.Boolean &&
+            setting.DefaultValue == "true");
+        Assert.Contains(graphicsProfile.Settings, setting =>
+            setting.SettingId == "embed-steaminput" &&
+            setting.SettingKind == PlatformSettingKind.Boolean &&
+            setting.DefaultValue == "false");
+    }
+
+    /// <summary>
     /// Verifies the Windows material schema publishes the authored standard material fields.
     /// </summary>
     [Fact]
