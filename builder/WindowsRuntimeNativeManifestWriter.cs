@@ -36,6 +36,7 @@ public sealed class WindowsRuntimeNativeManifestWriter {
         WriteSceneCatalogManifestSource(runtimeRootPath, manifest);
         WriteCodeModuleManifestSource(runtimeRootPath, manifest);
         WritePlayerSettingsManifestSource(runtimeRootPath, selectedGraphicsOptionValues);
+        WriteInputBackendsManifestSource(runtimeRootPath, selectedGraphicsOptionValues);
     }
 
     /// <summary>
@@ -91,6 +92,22 @@ public sealed class WindowsRuntimeNativeManifestWriter {
 
         File.WriteAllText(headerPath, BuildPlayerSettingsManifestHeaderContents());
         File.WriteAllText(sourcePath, BuildPlayerSettingsManifestSourceContents(defaultWindowWidth, defaultWindowHeight));
+    }
+
+    /// <summary>
+    /// Writes the generated input-backend manifest header and implementation.
+    /// </summary>
+    /// <param name="runtimeRootPath">Runtime source folder inside the generated core tree.</param>
+    /// <param name="selectedGraphicsOptionValues">Resolved graphics-profile options selected for the build.</param>
+    void WriteInputBackendsManifestSource(string runtimeRootPath, IReadOnlyDictionary<string, string> selectedGraphicsOptionValues) {
+        bool embedXInput = ResolveRequiredBooleanOption(selectedGraphicsOptionValues, "embed-xinput");
+        bool embedDirectInput = ResolveRequiredBooleanOption(selectedGraphicsOptionValues, "embed-directinput");
+        bool embedSteamInput = ResolveRequiredBooleanOption(selectedGraphicsOptionValues, "embed-steaminput");
+        string headerPath = Path.Combine(runtimeRootPath, "runtime_input_backends_manifest.hpp");
+        string sourcePath = Path.Combine(runtimeRootPath, "runtime_input_backends_manifest.cpp");
+
+        File.WriteAllText(headerPath, BuildInputBackendsManifestHeaderContents());
+        File.WriteAllText(sourcePath, BuildInputBackendsManifestSourceContents(embedXInput, embedDirectInput, embedSteamInput));
     }
 
     /// <summary>
@@ -261,6 +278,20 @@ public sealed class WindowsRuntimeNativeManifestWriter {
     }
 
     /// <summary>
+    /// Builds the generated runtime input-backends manifest header.
+    /// </summary>
+    /// <returns>Generated C++ header text.</returns>
+    static string BuildInputBackendsManifestHeaderContents() {
+        StringBuilder builder = new();
+        builder.AppendLine("#pragma once");
+        builder.AppendLine();
+        builder.AppendLine("bool he_runtime_embed_xinput();");
+        builder.AppendLine("bool he_runtime_embed_directinput();");
+        builder.AppendLine("bool he_runtime_embed_steaminput();");
+        return builder.ToString();
+    }
+
+    /// <summary>
     /// Builds the generated runtime code-module manifest implementation.
     /// </summary>
     /// <param name="codeModules">Cooked code-module records to embed into native source.</param>
@@ -375,6 +406,31 @@ public sealed class WindowsRuntimeNativeManifestWriter {
         builder.AppendLine();
         builder.AppendLine("int he_get_runtime_default_window_height() {");
         builder.AppendLine("    return kRuntimeDefaultWindowHeight;");
+        builder.AppendLine("}");
+        return builder.ToString();
+    }
+
+    /// <summary>
+    /// Builds the generated runtime input-backends manifest implementation.
+    /// </summary>
+    /// <param name="embedXInput">True when XInput is embedded in the current player build.</param>
+    /// <param name="embedDirectInput">True when DirectInput is embedded in the current player build.</param>
+    /// <param name="embedSteamInput">True when SteamInput is embedded in the current player build.</param>
+    /// <returns>Generated C++ implementation text.</returns>
+    static string BuildInputBackendsManifestSourceContents(bool embedXInput, bool embedDirectInput, bool embedSteamInput) {
+        StringBuilder builder = new();
+        builder.AppendLine("#include \"runtime/runtime_input_backends_manifest.hpp\"");
+        builder.AppendLine();
+        builder.AppendLine("bool he_runtime_embed_xinput() {");
+        builder.AppendLine($"    return {BuildCppBooleanLiteral(embedXInput)};");
+        builder.AppendLine("}");
+        builder.AppendLine();
+        builder.AppendLine("bool he_runtime_embed_directinput() {");
+        builder.AppendLine($"    return {BuildCppBooleanLiteral(embedDirectInput)};");
+        builder.AppendLine("}");
+        builder.AppendLine();
+        builder.AppendLine("bool he_runtime_embed_steaminput() {");
+        builder.AppendLine($"    return {BuildCppBooleanLiteral(embedSteamInput)};");
         builder.AppendLine("}");
         return builder.ToString();
     }
@@ -495,6 +551,24 @@ public sealed class WindowsRuntimeNativeManifestWriter {
     }
 
     /// <summary>
+    /// Resolves one required boolean option from the selected graphics-profile values.
+    /// </summary>
+    /// <param name="selectedGraphicsOptionValues">Resolved graphics-profile option values selected for the build.</param>
+    /// <param name="optionId">Stable option identifier to resolve.</param>
+    /// <returns>Parsed boolean value.</returns>
+    static bool ResolveRequiredBooleanOption(IReadOnlyDictionary<string, string> selectedGraphicsOptionValues, string optionId) {
+        if (!TryGetOptionValue(selectedGraphicsOptionValues, optionId, out string value) || string.IsNullOrWhiteSpace(value)) {
+            throw new InvalidOperationException($"Required Windows graphics option '{optionId}' was not provided to the native manifest writer.");
+        }
+
+        if (!bool.TryParse(value, out bool parsedValue)) {
+            throw new InvalidOperationException($"Windows graphics option '{optionId}' must be a boolean value.");
+        }
+
+        return parsedValue;
+    }
+
+    /// <summary>
     /// Attempts to resolve one option value using a case-insensitive key comparison.
     /// </summary>
     /// <param name="selectedGraphicsOptionValues">Resolved graphics-profile option values selected for the build.</param>
@@ -546,6 +620,15 @@ public sealed class WindowsRuntimeNativeManifestWriter {
         }
 
         return builder.ToString();
+    }
+
+    /// <summary>
+    /// Builds the literal text for one generated C++ boolean value.
+    /// </summary>
+    /// <param name="value">Boolean value to emit.</param>
+    /// <returns>C++ boolean literal text.</returns>
+    static string BuildCppBooleanLiteral(bool value) {
+        return value ? "true" : "false";
     }
 }
 

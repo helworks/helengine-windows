@@ -40,6 +40,29 @@ public sealed class WindowsNativeBuildExecutorTests {
     }
 
     /// <summary>
+    /// Verifies the CMake configure command forwards the requested input backend flags and Steamworks SDK root to the native player build.
+    /// </summary>
+    [Fact]
+    public void BuildConfigureArguments_forwards_requested_input_backend_flags() {
+        string arguments = InvokePrivateCommandBuilder(
+            "BuildConfigureArguments",
+            @"C:\repo",
+            @"C:\build",
+            @"C:\generated",
+            @"C:\staged-code",
+            @"C:\vs\VsDevCmd.bat",
+            true,
+            false,
+            true,
+            @"C:\steamworks");
+
+        Assert.Contains("-DHELENGINE_WINDOWS_ENABLE_XINPUT=ON", arguments, StringComparison.Ordinal);
+        Assert.Contains("-DHELENGINE_WINDOWS_ENABLE_DIRECTINPUT=OFF", arguments, StringComparison.Ordinal);
+        Assert.Contains("-DHELENGINE_WINDOWS_ENABLE_STEAMINPUT=ON", arguments, StringComparison.Ordinal);
+        Assert.Contains("-DHELENGINE_STEAMWORKS_SDK_ROOT=\"C:\\steamworks\"", arguments, StringComparison.Ordinal);
+    }
+
+    /// <summary>
     /// Verifies the CMake build command re-enters the amd64 developer environment before compiling native sources.
     /// </summary>
     [Fact]
@@ -59,9 +82,11 @@ public sealed class WindowsNativeBuildExecutorTests {
     /// <param name="arguments">Ordered method arguments.</param>
     /// <returns>Built command-line arguments string.</returns>
     static string InvokePrivateCommandBuilder(string methodName, params object[] arguments) {
-        MethodInfo method = typeof(WindowsNativeBuildExecutor).GetMethod(
-            methodName,
-            BindingFlags.Static | BindingFlags.NonPublic)
+        MethodInfo method = typeof(WindowsNativeBuildExecutor)
+            .GetMethods(BindingFlags.Static | BindingFlags.NonPublic)
+            .SingleOrDefault(candidate =>
+                candidate.Name == methodName &&
+                candidate.GetParameters().Length == arguments.Length)
             ?? throw new InvalidOperationException($"Unable to find private method '{methodName}'.");
 
         return (string)(method.Invoke(null, arguments)

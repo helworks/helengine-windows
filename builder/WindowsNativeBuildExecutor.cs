@@ -15,9 +15,18 @@ internal interface IWindowsNativeBuildExecutor {
     /// <param name="buildRoot">Absolute path to the native build directory.</param>
     /// <param name="generatedCoreCppRootPath">Absolute path to the generated core C++ root.</param>
     /// <param name="stagedCodeRootPath">Absolute path to the staged generated code-module root.</param>
+    /// <param name="inputBackendSelection">Requested native gamepad backends to embed.</param>
+    /// <param name="steamworksSdkRootPath">Optional Steamworks SDK root used when SteamInput support is requested.</param>
     /// <param name="cancellationToken">Cancellation token that can stop the native build.</param>
     /// <returns>Absolute path to the produced native executable.</returns>
-    string Build(string repositoryRoot, string buildRoot, string generatedCoreCppRootPath, string stagedCodeRootPath, CancellationToken cancellationToken);
+    string Build(
+        string repositoryRoot,
+        string buildRoot,
+        string generatedCoreCppRootPath,
+        string stagedCodeRootPath,
+        WindowsNativeInputBackendSelection inputBackendSelection,
+        string steamworksSdkRootPath,
+        CancellationToken cancellationToken);
 }
 
 /// <summary>
@@ -46,9 +55,18 @@ internal sealed class WindowsNativeBuildExecutor : IWindowsNativeBuildExecutor {
     /// <param name="buildRoot">Absolute path to the native build directory.</param>
     /// <param name="generatedCoreCppRootPath">Absolute path to the generated core C++ root.</param>
     /// <param name="stagedCodeRootPath">Absolute path to the staged generated code-module root.</param>
+    /// <param name="inputBackendSelection">Requested native gamepad backends to embed.</param>
+    /// <param name="steamworksSdkRootPath">Optional Steamworks SDK root used when SteamInput support is requested.</param>
     /// <param name="cancellationToken">Cancellation token that can stop the native build.</param>
     /// <returns>Absolute path to the produced native executable.</returns>
-    public string Build(string repositoryRoot, string buildRoot, string generatedCoreCppRootPath, string stagedCodeRootPath, CancellationToken cancellationToken) {
+    public string Build(
+        string repositoryRoot,
+        string buildRoot,
+        string generatedCoreCppRootPath,
+        string stagedCodeRootPath,
+        WindowsNativeInputBackendSelection inputBackendSelection,
+        string steamworksSdkRootPath,
+        CancellationToken cancellationToken) {
         if (string.IsNullOrWhiteSpace(repositoryRoot)) {
             throw new ArgumentException("Repository root must be provided.", nameof(repositoryRoot));
         }
@@ -68,7 +86,7 @@ internal sealed class WindowsNativeBuildExecutor : IWindowsNativeBuildExecutor {
 
         RunProcess(
             "cmd.exe",
-            BuildConfigureArguments(repositoryRoot, buildRoot, generatedCoreCppRootPath, stagedCodeRootPath, vsDevCmdPath),
+            BuildConfigureArguments(repositoryRoot, buildRoot, generatedCoreCppRootPath, stagedCodeRootPath, vsDevCmdPath, inputBackendSelection.EmbedXInput, inputBackendSelection.EmbedDirectInput, inputBackendSelection.EmbedSteamInput, steamworksSdkRootPath),
             repositoryRoot,
             Path.Combine(buildRoot, "native-configure.log"),
             cancellationToken);
@@ -98,9 +116,35 @@ internal sealed class WindowsNativeBuildExecutor : IWindowsNativeBuildExecutor {
     /// <param name="vsDevCmdPath">Absolute path to the Visual Studio developer command prompt.</param>
     /// <returns>Windows command-line arguments for the configure step.</returns>
     static string BuildConfigureArguments(string repositoryRoot, string buildRoot, string generatedCoreCppRootPath, string stagedCodeRootPath, string vsDevCmdPath) {
+        return BuildConfigureArguments(repositoryRoot, buildRoot, generatedCoreCppRootPath, stagedCodeRootPath, vsDevCmdPath, true, true, false, string.Empty);
+    }
+
+    /// <summary>
+    /// Builds the CMake configure command line for the current Windows player source tree with the requested input backends.
+    /// </summary>
+    /// <param name="repositoryRoot">Absolute path to the Windows player repository root.</param>
+    /// <param name="buildRoot">Absolute path to the native build directory.</param>
+    /// <param name="generatedCoreCppRootPath">Absolute path to the generated core C++ root.</param>
+    /// <param name="stagedCodeRootPath">Absolute path to the staged generated code-module root.</param>
+    /// <param name="vsDevCmdPath">Absolute path to the Visual Studio developer command prompt.</param>
+    /// <param name="embedXInput">True when XInput should be compiled into the player.</param>
+    /// <param name="embedDirectInput">True when DirectInput should be compiled into the player.</param>
+    /// <param name="embedSteamInput">True when SteamInput should be compiled into the player.</param>
+    /// <param name="steamworksSdkRootPath">Optional Steamworks SDK root used when SteamInput support is requested.</param>
+    /// <returns>Windows command-line arguments for the configure step.</returns>
+    static string BuildConfigureArguments(
+        string repositoryRoot,
+        string buildRoot,
+        string generatedCoreCppRootPath,
+        string stagedCodeRootPath,
+        string vsDevCmdPath,
+        bool embedXInput,
+        bool embedDirectInput,
+        bool embedSteamInput,
+        string steamworksSdkRootPath) {
         return string.Join(" ", [
             "/c",
-            $"call \"{vsDevCmdPath}\" -arch=amd64 -host_arch=amd64 && cmake -S \"{repositoryRoot}\" -B \"{buildRoot}\" -G Ninja -DHELENGINE_WINDOWS_INCLUDE_GENERATED_CORE=ON -DHELENGINE_CORE_CPP_ROOT=\"{generatedCoreCppRootPath}\" -DHELENGINE_CODE_ROOT=\"{stagedCodeRootPath}\" -DHELENGINE_WINDOWS_RENDER_BACKEND=DirectX11"
+            $"call \"{vsDevCmdPath}\" -arch=amd64 -host_arch=amd64 && cmake -S \"{repositoryRoot}\" -B \"{buildRoot}\" -G Ninja -DHELENGINE_WINDOWS_INCLUDE_GENERATED_CORE=ON -DHELENGINE_CORE_CPP_ROOT=\"{generatedCoreCppRootPath}\" -DHELENGINE_CODE_ROOT=\"{stagedCodeRootPath}\" -DHELENGINE_WINDOWS_RENDER_BACKEND=DirectX11 -DHELENGINE_WINDOWS_ENABLE_XINPUT={BuildCMakeBooleanLiteral(embedXInput)} -DHELENGINE_WINDOWS_ENABLE_DIRECTINPUT={BuildCMakeBooleanLiteral(embedDirectInput)} -DHELENGINE_WINDOWS_ENABLE_STEAMINPUT={BuildCMakeBooleanLiteral(embedSteamInput)}{BuildSteamworksSdkRootArgument(steamworksSdkRootPath)}"
         ]);
     }
 
@@ -258,5 +302,27 @@ internal sealed class WindowsNativeBuildExecutor : IWindowsNativeBuildExecutor {
         if (process.ExitCode != 0) {
             throw new InvalidOperationException($"Process '{fileName} {arguments}' failed with exit code {process.ExitCode}. See '{logPath}'.");
         }
+    }
+
+    /// <summary>
+    /// Builds the CMake boolean literal for one native configure value.
+    /// </summary>
+    /// <param name="value">Boolean value to encode.</param>
+    /// <returns>CMake boolean literal text.</returns>
+    static string BuildCMakeBooleanLiteral(bool value) {
+        return value ? "ON" : "OFF";
+    }
+
+    /// <summary>
+    /// Builds the optional Steamworks SDK root configure argument.
+    /// </summary>
+    /// <param name="steamworksSdkRootPath">Optional Steamworks SDK root path.</param>
+    /// <returns>Formatted command-line segment, including the leading space when present.</returns>
+    static string BuildSteamworksSdkRootArgument(string steamworksSdkRootPath) {
+        if (string.IsNullOrWhiteSpace(steamworksSdkRootPath)) {
+            return string.Empty;
+        }
+
+        return $" -DHELENGINE_STEAMWORKS_SDK_ROOT=\"{steamworksSdkRootPath}\"";
     }
 }

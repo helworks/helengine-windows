@@ -166,4 +166,54 @@ public sealed class WindowsRuntimeNativeManifestWriterTests : IDisposable {
         Assert.Contains("he_get_runtime_default_window_width", settingsSource, StringComparison.Ordinal);
         Assert.Contains("he_get_runtime_default_window_height", settingsSource, StringComparison.Ordinal);
     }
+
+    /// <summary>
+    /// Ensures the writer emits the runtime input-backend manifest so the native host can build only the requested gamepad libraries into the player.
+    /// </summary>
+    [Fact]
+    public void Write_when_graphics_options_define_input_backends_emits_runtime_input_backend_manifest() {
+        PlatformBuildManifest manifest = new(
+            2,
+            "project",
+            "1.0.0",
+            "1.0.0",
+            "DemoDiscMainMenu",
+            [
+                new PlatformBuildScene(
+                    "DemoDiscMainMenu",
+                    "DemoDiscMainMenu",
+                    "cooked/scenes/DemoDiscMainMenu.hasset",
+                    [],
+                    [new KeyValuePair<string, string>("cooked-relative-path", "cooked/scenes/DemoDiscMainMenu.hasset")])
+            ],
+            [],
+            [],
+            [],
+            [],
+            new PlatformContainerWritePlan(string.Empty, []));
+        Dictionary<string, string> graphicsOptionValues = new(StringComparer.OrdinalIgnoreCase) {
+            ["default-width"] = "1280",
+            ["default-height"] = "720",
+            ["embed-xinput"] = "true",
+            ["embed-directinput"] = "false",
+            ["embed-steaminput"] = "true"
+        };
+
+        WindowsRuntimeNativeManifestWriter writer = new();
+        writer.Write(GeneratedCoreRootPath, manifest, graphicsOptionValues);
+
+        string runtimeRootPath = Path.Combine(GeneratedCoreRootPath, "runtime");
+        string backendsHeaderPath = Path.Combine(runtimeRootPath, "runtime_input_backends_manifest.hpp");
+        string backendsSourcePath = Path.Combine(runtimeRootPath, "runtime_input_backends_manifest.cpp");
+
+        Assert.True(File.Exists(backendsHeaderPath));
+        Assert.True(File.Exists(backendsSourcePath));
+
+        string backendsSource = File.ReadAllText(backendsSourcePath);
+        Assert.Contains("he_runtime_embed_xinput", backendsSource, StringComparison.Ordinal);
+        Assert.Contains("he_runtime_embed_directinput", backendsSource, StringComparison.Ordinal);
+        Assert.Contains("he_runtime_embed_steaminput", backendsSource, StringComparison.Ordinal);
+        Assert.Contains("return true;", backendsSource, StringComparison.Ordinal);
+        Assert.Contains("return false;", backendsSource, StringComparison.Ordinal);
+    }
 }

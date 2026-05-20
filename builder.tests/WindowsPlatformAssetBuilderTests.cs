@@ -528,9 +528,18 @@ public class WindowsPlatformAssetBuilderTests {
         /// <param name="buildRoot">Native build root provided by the builder.</param>
         /// <param name="generatedCoreCppRootPath">Generated core root provided by the builder.</param>
         /// <param name="stagedCodeRootPath">Staged generated code-module root provided by the builder.</param>
+        /// <param name="inputBackendSelection">Requested native gamepad backends.</param>
+        /// <param name="steamworksSdkRootPath">Optional Steamworks SDK root used for native compilation.</param>
         /// <param name="cancellationToken">Cancellation token.</param>
         /// <returns>Absolute path to the fake native executable.</returns>
-        public string Build(string repositoryRoot, string buildRoot, string generatedCoreCppRootPath, string stagedCodeRootPath, CancellationToken cancellationToken) {
+        public string Build(
+            string repositoryRoot,
+            string buildRoot,
+            string generatedCoreCppRootPath,
+            string stagedCodeRootPath,
+            WindowsNativeInputBackendSelection inputBackendSelection,
+            string steamworksSdkRootPath,
+            CancellationToken cancellationToken) {
             WasCalled = true;
             RepositoryRoot = repositoryRoot;
             BuildRoot = buildRoot;

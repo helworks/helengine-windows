@@ -129,11 +129,14 @@ public static class WindowsBuildWorkspace {
         string nativeBuildRoot = Path.Combine(builderWorkingRoot, "native");
 
         try {
+            WindowsNativeInputBackendSelection inputBackendSelection = ResolveInputBackendSelection(request.SelectedGraphicsOptionValues);
             string nativeExecutablePath = nativeBuildExecutor.Build(
                 repositoryRoot,
                 nativeBuildRoot,
                 generatedCoreRoot,
                 Path.Combine(stagingRoot, "code"),
+                inputBackendSelection,
+                ResolveSteamworksSdkRoot(),
                 cancellationToken);
             string destinationExecutablePath = Path.Combine(request.OutputRoot, Path.GetFileName(nativeExecutablePath));
             Directory.CreateDirectory(request.OutputRoot);
@@ -427,6 +430,61 @@ public static class WindowsBuildWorkspace {
             : request.GeneratedCoreCppRootPath;
 
         return Path.GetFullPath(generatedCoreRoot);
+    }
+
+    /// <summary>
+    /// Resolves the native gamepad backend selection from the current Windows graphics option values.
+    /// </summary>
+    /// <param name="selectedGraphicsOptionValues">Selected Windows graphics option values.</param>
+    /// <returns>Resolved native backend selection.</returns>
+    static WindowsNativeInputBackendSelection ResolveInputBackendSelection(IReadOnlyDictionary<string, string> selectedGraphicsOptionValues) {
+        if (selectedGraphicsOptionValues == null) {
+            throw new ArgumentNullException(nameof(selectedGraphicsOptionValues));
+        }
+
+        return new WindowsNativeInputBackendSelection(
+            ResolveRequiredBooleanOption(selectedGraphicsOptionValues, "embed-xinput"),
+            ResolveRequiredBooleanOption(selectedGraphicsOptionValues, "embed-directinput"),
+            ResolveRequiredBooleanOption(selectedGraphicsOptionValues, "embed-steaminput"));
+    }
+
+    /// <summary>
+    /// Resolves the optional Steamworks SDK root from the current machine environment.
+    /// </summary>
+    /// <returns>Absolute Steamworks SDK root path when configured; otherwise an empty string.</returns>
+    static string ResolveSteamworksSdkRoot() {
+        string steamworksSdkRoot = Environment.GetEnvironmentVariable("HELENGINE_STEAMWORKS_SDK_ROOT");
+        if (string.IsNullOrWhiteSpace(steamworksSdkRoot)) {
+            return string.Empty;
+        }
+
+        return Path.GetFullPath(steamworksSdkRoot);
+    }
+
+    /// <summary>
+    /// Resolves one required boolean option from the current Windows graphics option values.
+    /// </summary>
+    /// <param name="selectedGraphicsOptionValues">Selected Windows graphics option values.</param>
+    /// <param name="optionId">Stable option identifier to resolve.</param>
+    /// <returns>Parsed boolean value.</returns>
+    static bool ResolveRequiredBooleanOption(IReadOnlyDictionary<string, string> selectedGraphicsOptionValues, string optionId) {
+        if (string.IsNullOrWhiteSpace(optionId)) {
+            throw new ArgumentException("Option id must be provided.", nameof(optionId));
+        }
+
+        foreach (KeyValuePair<string, string> entry in selectedGraphicsOptionValues) {
+            if (!string.Equals(entry.Key, optionId, StringComparison.OrdinalIgnoreCase)) {
+                continue;
+            }
+
+            if (!bool.TryParse(entry.Value, out bool parsedValue)) {
+                throw new InvalidOperationException($"Windows graphics option '{optionId}' must be a boolean value.");
+            }
+
+            return parsedValue;
+        }
+
+        throw new InvalidOperationException($"Required Windows graphics option '{optionId}' was not provided.");
     }
 
     /// <summary>
