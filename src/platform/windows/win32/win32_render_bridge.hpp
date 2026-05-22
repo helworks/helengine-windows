@@ -8,6 +8,7 @@
 #include <wrl/client.h>
 
 #include <DirectXMath.h>
+#include <array>
 #include <memory>
 #include <unordered_map>
 #include <vector>
@@ -24,6 +25,7 @@ class RenderCommandListBuilder2D;
 #include "IDrawable3D.hpp"
 #include "IRenderVisitor3D.hpp"
 #include "IRoundedRectDrawable2D.hpp"
+#include "IShaderRenderManager3D.hpp"
 #include "ISpriteDrawable2D.hpp"
 #include "ITextDrawable2D.hpp"
 #include "MaterialAsset.hpp"
@@ -32,7 +34,9 @@ class RenderCommandListBuilder2D;
 #include "RenderManager2D.hpp"
 #include "RenderManager3D.hpp"
 #include "ShaderAsset.hpp"
+#include "ShaderMaterialAsset.hpp"
 #include "RuntimeMaterial.hpp"
+#include "ShaderRuntimeMaterial.hpp"
 #include "RuntimeModel.hpp"
 #include "RuntimeTexture.hpp"
 #include "TextureAsset.hpp"
@@ -98,7 +102,7 @@ namespace helengine::windows {
     };
 
     /// Provides a minimal native 3D renderer bridge that draws all cameras onto the main back buffer in draw order.
-    class Win32RenderManager3D : public RenderManager3D, public IRenderVisitor3D {
+    class Win32RenderManager3D : public RenderManager3D, public IRenderVisitor3D, public IShaderRenderManager3D {
     public:
         /// Creates the native renderer bridge for one DirectX11 bootstrap.
         explicit Win32RenderManager3D(DirectX11Bootstrap& bootstrap);
@@ -128,7 +132,13 @@ namespace helengine::windows {
         RuntimeModel* BuildModelFromRaw(ModelAsset* data) override;
 
         /// Builds a runtime material placeholder that keeps the packaged material identity.
-        RuntimeMaterial* BuildMaterialFromRaw(MaterialAsset* materialAsset, ShaderAsset* shaderAsset) override;
+        RuntimeMaterial* BuildMaterialFromRaw(ShaderMaterialAsset* materialAsset, ShaderAsset* shaderAsset) override;
+
+        /// Returns the shader compile target consumed by the Windows DirectX11 bridge.
+        ShaderCompileTarget get_ShaderCompileTarget() override;
+
+        /// Invalidates cached shader resources that were built from one shader asset.
+        void InvalidateShaderResources(std::string shaderAssetId, ShaderAsset* shaderAsset) override;
 
         /// Releases one runtime model previously created by the Windows renderer.
         void ReleaseModel(RuntimeModel* model) override;
@@ -162,7 +172,7 @@ namespace helengine::windows {
         void EnsureDebugTriangleBuffer();
 
         /// Builds a shader resource from one packaged shader asset and material program selection.
-        Win32ShaderResource BuildShaderResource(MaterialAsset* materialAsset, ShaderAsset* shaderAsset);
+        Win32ShaderResource BuildShaderResource(ShaderMaterialAsset* materialAsset, ShaderAsset* shaderAsset);
 
         /// Builds Direct3D input elements from the vertex signature exposed by a shader program.
         std::vector<D3D11_INPUT_ELEMENT_DESC> BuildInputElements(ShaderAsset* shaderAsset, std::string vertexProgram, std::string variant, std::vector<std::string>& semanticStorage);
@@ -199,6 +209,9 @@ namespace helengine::windows {
 
         /// Draws one clip-space debug triangle to validate the native pipeline independently from scene transforms.
         void DrawDebugTriangle();
+
+        /// Resolves the shader-backed runtime material required by the native DirectX11 material binding path.
+        ShaderRuntimeMaterial* RequireShaderRuntimeMaterial(RuntimeMaterial* material);
 
         /// Applies the shader and resource bindings for one runtime material.
         void ApplyMaterial(RuntimeMaterial* material);
@@ -393,6 +406,9 @@ namespace helengine::windows {
             float4 sourceRect,
             byte4 color);
 
+        /// Uploads quad vertices into the reusable dynamic buffer and issues one draw from the written range.
+        void DrawQuadVertices(const void* vertices, UINT vertexCount);
+
         /// Draws one solid-color rectangle in window-space pixel coordinates.
         void DrawSolidRect(float x, float y, float width, float height, byte4 color);
 
@@ -419,6 +435,12 @@ namespace helengine::windows {
 
         /// Stores the dynamic quad vertex buffer reused by every 2D draw call.
         Microsoft::WRL::ComPtr<ID3D11Buffer> QuadVertexBuffer;
+
+        /// Stores the number of vertices allocated in the reusable 2D quad buffer.
+        UINT QuadVertexCapacity = 0;
+
+        /// Stores the next vertex slot to write during the current 2D camera pass.
+        UINT QuadVertexCursor = 0;
 
         /// Stores the input layout used by the 2D quad shader pipeline.
         Microsoft::WRL::ComPtr<ID3D11InputLayout> QuadInputLayout;

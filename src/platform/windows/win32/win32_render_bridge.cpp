@@ -44,6 +44,9 @@
 #if __has_include("ShaderBinaryAsset.hpp")
 #include "ShaderBinaryAsset.hpp"
 #endif
+#if __has_include("ShaderRuntimeMaterialAccess.hpp")
+#include "ShaderRuntimeMaterialAccess.hpp"
+#endif
 #if __has_include("ShaderVertexElementAsset.hpp")
 #include "ShaderVertexElementAsset.hpp"
 #endif
@@ -180,6 +183,9 @@ namespace helengine::windows {
 
         /// Built-in generated model id used by the infinite-thin ground plane primitive.
         constexpr const char* BuiltInPlaneModelId = "engine:model:plane";
+
+        /// Number of vertices reserved for the reusable 2D dynamic quad buffer.
+        constexpr UINT QuadVertexBufferVertexCapacity = 4096U;
 
         /// Engine-managed shadow-atlas texture binding name used by the built-in forward shader.
         constexpr const char* ShadowAtlasTextureBindingName = "shadowAtlasTexture";
@@ -898,18 +904,21 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
     }
 
     /// Builds a runtime material placeholder that keeps the packaged material identity.
-    RuntimeMaterial* Win32RenderManager3D::BuildMaterialFromRaw(MaterialAsset* materialAsset, ShaderAsset* shaderAsset) {
-        RuntimeMaterial* runtimeMaterial = new RuntimeMaterial();
+    RuntimeMaterial* Win32RenderManager3D::BuildMaterialFromRaw(ShaderMaterialAsset* materialAsset, ShaderAsset* shaderAsset) {
         if (materialAsset == nullptr) {
-            if (shaderAsset != nullptr) {
-                runtimeMaterial->set_Id(shaderAsset->get_Id());
-            }
-            return runtimeMaterial;
+            throw new ArgumentNullException("materialAsset");
         }
 
         if (shaderAsset == nullptr) {
-            runtimeMaterial->set_Id(materialAsset->get_Id());
-            return runtimeMaterial;
+            throw new ArgumentNullException("shaderAsset");
+        }
+
+        if (String::IsNullOrWhiteSpace(materialAsset->ShaderAssetId)) {
+            throw new InvalidOperationException("Material assets must reference a shader asset id.");
+        }
+
+        if (!String::Equals(materialAsset->ShaderAssetId, shaderAsset->get_Id(), StringComparison::Ordinal)) {
+            throw new InvalidOperationException("Material asset shader id does not match the provided shader asset.");
         }
 
         std::string materialId = materialAsset->get_Id();
@@ -917,13 +926,15 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
             materialId = shaderAsset->get_Id();
         }
 
+        ShaderRuntimeMaterial* shaderRuntimeMaterial = new ShaderRuntimeMaterial();
+        RuntimeMaterial* runtimeMaterial = shaderRuntimeMaterial;
         runtimeMaterial->set_Id(materialId);
         MaterialLayout* layout = MaterialLayoutBuilder::Build(materialAsset, shaderAsset);
-        runtimeMaterial->SetLayout(layout);
+        shaderRuntimeMaterial->SetLayout(layout);
         runtimeMaterial->SetRenderState(materialAsset->RenderState);
-        runtimeMaterial->ApplyConstantBufferDefaults(materialAsset->ConstantBuffers);
+        shaderRuntimeMaterial->ApplyConstantBufferDefaults(materialAsset->ConstantBuffers);
 #if __has_include("StandardMaterialTextureBindingDefaults.hpp")
-        StandardMaterialTextureBindingDefaults::Apply(runtimeMaterial);
+        StandardMaterialTextureBindingDefaults::Apply(shaderRuntimeMaterial);
 #endif
 
         std::size_t authoredConstantBufferCount = 0;
@@ -952,6 +963,33 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
                 + " live_material_constant_buffer_bytes=" + std::to_string(LiveMaterialConstantBufferBytes),
             MaterialShaderResources.size());
         return runtimeMaterial;
+    }
+
+    /// Returns the shader compile target consumed by the Windows DirectX11 bridge.
+    ShaderCompileTarget Win32RenderManager3D::get_ShaderCompileTarget() {
+        return ShaderCompileTarget::DirectX11;
+    }
+
+    /// Invalidates cached shader resources that were built from one shader asset.
+    void Win32RenderManager3D::InvalidateShaderResources(std::string shaderAssetId, ShaderAsset* shaderAsset) {
+        if (String::IsNullOrWhiteSpace(shaderAssetId)) {
+            throw new ArgumentException("Shader asset id must be provided.", "shaderAssetId");
+        }
+
+        if (shaderAsset == nullptr) {
+            throw new ArgumentNullException("shaderAsset");
+        }
+
+        MaterialShaderResources.clear();
+    }
+
+    /// Resolves the shader-backed runtime material required by the native DirectX11 material binding path.
+    ShaderRuntimeMaterial* Win32RenderManager3D::RequireShaderRuntimeMaterial(RuntimeMaterial* material) {
+        if (material == nullptr) {
+            throw new ArgumentNullException("material");
+        }
+
+        return ShaderRuntimeMaterialAccess::Require(material);
     }
 
     /// Releases one runtime model previously created by the Windows renderer.
@@ -2108,7 +2146,7 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
     }
 
     /// Builds a shader resource from one packaged shader asset and material program selection.
-    Win32ShaderResource Win32RenderManager3D::BuildShaderResource(MaterialAsset* materialAsset, ShaderAsset* shaderAsset) {
+    Win32ShaderResource Win32RenderManager3D::BuildShaderResource(ShaderMaterialAsset* materialAsset, ShaderAsset* shaderAsset) {
         if (materialAsset == nullptr) {
             throw new ArgumentNullException("materialAsset");
         }
@@ -2362,8 +2400,9 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
         context->PSSetConstantBuffers(0, 1, &transformBuffer);
         BindMaterialConstantBuffers(material);
 
-        MaterialLayout* layout = material->get_Layout();
-        MaterialPropertyBlock* properties = material->get_Properties();
+        ShaderRuntimeMaterial* shaderRuntimeMaterial = RequireShaderRuntimeMaterial(material);
+        MaterialLayout* layout = shaderRuntimeMaterial->get_Layout();
+        MaterialPropertyBlock* properties = shaderRuntimeMaterial->get_Properties();
         if (layout != nullptr && properties != nullptr) {
             Array<MaterialLayoutBinding*>* textureBindings = layout->get_TextureBindings();
             if (textureBindings != nullptr && textureBindings->Length > 0) {
@@ -2378,7 +2417,8 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
             throw new ArgumentNullException("material");
         }
 
-        MaterialLayout* layout = material->get_Layout();
+        ShaderRuntimeMaterial* shaderRuntimeMaterial = RequireShaderRuntimeMaterial(material);
+        MaterialLayout* layout = shaderRuntimeMaterial->get_Layout();
         if (layout == nullptr) {
             return;
         }
@@ -2401,17 +2441,17 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
             }
 
             Array<uint8_t>* data = nullptr;
-            if (!material->TryResolveConstantBufferData(bindingName, data) || data == nullptr || data->Length == 0) {
+            if (!shaderRuntimeMaterial->TryResolveConstantBufferData(bindingName, data) || data == nullptr || data->Length == 0) {
                 ID3D11Buffer* nullBuffer = nullptr;
                 context->VSSetConstantBuffers(static_cast<UINT>(binding->get_Slot()), 1, &nullBuffer);
                 context->PSSetConstantBuffers(static_cast<UINT>(binding->get_Slot()), 1, &nullBuffer);
                 continue;
             }
 
-            ID3D11Buffer* constantBuffer = GetOrCreateMaterialConstantBuffer(binding->get_Slot(), data->Length);
-            std::vector<uint8_t> uploadBytes(static_cast<std::size_t>(data->Length));
-            std::memcpy(uploadBytes.data(), data->Data, static_cast<std::size_t>(data->Length));
-            context->UpdateSubresource(constantBuffer, 0, nullptr, uploadBytes.data(), 0, 0);
+            int32_t dataLength = data->Length;
+            ID3D11Buffer* constantBuffer = GetOrCreateMaterialConstantBuffer(binding->get_Slot(), dataLength);
+            context->UpdateSubresource(constantBuffer, 0, nullptr, data->Data, 0, 0);
+            delete data;
             context->VSSetConstantBuffers(static_cast<UINT>(binding->get_Slot()), 1, &constantBuffer);
             context->PSSetConstantBuffers(static_cast<UINT>(binding->get_Slot()), 1, &constantBuffer);
         }
@@ -2423,7 +2463,8 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
             throw new ArgumentNullException("material");
         }
 
-        RuntimeTexture* texture = material->ResolveTexture();
+        ShaderRuntimeMaterial* shaderRuntimeMaterial = RequireShaderRuntimeMaterial(material);
+        RuntimeTexture* texture = shaderRuntimeMaterial->ResolveTexture();
         ID3D11ShaderResourceView* resourceView = ResolveTextureResourceView(texture);
         ID3D11DeviceContext* context = Bootstrap.GetDeviceContext();
         context->PSSetShaderResources(0, 1, &resourceView);
@@ -2442,7 +2483,7 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
             return nullptr;
         }
 
-        std::string textureId = texture->get_Id();
+        const std::string& textureId = texture->get_Id();
         if (textureId.empty()) {
             return nullptr;
         }
@@ -2670,7 +2711,7 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
             "ID3D11Device::CreateInputLayout failed for the Windows 2D quad pipeline.");
 
         D3D11_BUFFER_DESC vertexBufferDescription {};
-        vertexBufferDescription.ByteWidth = static_cast<UINT>(sizeof(Win32QuadVertex) * 4U);
+        vertexBufferDescription.ByteWidth = static_cast<UINT>(sizeof(Win32QuadVertex) * QuadVertexBufferVertexCapacity);
         vertexBufferDescription.Usage = D3D11_USAGE_DYNAMIC;
         vertexBufferDescription.BindFlags = D3D11_BIND_VERTEX_BUFFER;
         vertexBufferDescription.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
@@ -2678,6 +2719,8 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
         ThrowIfFailed(
             device->CreateBuffer(&vertexBufferDescription, nullptr, QuadVertexBuffer.GetAddressOf()),
             "ID3D11Device::CreateBuffer failed for the Windows 2D quad vertex buffer.");
+        QuadVertexCapacity = QuadVertexBufferVertexCapacity;
+        QuadVertexCursor = 0;
 
         D3D11_BUFFER_DESC roundedRectConstantBufferDescription {};
         roundedRectConstantBufferDescription.ByteWidth = static_cast<UINT>(sizeof(Win32RoundedRectShaderConstants));
@@ -2806,7 +2849,7 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
             return nullptr;
         }
 
-        std::string textureId = texture->get_Id();
+        const std::string& textureId = texture->get_Id();
         if (textureId.empty()) {
             return nullptr;
         }
@@ -2977,14 +3020,42 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
             Win32QuadVertex { DirectX::XMFLOAT3(rightNdc, topNdc, 0.0f), DirectX::XMFLOAT2(sourceRect.X + sourceRect.Z, sourceRect.Y), tint }
         };
 
+        DrawQuadVertices(vertices.data(), static_cast<UINT>(vertices.size()));
+    }
+
+    /// Uploads quad vertices into the reusable dynamic buffer and issues one draw from the written range.
+    void Win32RenderManager2D::DrawQuadVertices(const void* vertices, UINT vertexCount) {
+        if (vertices == nullptr || vertexCount == 0U) {
+            return;
+        }
+
+        if (QuadVertexBuffer == nullptr || QuadVertexCapacity < vertexCount) {
+            throw std::runtime_error("Windows 2D quad vertex buffer must be initialized before drawing.");
+        }
+
+        bool shouldDiscard = QuadVertexCursor == 0 || QuadVertexCursor + vertexCount > QuadVertexCapacity;
+        if (shouldDiscard) {
+            QuadVertexCursor = 0;
+        }
+
+        const UINT startVertex = QuadVertexCursor;
+        QuadVertexCursor += vertexCount;
+
         ID3D11DeviceContext* context = Bootstrap.GetDeviceContext();
         D3D11_MAPPED_SUBRESOURCE mappedResource {};
         ThrowIfFailed(
-            context->Map(QuadVertexBuffer.Get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mappedResource),
+            context->Map(
+                QuadVertexBuffer.Get(),
+                0,
+                shouldDiscard ? D3D11_MAP_WRITE_DISCARD : D3D11_MAP_WRITE_NO_OVERWRITE,
+                0,
+                &mappedResource),
             "ID3D11DeviceContext::Map failed for the Windows 2D quad vertex buffer.");
-        std::memcpy(mappedResource.pData, vertices.data(), sizeof(Win32QuadVertex) * vertices.size());
+
+        Win32QuadVertex* vertexData = static_cast<Win32QuadVertex*>(mappedResource.pData);
+        std::memcpy(vertexData + startVertex, vertices, sizeof(Win32QuadVertex) * vertexCount);
         context->Unmap(QuadVertexBuffer.Get(), 0);
-        context->Draw(4, 0);
+        context->Draw(vertexCount, startVertex);
     }
 
     /// Draws one solid-color rectangle in window-space pixel coordinates.
@@ -3012,21 +3083,14 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
             Win32QuadVertex { DirectX::XMFLOAT3(rightNdc, topNdc, 0.0f), DirectX::XMFLOAT2(1.0f, 0.0f), DirectX::XMFLOAT4(1.0f, 1.0f, 1.0f, 1.0f) }
         };
 
-        ID3D11DeviceContext* context = Bootstrap.GetDeviceContext();
-        D3D11_MAPPED_SUBRESOURCE mappedResource {};
-        ThrowIfFailed(
-            context->Map(QuadVertexBuffer.Get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mappedResource),
-            "ID3D11DeviceContext::Map failed for the Windows rounded-rect quad vertex buffer.");
-        std::memcpy(mappedResource.pData, vertices.data(), sizeof(Win32QuadVertex) * vertices.size());
-        context->Unmap(QuadVertexBuffer.Get(), 0);
-
         Win32RoundedRectShaderConstants constants {};
         constants.DestRect = DirectX::XMFLOAT4(bounds.X, bounds.Y, bounds.Z, bounds.W);
         constants.Params1 = DirectX::XMFLOAT4(radius, borderThickness, 1.0f, static_cast<float>(corners));
         constants.FillColor = ConvertColor(fillColor);
         constants.BorderColor = ConvertColor(borderColor);
+        ID3D11DeviceContext* context = Bootstrap.GetDeviceContext();
         context->UpdateSubresource(RoundedRectConstantBuffer.Get(), 0, nullptr, &constants, 0, 0);
-        context->Draw(4, 0);
+        DrawQuadVertices(vertices.data(), static_cast<UINT>(vertices.size()));
     }
 
     /// Draws every queued 2D drawable for one camera.
@@ -3058,6 +3122,7 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
 
         CurrentViewport = ResolveViewport(camera);
         HasActiveViewport = true;
+        QuadVertexCursor = 0;
         ClipRectStack.clear();
         HasActiveClipRect = false;
         if (!HasWritten2DSummary) {
@@ -3365,6 +3430,8 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
         TextureResources.clear();
         EngineOwnedTextureResourceIds.clear();
         QuadVertexBuffer.Reset();
+        QuadVertexCapacity = 0;
+        QuadVertexCursor = 0;
         QuadInputLayout.Reset();
         QuadVertexShader.Reset();
         QuadPixelShader.Reset();

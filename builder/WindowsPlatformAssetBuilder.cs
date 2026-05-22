@@ -78,7 +78,7 @@ public sealed class WindowsPlatformAssetBuilder : IPlatformAssetBuilder {
         bool castsShadows = ReadOptionalBooleanField(request.FieldValues, "casts-shadow", true);
         bool receivesShadows = ReadOptionalBooleanField(request.FieldValues, "receives-shadow", true);
 
-        MaterialAsset materialAsset = new MaterialAsset {
+        ShaderMaterialAsset materialAsset = new ShaderMaterialAsset {
             Id = request.MaterialAssetId,
             ShaderAssetId = shaderAssetId,
             VertexProgram = vertexProgram,
