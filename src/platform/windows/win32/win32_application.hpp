@@ -4,6 +4,7 @@
 
 #include <array>
 #include <chrono>
+#include <cstdio>
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
@@ -345,6 +346,9 @@ namespace helengine::windows {
 
         /// Stores how many baseline heap snapshots were captured into the fixed baseline array.
         std::uint32_t DebugWin32HeapBaselineSnapshotCount;
+
+        /// Stores the raw allocation diagnostics log stream used to avoid iostream allocations while sampling.
+        mutable FILE* DebugAllocationLogFile;
 #endif
     };
 }

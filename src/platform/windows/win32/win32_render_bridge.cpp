@@ -24,13 +24,19 @@
 
 #if __has_include("CameraRenderSettings.hpp")
 #include "BuiltInMaterialIds.hpp"
+#include "BoxCollider3DComponent.hpp"
 #include "CameraRenderSettings.hpp"
+#include "Entity.hpp"
 #include "DirectionalLightComponent.hpp"
+#include "FontInfo.hpp"
 #if __has_include("FontAssetBinarySerializer.hpp")
 #include "FontAssetBinarySerializer.hpp"
 #endif
+#include "IRenderQueue2D.hpp"
+#include "IRenderQueue3D.hpp"
 #include "LightComponent.hpp"
 #include "LightDirectionUtility.hpp"
+#include "MaterialLayoutBinding.hpp"
 #if __has_include("MaterialConstantBufferAsset.hpp")
 #include "MaterialConstantBufferAsset.hpp"
 #endif
@@ -38,11 +44,19 @@
 #if __has_include("RuntimeDiagnosticsService.hpp")
 #include "RuntimeDiagnosticsService.hpp"
 #endif
+#include "ObjectManager.hpp"
+#include "RuntimeSceneLoadService.hpp"
+#include "RigidBody3DComponent.hpp"
 #if __has_include("RuntimeSceneAssetReferenceResolver.hpp")
 #include "RuntimeSceneAssetReferenceResolver.hpp"
 #endif
 #if __has_include("ShaderBinaryAsset.hpp")
 #include "ShaderBinaryAsset.hpp"
+#endif
+#include "ShaderProgramAsset.hpp"
+#include "runtime/native_exceptions.hpp"
+#if __has_include("ShaderRuntimeMaterialLoader.hpp")
+#include "ShaderRuntimeMaterialLoader.hpp"
 #endif
 #if __has_include("ShaderRuntimeMaterialAccess.hpp")
 #include "ShaderRuntimeMaterialAccess.hpp"
@@ -53,6 +67,9 @@
 #include "SpotLightComponent.hpp"
 #if __has_include("StandardMaterialTextureBindingDefaults.hpp")
 #include "StandardMaterialTextureBindingDefaults.hpp"
+#endif
+#if __has_include("TextureUtils.hpp")
+#include "TextureUtils.hpp"
 #endif
 #endif
 
@@ -79,6 +96,21 @@ namespace helengine::windows {
 
         /// Tracks whether the directional-shadow plaza tower face-view probe has already been written.
         bool HasWrittenPlazaTowerViewDebug = false;
+
+        /// Tracks whether the ground-cube probe ground transform has already been written.
+        bool HasWrittenGroundCubeProbeGroundDebug = false;
+
+        /// Tracks whether the ground-cube probe cube transform has already been written.
+        bool HasWrittenGroundCubeProbeCubeDebug = false;
+
+        /// Counts probe-ground submissions written to diagnostics so the trace stays bounded.
+        int GroundCubeProbeGroundDebugCount = 0;
+
+        /// Counts probe-cube submissions written to diagnostics so the trace stays bounded.
+        int GroundCubeProbeCubeDebugCount = 0;
+
+        /// Tracks the specific runtime entity instance chosen as the probe cube after the first matching frame.
+        Entity* GroundCubeProbeCubeEntity = nullptr;
 
         /// Counts 2D visitor dispatches for the first logged frame.
         int Logged2DVisitCount = 0;
@@ -196,6 +228,8 @@ namespace helengine::windows {
         constexpr const char* PointShadowTextureBindingName2 = "pointShadowTexture2";
         constexpr const char* PointShadowTextureBindingName3 = "pointShadowTexture3";
 
+        bool LoggedGeneratedCubeMeshData = false;
+
         /// Vertex shader used by the first native 3D Windows pass.
         constexpr const char* VertexShaderSource = R"(
 cbuffer TransformBuffer : register(b0) {
@@ -280,6 +314,10 @@ cbuffer ShadowBuffer : register(b2) {
     float4 ShadowLight3AtlasRect;
     float4 ShadowLight3Metadata;
     float4x4 ShadowLight3WorldToShadowClip;
+};
+
+cbuffer BaseColorBuffer : register(b3) {
+    float4 baseColor;
 };
 
 Texture2D ShadowAtlasTexture : register(t1);
@@ -373,7 +411,8 @@ float3 EvaluateForwardLight(
 }
 
 float4 PSMain(PSInput input) : SV_TARGET {
-    float3 surfaceColor = float3(0.78f, 0.80f, 0.84f);
+    float4 sampledBaseColor = baseColor;
+    float3 surfaceColor = sampledBaseColor.rgb;
     float3 ambientColor = float3(0.12f, 0.13f, 0.15f);
     float3 normal = normalize(input.WorldNormal);
     float3 viewDirection = normalize(CameraPosition.xyz - input.WorldPosition);
@@ -396,7 +435,7 @@ float4 PSMain(PSInput input) : SV_TARGET {
         color += EvaluateForwardLight(Light3ColorAndType, Light3DirectionAndShadow, Light3PositionAndRange, Light3SpotAngles, ShadowLight3AtlasRect, ShadowLight3Metadata, ShadowLight3WorldToShadowClip, surfaceColor, input.WorldPosition, normal, viewDirection);
     }
 
-    return float4(saturate(color), 1.0f);
+    return float4(saturate(color), sampledBaseColor.a);
 }
 )";
 
@@ -667,24 +706,56 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
         }
 
         /// Returns whether one entity transform matches the authored central directional-shadow plaza tower.
-        bool IsDirectionalShadowCentralTower(Entity* entity) {
-            if (entity == nullptr) {
-                return false;
-            }
+        bool IsDirectionalShadowCentralTower(Entity* entity) { 
+            if (entity == nullptr) { 
+                return false; 
+            } 
 
             const float3 position = entity->get_Position();
             const float3 scale = entity->get_Scale();
             return IsApproximately(position.X, 0.0f, 0.5f)
                 && IsApproximately(position.Y, 9.0f, 0.5f)
                 && IsApproximately(position.Z, -12.0f, 0.5f)
-                && IsApproximately(scale.X, 7.0f, 0.5f)
-                && IsApproximately(scale.Y, 18.0f, 0.5f)
-                && IsApproximately(scale.Z, 7.0f, 0.5f);
+                && IsApproximately(scale.X, 7.0f, 0.5f) 
+                && IsApproximately(scale.Y, 18.0f, 0.5f) 
+                && IsApproximately(scale.Z, 7.0f, 0.5f); 
+        } 
+
+        /// Returns whether one entity matches the authored ground cube used by the ground-cube probe diagnostic scene.
+        bool IsGroundCubeProbeGround(Entity* entity) {
+            if (entity == nullptr) {
+                return false;
+            }
+
+            const float3 position = entity->get_Position();
+            const float3 scale = entity->get_Scale();
+            return IsApproximately(position.X, 0.0f, 0.1f)
+                && IsApproximately(position.Y, -0.5f, 0.1f)
+                && IsApproximately(position.Z, 0.0f, 0.1f)
+                && IsApproximately(scale.X, 15.0f, 0.1f)
+                && IsApproximately(scale.Y, 1.0f, 0.1f)
+                && IsApproximately(scale.Z, 15.0f, 0.1f);
         }
 
-        /// Builds one stable generated identifier for a runtime texture that was created from embedded raw data.
-        std::string BuildGeneratedTextureResourceId() {
-            GeneratedTextureResourceId++;
+        /// Returns whether one entity matches the authored elevated cube used by the ground-cube probe diagnostic scene.
+        bool IsGroundCubeProbeCube(Entity* entity) {
+            if (entity == nullptr) {
+                return false;
+            }
+
+            const float3 position = entity->get_Position();
+            const float3 scale = entity->get_Scale();
+            return IsApproximately(position.X, 0.0f, 0.1f)
+                && position.Y > 0.0f
+                && IsApproximately(position.Z, 0.0f, 0.1f)
+                && IsApproximately(scale.X, 1.0f, 0.1f)
+                && IsApproximately(scale.Y, 1.0f, 0.1f)
+                && IsApproximately(scale.Z, 1.0f, 0.1f);
+        }
+ 
+        /// Builds one stable generated identifier for a runtime texture that was created from embedded raw data. 
+        std::string BuildGeneratedTextureResourceId() { 
+            GeneratedTextureResourceId++; 
             return "__generated_runtime_texture_" + std::to_string(GeneratedTextureResourceId);
         }
 
@@ -898,9 +969,48 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
                     + " live_model_vertex_buffer_bytes=" + std::to_string(LiveModelVertexBufferBytes)
                     + " live_model_index_buffer_bytes=" + std::to_string(LiveModelIndexBufferBytes),
                 LiveModelBufferCount);
+
+            if (!LoggedGeneratedCubeMeshData
+                && modelId == "engine:model:cube"
+                && data->Positions != nullptr
+                && data->Normals != nullptr
+                && data->Indices16 != nullptr
+                && data->Positions->Length >= 20
+                && data->Normals->Length >= 20
+                && data->Indices16->Length >= 30) {
+                LoggedGeneratedCubeMeshData = true;
+                const float3& topVertex0 = (*data->Positions)[16];
+                const float3& topVertex1 = (*data->Positions)[17];
+                const float3& topVertex2 = (*data->Positions)[18];
+                const float3& topVertex3 = (*data->Positions)[19];
+                const float3& topNormal0 = (*data->Normals)[16];
+                const float3& topNormal1 = (*data->Normals)[17];
+                const float3& topNormal2 = (*data->Normals)[18];
+                const float3& topNormal3 = (*data->Normals)[19];
+                RuntimeRenderDiagnostics::WriteHostEvent(
+                    "generated-cube-top-face",
+                    "v16=" + std::to_string(topVertex0.X) + "," + std::to_string(topVertex0.Y) + "," + std::to_string(topVertex0.Z)
+                        + " v17=" + std::to_string(topVertex1.X) + "," + std::to_string(topVertex1.Y) + "," + std::to_string(topVertex1.Z)
+                        + " v18=" + std::to_string(topVertex2.X) + "," + std::to_string(topVertex2.Y) + "," + std::to_string(topVertex2.Z)
+                        + " v19=" + std::to_string(topVertex3.X) + "," + std::to_string(topVertex3.Y) + "," + std::to_string(topVertex3.Z)
+                        + " n16=" + std::to_string(topNormal0.X) + "," + std::to_string(topNormal0.Y) + "," + std::to_string(topNormal0.Z)
+                        + " n17=" + std::to_string(topNormal1.X) + "," + std::to_string(topNormal1.Y) + "," + std::to_string(topNormal1.Z)
+                        + " n18=" + std::to_string(topNormal2.X) + "," + std::to_string(topNormal2.Y) + "," + std::to_string(topNormal2.Z)
+                        + " n19=" + std::to_string(topNormal3.X) + "," + std::to_string(topNormal3.Y) + "," + std::to_string(topNormal3.Z)
+                        + " i24=" + std::to_string((*data->Indices16)[24])
+                        + " i25=" + std::to_string((*data->Indices16)[25])
+                        + " i26=" + std::to_string((*data->Indices16)[26])
+                        + " i27=" + std::to_string((*data->Indices16)[27])
+                        + " i28=" + std::to_string((*data->Indices16)[28])
+                        + " i29=" + std::to_string((*data->Indices16)[29]));
+            }
         }
 
         return runtimeModel;
+    }
+
+    RuntimeMaterial* Win32RenderManager3D::BuildMaterialFromRawAsset(ContentManager* assetContentManager, std::string contentRootPath, std::string materialAssetPath) {
+        return ShaderRuntimeMaterialLoader::BuildMaterialFromRawAsset(this, assetContentManager, contentRootPath, materialAssetPath);
     }
 
     /// Builds a runtime material placeholder that keeps the packaged material identity.
@@ -1246,33 +1356,117 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
         float3 position = parent->get_Position();
 
         ::float4x4 rotation;
-        float4x4::CreateFromQuaternion(orientation, rotation);
+        float4x4::CreateFromQuaternion__ref0_out1(orientation, rotation);
 
         ::float4x4 size;
-        float4x4::CreateScale(scale.X, scale.Y, scale.Z, size);
+        float4x4::CreateScale__out3(scale.X, scale.Y, scale.Z, size);
 
         ::float4x4 rotationScale;
-        float4x4::Multiply(rotation, size, rotationScale);
+        float4x4::Multiply__ref0_ref1_out2(rotation, size, rotationScale);
 
         ::float4x4 translation;
-        float4x4::CreateTranslation(position, translation);
+        float4x4::CreateTranslation__ref0_out1(position, translation);
 
         ::float4x4 world;
-        float4x4::Multiply(rotationScale, translation, world);
+        float4x4::Multiply__ref0_ref1_out2(rotationScale, translation, world);
+
+        if (GroundCubeProbeGroundDebugCount < 16 && IsGroundCubeProbeGround(parent)) {
+            HasWrittenGroundCubeProbeGroundDebug = true;
+            GroundCubeProbeGroundDebugCount++;
+            AppendRenderDiagnosticsLine(
+                "ProbeGround frame=" + std::to_string(GroundCubeProbeGroundDebugCount)
+                + " world position="
+                + std::to_string(position.X) + "," + std::to_string(position.Y) + "," + std::to_string(position.Z)
+                + " scale="
+                + std::to_string(scale.X) + "," + std::to_string(scale.Y) + "," + std::to_string(scale.Z)
+                + " orientation="
+                + std::to_string(orientation.X) + "," + std::to_string(orientation.Y) + "," + std::to_string(orientation.Z) + "," + std::to_string(orientation.W)
+                + " rows="
+                + "[" + std::to_string(world.M11) + "," + std::to_string(world.M12) + "," + std::to_string(world.M13) + "," + std::to_string(world.M14) + "]"
+                + "[" + std::to_string(world.M21) + "," + std::to_string(world.M22) + "," + std::to_string(world.M23) + "," + std::to_string(world.M24) + "]"
+                + "[" + std::to_string(world.M31) + "," + std::to_string(world.M32) + "," + std::to_string(world.M33) + "," + std::to_string(world.M34) + "]"
+                + "[" + std::to_string(world.M41) + "," + std::to_string(world.M42) + "," + std::to_string(world.M43) + "," + std::to_string(world.M44) + "]");
+            List<Component*>* components = parent->get_Components();
+            for (int componentIndex = 0; componentIndex < components->Count(); componentIndex++) {
+                Component* component = components->get_Item(componentIndex);
+                if (RigidBody3DComponent* rigidBody = dynamic_cast<RigidBody3DComponent*>(component)) {
+                    const float3 linearVelocity = rigidBody->get_LinearVelocity();
+                    const float3 angularVelocity = rigidBody->get_AngularVelocity();
+                    AppendRenderDiagnosticsLine(
+                        "ProbeGround rigidbody kind=" + std::to_string(static_cast<int>(rigidBody->get_BodyKind()))
+                        + " gravity=" + std::to_string(rigidBody->get_UseGravity() ? 1 : 0)
+                        + " mass=" + std::to_string(rigidBody->get_Mass())
+                        + " linear=" + std::to_string(linearVelocity.X) + "," + std::to_string(linearVelocity.Y) + "," + std::to_string(linearVelocity.Z)
+                        + " angular=" + std::to_string(angularVelocity.X) + "," + std::to_string(angularVelocity.Y) + "," + std::to_string(angularVelocity.Z));
+                } else if (BoxCollider3DComponent* boxCollider = dynamic_cast<BoxCollider3DComponent*>(component)) {
+                    const float3 sizeValue = boxCollider->get_Size();
+                    AppendRenderDiagnosticsLine(
+                        "ProbeGround collider size="
+                        + std::to_string(sizeValue.X) + "," + std::to_string(sizeValue.Y) + "," + std::to_string(sizeValue.Z)
+                        + " layer=" + std::to_string(boxCollider->get_CollisionLayer())
+                        + " mask=" + std::to_string(boxCollider->get_CollisionMask())
+                        + " trigger=" + std::to_string(boxCollider->get_IsTrigger() ? 1 : 0));
+                }
+            }
+        }
+
+        if (GroundCubeProbeCubeEntity == nullptr && IsGroundCubeProbeCube(parent)) {
+            GroundCubeProbeCubeEntity = parent;
+        }
+
+        if (GroundCubeProbeCubeDebugCount < 16 && parent == GroundCubeProbeCubeEntity) {
+            HasWrittenGroundCubeProbeCubeDebug = true;
+            GroundCubeProbeCubeDebugCount++;
+            AppendRenderDiagnosticsLine(
+                "ProbeCube frame=" + std::to_string(GroundCubeProbeCubeDebugCount)
+                + " world position="
+                + std::to_string(position.X) + "," + std::to_string(position.Y) + "," + std::to_string(position.Z)
+                + " scale="
+                + std::to_string(scale.X) + "," + std::to_string(scale.Y) + "," + std::to_string(scale.Z)
+                + " orientation="
+                + std::to_string(orientation.X) + "," + std::to_string(orientation.Y) + "," + std::to_string(orientation.Z) + "," + std::to_string(orientation.W)
+                + " rows="
+                + "[" + std::to_string(world.M11) + "," + std::to_string(world.M12) + "," + std::to_string(world.M13) + "," + std::to_string(world.M14) + "]"
+                + "[" + std::to_string(world.M21) + "," + std::to_string(world.M22) + "," + std::to_string(world.M23) + "," + std::to_string(world.M24) + "]"
+                + "[" + std::to_string(world.M31) + "," + std::to_string(world.M32) + "," + std::to_string(world.M33) + "," + std::to_string(world.M34) + "]"
+                + "[" + std::to_string(world.M41) + "," + std::to_string(world.M42) + "," + std::to_string(world.M43) + "," + std::to_string(world.M44) + "]");
+            List<Component*>* components = parent->get_Components();
+            for (int componentIndex = 0; componentIndex < components->Count(); componentIndex++) {
+                Component* component = components->get_Item(componentIndex);
+                if (RigidBody3DComponent* rigidBody = dynamic_cast<RigidBody3DComponent*>(component)) {
+                    const float3 linearVelocity = rigidBody->get_LinearVelocity();
+                    const float3 angularVelocity = rigidBody->get_AngularVelocity();
+                    AppendRenderDiagnosticsLine(
+                        "ProbeCube rigidbody kind=" + std::to_string(static_cast<int>(rigidBody->get_BodyKind()))
+                        + " gravity=" + std::to_string(rigidBody->get_UseGravity() ? 1 : 0)
+                        + " mass=" + std::to_string(rigidBody->get_Mass())
+                        + " linear=" + std::to_string(linearVelocity.X) + "," + std::to_string(linearVelocity.Y) + "," + std::to_string(linearVelocity.Z)
+                        + " angular=" + std::to_string(angularVelocity.X) + "," + std::to_string(angularVelocity.Y) + "," + std::to_string(angularVelocity.Z));
+                } else if (BoxCollider3DComponent* boxCollider = dynamic_cast<BoxCollider3DComponent*>(component)) {
+                    const float3 sizeValue = boxCollider->get_Size();
+                    AppendRenderDiagnosticsLine(
+                        "ProbeCube collider size="
+                        + std::to_string(sizeValue.X) + "," + std::to_string(sizeValue.Y) + "," + std::to_string(sizeValue.Z)
+                        + " layer=" + std::to_string(boxCollider->get_CollisionLayer())
+                        + " mask=" + std::to_string(boxCollider->get_CollisionMask())
+                        + " trigger=" + std::to_string(boxCollider->get_IsTrigger() ? 1 : 0));
+                }
+            }
+        }
 
         ::float4x4 inverseTransposeNormalMatrix;
-        float4x4::InverseTranspose(world, inverseTransposeNormalMatrix);
+        float4x4::InverseTranspose__ref0_out1(world, inverseTransposeNormalMatrix);
         ::float4x4 uploadedNormalMatrix;
-        float4x4::Transpose(inverseTransposeNormalMatrix, uploadedNormalMatrix);
+        float4x4::Transpose__ref0_out1(inverseTransposeNormalMatrix, uploadedNormalMatrix);
 
         ::float4x4 worldViewProjection;
-        float4x4::Multiply(world, CurrentViewProjection, worldViewProjection);
+        float4x4::Multiply__ref0_ref1_out2(world, CurrentViewProjection, worldViewProjection);
 
         ::float4x4 transposedWorldViewProjection;
-        float4x4::Transpose(worldViewProjection, transposedWorldViewProjection);
+        float4x4::Transpose__ref0_out1(worldViewProjection, transposedWorldViewProjection);
 
         ::float4x4 transposedWorld;
-        float4x4::Transpose(world, transposedWorld);
+        float4x4::Transpose__ref0_out1(world, transposedWorld);
 
         if (Logged3DVisitCount < 4) {
             AppendRenderSnapshotLine(
@@ -1707,7 +1901,7 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
         CurrentCameraPosition = cameraPosition;
 
         ::float4x4 view;
-        float4x4::CreateLookAt(cameraPosition, cameraTarget, cameraUp, view);
+        float4x4::CreateLookAt__ref0_ref1_ref2_out3(cameraPosition, cameraTarget, cameraUp, view);
         const float aspectRatio = viewport.Height > 0.0f ? viewport.Width / viewport.Height : 1.0f;
         constexpr float CameraFieldOfViewRadians = 0.78539816339f;
         float nearPlaneDistance = camera->get_NearPlaneDistance();
@@ -1721,8 +1915,8 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
         }
 
         ::float4x4 projection;
-        float4x4::CreatePerspectiveFieldOfView(CameraFieldOfViewRadians, aspectRatio, nearPlaneDistance, farPlaneDistance, projection);
-        float4x4::Multiply(view, projection, CurrentViewProjection);
+        float4x4::CreatePerspectiveFieldOfView__out4(CameraFieldOfViewRadians, aspectRatio, nearPlaneDistance, farPlaneDistance, projection);
+        float4x4::Multiply__ref0_ref1_out2(view, projection, CurrentViewProjection);
 
         std::vector<LightComponent*> visibleLights = SnapshotVisibleLights(camera);
         if (!HasWrittenRenderSnapshot) {
@@ -1933,7 +2127,7 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
         if (light != nullptr) {
             ::float4x4 worldToShadowClip = BuildDirectionalShadowViewProjection(camera, light);
             ::float4x4 transposedWorldToShadowClip;
-            float4x4::Transpose(worldToShadowClip, transposedWorldToShadowClip);
+            float4x4::Transpose__ref0_out1(worldToShadowClip, transposedWorldToShadowClip);
 
             constants.ShadowMetadata = DirectX::XMFLOAT4(
                 1.0f,
@@ -2034,6 +2228,10 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
             return;
         }
 
+        if (!ShouldMaterialCastShadows(drawable->get_Material())) {
+            return;
+        }
+
         RuntimeModel* modelBase = drawable->get_Model();
         if (modelBase == nullptr) {
             return;
@@ -2063,19 +2261,19 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
         float3 position = parent->get_Position();
 
         ::float4x4 rotation;
-        float4x4::CreateFromQuaternion(orientation, rotation);
+        float4x4::CreateFromQuaternion__ref0_out1(orientation, rotation);
         ::float4x4 size;
-        float4x4::CreateScale(scale.X, scale.Y, scale.Z, size);
+        float4x4::CreateScale__out3(scale.X, scale.Y, scale.Z, size);
         ::float4x4 rotationScale;
-        float4x4::Multiply(rotation, size, rotationScale);
+        float4x4::Multiply__ref0_ref1_out2(rotation, size, rotationScale);
         ::float4x4 translation;
-        float4x4::CreateTranslation(position, translation);
+        float4x4::CreateTranslation__ref0_out1(position, translation);
         ::float4x4 world;
-        float4x4::Multiply(rotationScale, translation, world);
+        float4x4::Multiply__ref0_ref1_out2(rotationScale, translation, world);
         ::float4x4 worldViewProjection;
-        float4x4::Multiply(world, lightViewProjection, worldViewProjection);
+        float4x4::Multiply__ref0_ref1_out2(world, lightViewProjection, worldViewProjection);
         ::float4x4 transposedWorldViewProjection;
-        float4x4::Transpose(worldViewProjection, transposedWorldViewProjection);
+        float4x4::Transpose__ref0_out1(worldViewProjection, transposedWorldViewProjection);
 
         Win32ShadowTransformConstants constants {};
         constants.WorldViewProjection = StoreMatrix(transposedWorldViewProjection);
@@ -2086,6 +2284,20 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
         } else {
             context->Draw(model->VertexCount, 0);
         }
+    }
+
+    /// Returns whether one runtime material should contribute geometry to the directional shadow pass.
+    bool Win32RenderManager3D::ShouldMaterialCastShadows(RuntimeMaterial* material) const {
+        if (material == nullptr) {
+            return true;
+        }
+
+        RuntimeMaterial* rootMaterial = material->ResolveRootMaterial();
+        if (rootMaterial == nullptr) {
+            throw new InvalidOperationException("Runtime materials must resolve to a root material before shadow rendering.");
+        }
+
+        return rootMaterial->get_CastsShadows();
     }
 
     /// Builds the light-space view-projection matrix used by the active directional shadow pass.
@@ -2112,12 +2324,12 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
         float3 up = std::abs(float3::Dot(lightDirection, defaultUp)) > 0.99f ? fallbackUp : defaultUp;
 
         ::float4x4 view;
-        float4x4::CreateLookAt(lightPosition, target, up, view);
+        float4x4::CreateLookAt__ref0_ref1_ref2_out3(lightPosition, target, up, view);
         float halfDistance = shadowDistance * 0.5f;
         ::float4x4 projection;
-        float4x4::CreateOrthographicOffCenter(-halfDistance, halfDistance, -halfDistance, halfDistance, 0.1f, depthRange, projection);
+        float4x4::CreateOrthographicOffCenter__out6(-halfDistance, halfDistance, -halfDistance, halfDistance, 0.1f, depthRange, projection);
         ::float4x4 worldToShadowClip;
-        float4x4::Multiply(view, projection, worldToShadowClip);
+        float4x4::Multiply__ref0_ref1_out2(view, projection, worldToShadowClip);
         return worldToShadowClip;
     }
 
@@ -2133,7 +2345,7 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
 
         ::float4x4 identity = float4x4::get_Identity();
         ::float4x4 transposedIdentity;
-        float4x4::Transpose(identity, transposedIdentity);
+        float4x4::Transpose__ref0_out1(identity, transposedIdentity);
 
         Win32TransformConstants constants {};
         constants.WorldViewProjection = StoreMatrix(transposedIdentity);
@@ -2407,6 +2619,11 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
             Array<MaterialLayoutBinding*>* textureBindings = layout->get_TextureBindings();
             if (textureBindings != nullptr && textureBindings->Length > 0) {
                 BindMaterialTexture(material);
+            } else {
+                ID3D11ShaderResourceView* nullResourceView = nullptr;
+                context->PSSetShaderResources(0, 1, &nullResourceView);
+                ID3D11SamplerState* nullSampler = nullptr;
+                context->PSSetSamplers(0, 1, &nullSampler);
             }
         }
     }
@@ -2441,7 +2658,7 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
             }
 
             Array<uint8_t>* data = nullptr;
-            if (!shaderRuntimeMaterial->TryResolveConstantBufferData(bindingName, data) || data == nullptr || data->Length == 0) {
+            if (!shaderRuntimeMaterial->TryResolveConstantBufferData__out1(bindingName, data) || data == nullptr || data->Length == 0) {
                 ID3D11Buffer* nullBuffer = nullptr;
                 context->VSSetConstantBuffers(static_cast<UINT>(binding->get_Slot()), 1, &nullBuffer);
                 context->PSSetConstantBuffers(static_cast<UINT>(binding->get_Slot()), 1, &nullBuffer);
@@ -2465,6 +2682,17 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
 
         ShaderRuntimeMaterial* shaderRuntimeMaterial = RequireShaderRuntimeMaterial(material);
         RuntimeTexture* texture = shaderRuntimeMaterial->ResolveTexture();
+#if __has_include("StandardMaterialTextureBindingDefaults.hpp")
+        if (texture == nullptr) {
+            MaterialLayout* layout = shaderRuntimeMaterial->get_Layout();
+            if (layout != nullptr) {
+                int32_t diffuseTextureBindingIndex = layout->FindTextureBindingIndex(StandardMaterialTextureBindingDefaults::DiffuseTextureBindingName);
+                if (diffuseTextureBindingIndex >= 0) {
+                    texture = TextureUtils::get_PixelTexture();
+                }
+            }
+        }
+#endif
         ID3D11ShaderResourceView* resourceView = ResolveTextureResourceView(texture);
         ID3D11DeviceContext* context = Bootstrap.GetDeviceContext();
         context->PSSetShaderResources(0, 1, &resourceView);
@@ -3219,13 +3447,15 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
                 roundedRectCount++;
                 const int32_t payloadIndex = commandList->GetRoundedRectPayloadIndex(commandIndex);
                 const float4 bounds = commandList->GetRoundedRectBounds(payloadIndex);
+
                 if (!HasWritten2DDraw) {
                     AppendRenderDiagnosticsLine(
                         "2d.command rounded_rect bounds="
                         + std::to_string(bounds.X) + ","
                         + std::to_string(bounds.Y) + ","
                         + std::to_string(bounds.Z) + ","
-                        + std::to_string(bounds.W));
+                        + std::to_string(bounds.W)
+                        );
                     HasWritten2DDraw = true;
                 }
 

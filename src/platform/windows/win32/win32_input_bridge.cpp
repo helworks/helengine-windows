@@ -75,7 +75,7 @@ namespace helengine::windows {
         HWND windowHandle = Window->GetHandle();
         ScrollWheelAccumulator += Window->ConsumeMouseWheelDelta();
         State.set_ScrollWheelValue(ScrollWheelAccumulator);
-        PointerWrapDeltaOffset = int2(0, 0);
+        PointerWrapDeltaOffset = helengine_int2(0, 0);
 
         POINT cursorPoint {};
         if (!::GetCursorPos(&cursorPoint)) {
@@ -164,7 +164,7 @@ namespace helengine::windows {
 
         State.set_X(wrappedX);
         State.set_Y(wrappedY);
-        PointerWrapDeltaOffset = int2(deltaOffsetX, deltaOffsetY);
+        PointerWrapDeltaOffset = helengine_int2(deltaOffsetX, deltaOffsetY);
         SetPosition(wrappedX, wrappedY);
     }
 

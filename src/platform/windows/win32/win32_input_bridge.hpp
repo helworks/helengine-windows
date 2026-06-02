@@ -11,7 +11,7 @@
 #include "KeyboardState.hpp"
 #include "Keys.hpp"
 #include "MouseState.hpp"
-#include "int2.hpp"
+#include "helengine_helengine_int2.hpp"
 
 #include "platform/windows/win32/win32_window.hpp"
 
@@ -66,6 +66,6 @@ namespace helengine::windows {
         bool ReceiveInputInBackground;
 
         /// Stores the delta offset produced by the most recent wrap.
-        int2 PointerWrapDeltaOffset;
+        helengine_int2 PointerWrapDeltaOffset;
     };
 }

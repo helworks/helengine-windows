@@ -20,6 +20,7 @@
 #include <iomanip>
 #include <iostream>
 #include <malloc.h>
+#include <memory>
 #include <mutex>
 #include <new>
 #include <sstream>
@@ -43,11 +44,15 @@
 #include "Asset.hpp"
 #include "AssetSerializer.hpp"
 #include "Core.hpp"
+#include "CoreInitializationOptions.hpp"
+#include "ObjectManager.hpp"
 #include "Logger.hpp"
 #include "PlatformInfo.hpp"
 #include "RenderManager2D.hpp"
 #include "RenderManager3D.hpp"
+#include "RuntimeSceneLoadService.hpp"
 #include "SceneAsset.hpp"
+#include "SceneManager.hpp"
 #include "RuntimeSceneCatalog.hpp"
 #include "RuntimeSceneCatalogEntry.hpp"
 #include "runtime/runtime_startup_manifest.hpp"
@@ -67,8 +72,24 @@
 #if __has_include("FontAssetBinarySerializer.hpp")
 #include "FontAssetBinarySerializer.hpp"
 #endif
+#if __has_include("FontAsset.hpp")
+#include "FontAsset.hpp"
+#endif
+#if __has_include("FPSComponent.hpp")
+#include "FPSComponent.hpp"
+#endif
+#if __has_include("SceneEntityAsset.hpp")
+#include "SceneEntityAsset.hpp"
+#endif
+#if __has_include("SceneComponentAssetRecord.hpp")
+#include "SceneComponentAssetRecord.hpp"
+#endif
 #if __has_include("RuntimeSceneAssetReferenceResolver.hpp")
 #include "RuntimeSceneAssetReferenceResolver.hpp"
+#endif
+#if __has_include("Physics3DRuntimeComponentRegistration.hpp")
+#include "Physics3DRuntimeComponentRegistration.hpp"
+#define HELENGINE_WINDOWS_HAS_PHYSICS3D_RUNTIME 1
 #endif
 #endif
 
@@ -97,7 +118,7 @@ namespace helengine::windows {
         constexpr bool EnableDebugWin32HeapSampling = false;
 
         /// Controls whether CRT normal-block allocations are aggregated by live call stack deltas.
-        constexpr bool EnableDebugAllocationCallsiteTracking = false;
+        constexpr bool EnableDebugAllocationCallsiteTracking = true;
 
         /// Maximum number of frames retained for one tracked allocation call stack.
         constexpr USHORT DebugAllocationTrackedFrameCapacity = 20;
@@ -151,6 +172,12 @@ namespace helengine::windows {
 
         /// Temporarily suppresses allocation-hook bookkeeping while diagnostics formatting runs.
         bool DebugAllocationCallsiteTrackingSuspended = false;
+
+        /// Routes resolved allocation-attribution stack frames into the allocation log while attribution is being emitted.
+        bool DebugAllocationStackFrameLoggingActive = false;
+
+        /// Writes CRT memory-dump report text directly to the allocation log without allocating formatting buffers.
+        bool DebugAllocationRawReportLoggingActive = false;
 
         /// Heap used to allocate fixed-capacity tracking tables without recursing through the CRT debug heap.
         HANDLE DebugAllocationCallsiteTrackerHeap = nullptr;
@@ -216,7 +243,7 @@ namespace helengine::windows {
             DebugTrackedAllocationRequest* firstTombstone = nullptr;
             for (std::size_t probeOffset = 0; probeOffset < DebugAllocationTrackedRequestCapacity; probeOffset++) {
                 DebugTrackedAllocationRequest* entry = &DebugTrackedAllocationRequests[(initialIndex + probeOffset) & (DebugAllocationTrackedRequestCapacity - 1)];
-                if (entry->State == 1 && entry->RequestNumber == requestNumber) {
+                if ((entry->State == 1 || entry->State == 3) && entry->RequestNumber == requestNumber) {
                     return entry;
                 }
 
@@ -297,7 +324,7 @@ namespace helengine::windows {
             }
 
             std::array<void*, DebugAllocationTrackedFrameCapacity> frames {};
-            USHORT frameCount = CaptureStackBackTrace(2, DebugAllocationTrackedFrameCapacity, frames.data(), nullptr);
+            USHORT frameCount = CaptureStackBackTrace(0, DebugAllocationTrackedFrameCapacity, frames.data(), nullptr);
             if (frameCount == 0) {
                 return;
             }
@@ -309,7 +336,7 @@ namespace helengine::windows {
                 return;
             }
 
-            if (requestEntry->State == 1 && requestEntry->StackIndex < DebugAllocationTrackedStackCapacity) {
+            if ((requestEntry->State == 1 || requestEntry->State == 3) && requestEntry->StackIndex < DebugAllocationTrackedStackCapacity) {
                 DebugTrackedAllocationStack* previousStack = &DebugTrackedAllocationStacks[requestEntry->StackIndex];
                 if (previousStack->LiveBytes >= requestEntry->Size) {
                     previousStack->LiveBytes -= requestEntry->Size;
@@ -334,7 +361,9 @@ namespace helengine::windows {
         /// Removes one CRT normal-block allocation from the live request tracker.
         void UntrackDebugAllocationCallsite(long requestNumber) {
             DebugTrackedAllocationRequest* requestEntry = FindTrackedAllocationRequestSlot(requestNumber, false);
-            if (requestEntry == nullptr || requestEntry->State != 1 || requestEntry->StackIndex >= DebugAllocationTrackedStackCapacity) {
+            if (requestEntry == nullptr ||
+                (requestEntry->State != 1 && requestEntry->State != 3) ||
+                requestEntry->StackIndex >= DebugAllocationTrackedStackCapacity) {
                 return;
             }
 
@@ -354,6 +383,21 @@ namespace helengine::windows {
             requestEntry->State = 2;
         }
 
+        /// Resolves the allocation request number stored in the CRT debug block that owns the supplied user pointer.
+        long ResolveDebugAllocationRequestNumber(void* userData, int blockType) {
+            if (userData == nullptr) {
+                return 0;
+            }
+
+            size_t blockSize = _msize_dbg(userData, blockType);
+            long resolvedRequestNumber = 0;
+            if (_CrtIsMemoryBlock(userData, blockSize, &resolvedRequestNumber, nullptr, nullptr) == FALSE) {
+                return 0;
+            }
+
+            return resolvedRequestNumber;
+        }
+
         /// CRT debug allocation hook that attributes live normal-block deltas to call stacks.
         int __cdecl DebugTrackedAllocationHook(
             int allocType,
@@ -363,7 +407,6 @@ namespace helengine::windows {
             long requestNumber,
             const unsigned char* filename,
             int lineNumber) {
-            (void)userData;
             (void)filename;
             (void)lineNumber;
 
@@ -378,9 +421,14 @@ namespace helengine::windows {
 
             DebugAllocationCallsiteTrackingReentry = true;
             if (allocType == _HOOK_ALLOC || allocType == _HOOK_REALLOC) {
+                if (allocType == _HOOK_REALLOC) {
+                    long existingRequestNumber = ResolveDebugAllocationRequestNumber(userData, blockType);
+                    UntrackDebugAllocationCallsite(existingRequestNumber);
+                }
                 TrackDebugAllocationCallsite(requestNumber, size);
             } else if (allocType == _HOOK_FREE) {
-                UntrackDebugAllocationCallsite(requestNumber);
+                long existingRequestNumber = ResolveDebugAllocationRequestNumber(userData, blockType);
+                UntrackDebugAllocationCallsite(existingRequestNumber);
             }
             DebugAllocationCallsiteTrackingReentry = false;
             return TRUE;
@@ -441,13 +489,20 @@ namespace helengine::windows {
           DebugAllocationBaselineState(),
           DebugWin32HeapBaseline(),
           DebugWin32HeapBaselineSnapshots(),
-          DebugWin32HeapBaselineSnapshotCount(0)
+          DebugWin32HeapBaselineSnapshotCount(0),
+          DebugAllocationLogFile(nullptr)
 #endif
     {
     }
 
     /// Releases native bootstrap objects after the application loop finishes.
     Win32Application::~Win32Application() {
+#if defined(HELENGINE_WINDOWS_DEBUG_RUNTIME_DIAGNOSTICS)
+        if (DebugAllocationLogFile != nullptr) {
+            std::fclose(DebugAllocationLogFile);
+            DebugAllocationLogFile = nullptr;
+        }
+#endif
 #if __has_include("Core.hpp")
         if (EngineCore != nullptr) {
             EngineCore->Dispose();
@@ -595,6 +650,10 @@ namespace helengine::windows {
 
         PlatformInfo* platformInfo = BuildRuntimePlatformInfo();
         EngineCore->Initialize(EngineRenderManager3D, EngineRenderManager2D, EngineInputBackend, platformInfo, options);
+#if defined(HELENGINE_WINDOWS_HAS_PHYSICS3D_RUNTIME)
+        Physics3DRuntimeComponentRegistration::Register(EngineCore);
+        WriteLifecycleLog("3D physics runtime registered.");
+#endif
 #if defined(HELENGINE_WINDOWS_DEBUG_RUNTIME_DIAGNOSTICS)
         EnsureDebugAllocationCallsiteTrackerInitialized();
 #endif
@@ -727,7 +786,12 @@ namespace helengine::windows {
             messageBuilder << " (" << lineInfo.FileName << ":" << lineInfo.LineNumber << ")";
         }
 
-        WriteLifecycleLog(messageBuilder.str().c_str());
+        std::string message = messageBuilder.str();
+        if (DebugAllocationStackFrameLoggingActive) {
+            WriteDebugAllocationLog(message.c_str());
+        } else {
+            WriteLifecycleLog(message.c_str());
+        }
     }
 
     /// Captures the current thread call stack and writes it into the lifecycle log.
@@ -952,7 +1016,20 @@ namespace helengine::windows {
 
     /// Receives CRT debug-report text and mirrors it into the lifecycle log.
     int __cdecl Win32Application::HandleDebugReport(int reportType, char* message, int* returnValue) {
-        (void)returnValue;
+        if (DebugAllocationRawReportLoggingActive) {
+            if (ActiveCrashLoggingApplication != nullptr &&
+                ActiveCrashLoggingApplication->DebugAllocationLogFile != nullptr &&
+                message != nullptr) {
+                std::fprintf(ActiveCrashLoggingApplication->DebugAllocationLogFile, "%s", message);
+                std::fflush(ActiveCrashLoggingApplication->DebugAllocationLogFile);
+            }
+
+            if (returnValue != nullptr) {
+                *returnValue = 0;
+            }
+
+            return TRUE;
+        }
 
         if (ActiveCrashLoggingApplication != nullptr && message != nullptr) {
             std::ostringstream messageBuilder;
@@ -1192,6 +1269,7 @@ namespace helengine::windows {
 
         List<std::string>* sceneIds = EngineCore->get_SceneManager()->GetLoadedSceneIds();
         if (sceneIds == nullptr || sceneIds->get_Count() == 0) {
+            delete sceneIds;
             return std::string();
         }
 
@@ -1204,7 +1282,9 @@ namespace helengine::windows {
             builder << (*sceneIds)[index];
         }
 
-        return builder.str();
+        std::string trackedSceneIds = builder.str();
+        delete sceneIds;
+        return trackedSceneIds;
 #else
         return std::string();
 #endif
@@ -1397,10 +1477,10 @@ namespace helengine::windows {
         }
 
         RuntimeRenderDiagnostics::RecordPackagedAssetLoad(relativePath, fullPath.string());
-        FileStream* stream = File::OpenRead(fullPath.string());
+        std::unique_ptr<FileStream> stream(File::OpenRead(fullPath.string()));
         WriteLifecycleLog("Packaged asset file opened.");
         WriteLifecycleLog("Deserializing packaged asset.");
-        Asset* asset = AssetSerializer::Deserialize(stream);
+        Asset* asset = AssetSerializer::Deserialize(stream.get());
         WriteLifecycleLog("Packaged asset deserialized.");
         WriteLifecycleLog("Packaged asset load completed.");
         return asset;
@@ -1498,6 +1578,22 @@ namespace helengine::windows {
         double fps = static_cast<double>(FramesSinceLastStatisticLog) / seconds;
         double averageFrameTimeMs = (seconds * 1000.0) / static_cast<double>(FramesSinceLastStatisticLog);
 
+#if defined(HELENGINE_WINDOWS_DEBUG_RUNTIME_DIAGNOSTICS)
+        if (EnableDebugAllocationTracking) {
+            if (!DebugAllocationBaselineCaptured) {
+                CaptureDebugAllocationBaseline();
+            } else {
+                LogDebugAllocationDelta();
+            }
+        }
+#endif
+
+        if (!EnableFrameStatisticLifecycleLogging && !EnableFrameStatisticRuntimeSampling) {
+            FrameStatisticStartTime = now;
+            FramesSinceLastStatisticLog = 0;
+            return;
+        }
+
         std::ostringstream messageBuilder;
         messageBuilder << std::fixed << std::setprecision(1)
             << "FPS: " << fps
@@ -1524,16 +1620,6 @@ namespace helengine::windows {
         if (EnableFrameStatisticLifecycleLogging) {
             WriteLifecycleLog(message.c_str());
         }
-
-#if defined(HELENGINE_WINDOWS_DEBUG_RUNTIME_DIAGNOSTICS)
-        if (EnableDebugAllocationTracking) {
-            if (!DebugAllocationBaselineCaptured) {
-                CaptureDebugAllocationBaseline();
-            } else {
-                LogDebugAllocationDelta();
-            }
-        }
-#endif
 
         FrameStatisticStartTime = now;
         FramesSinceLastStatisticLog = 0;
@@ -1586,10 +1672,27 @@ namespace helengine::windows {
             static_cast<unsigned long long>(DebugWin32HeapBaseline.RegionReservedBytes),
             static_cast<unsigned long long>(DebugWin32HeapBaseline.RegionUncommittedBytes));
         WriteDebugAllocationLog(message);
+        _CrtMemCheckpoint(&DebugAllocationBaselineState);
+        if (EnableDebugAllocationCallsiteTracking && DebugTrackedAllocationStacks != nullptr) {
+            for (std::size_t stackIndex = 0; stackIndex < DebugAllocationTrackedStackCapacity; stackIndex++) {
+                DebugTrackedAllocationStack* stackEntry = &DebugTrackedAllocationStacks[stackIndex];
+                if (!stackEntry->Occupied) {
+                    continue;
+                }
+
+                stackEntry->BaselineLiveBytes = stackEntry->LiveBytes;
+                stackEntry->BaselineLiveAllocations = stackEntry->LiveAllocations;
+            }
+        }
     }
 
     /// Logs the live CRT debug heap delta relative to the captured steady-state baseline.
     void Win32Application::LogDebugAllocationDelta() {
+        static std::uint32_t DebugAllocationDeltaLogCount = 0;
+        static bool DebugAllocationMenuBaselineCaptured = false;
+        static int DebugAllocationMenuDeltaDumpCount = 0;
+        static long DebugAllocationLastDumpedNormalBlocks = 0;
+        DebugAllocationDeltaLogCount++;
         _CrtMemState currentState {};
         _CrtMemState deltaState {};
         _CrtMemCheckpoint(&currentState);
@@ -1622,11 +1725,102 @@ namespace helengine::windows {
             return;
         }
 
+        int ownedFontReferenceCount = -1;
+        int ownedTextureReferenceCount = -1;
+        int ownedModelReferenceCount = -1;
+        int ownedMaterialReferenceCount = -1;
+        int entityCount = -1;
+        int updateableCount = -1;
+        int entityCapacity = -1;
+        int updateableCapacity = -1;
+        int drawable2DCapacity = -1;
+        int drawable3DCapacity = -1;
+        int interactableCapacity = -1;
+        int pendingUpdateOperationCount = -1;
+        int pendingUpdateOperationCapacity = -1;
+        int liveFontAssetCount = -1;
+        int constructedFontAssetCount = -1;
+        int disposedFontAssetCount = -1;
+        int liveFontCharacterCount = -1;
+        int liveSceneEntityAssetCount = -1;
+        int liveSceneComponentRecordCount = -1;
+        int activeFpsComponentCount = -1;
+        RuntimeRenderCounters renderCounters = BuildRenderCounters();
+#if __has_include("Core.hpp")
+        if (EngineCore != nullptr && EngineCore->get_SceneManager() != nullptr) {
+            SceneManager* sceneManager = EngineCore->get_SceneManager();
+            ownedFontReferenceCount = sceneManager->get_ActiveOwnedFontReferenceCount();
+            ownedTextureReferenceCount = sceneManager->get_ActiveOwnedTextureReferenceCount();
+            ownedModelReferenceCount = sceneManager->get_ActiveOwnedModelReferenceCount();
+            ownedMaterialReferenceCount = sceneManager->get_ActiveOwnedMaterialReferenceCount();
+        }
+        if (EngineCore != nullptr && EngineCore->get_ObjectManager() != nullptr) {
+            ObjectManager* objectManager = EngineCore->get_ObjectManager();
+            entityCount = objectManager->get_Entities() != nullptr ? objectManager->get_Entities()->get_Count() : -1;
+            updateableCount = objectManager->get_Updateables() != nullptr ? objectManager->get_Updateables()->get_Count() : -1;
+            entityCapacity = objectManager->get_Entities() != nullptr ? objectManager->get_Entities()->get_Capacity() : -1;
+            updateableCapacity = objectManager->get_Updateables() != nullptr ? objectManager->get_Updateables()->get_Capacity() : -1;
+            drawable2DCapacity = objectManager->get_Drawables2D() != nullptr ? objectManager->get_Drawables2D()->get_Capacity() : -1;
+            drawable3DCapacity = objectManager->get_Drawables3D() != nullptr ? objectManager->get_Drawables3D()->get_Capacity() : -1;
+            interactableCapacity = objectManager->get_Interactables() != nullptr ? objectManager->get_Interactables()->get_Capacity() : -1;
+            pendingUpdateOperationCount = objectManager->get_PendingUpdateOperationCount();
+            pendingUpdateOperationCapacity = objectManager->get_PendingUpdateOperationCapacity();
+        }
+#endif
+#if __has_include("FontAsset.hpp")
+        liveFontAssetCount = FontAsset::get_LiveInstanceCount();
+        constructedFontAssetCount = FontAsset::get_ConstructedInstanceCount();
+        disposedFontAssetCount = FontAsset::get_DisposedInstanceCount();
+        liveFontCharacterCount = FontAsset::get_LiveCharacterCount();
+#endif
+#if __has_include("FPSComponent.hpp")
+        activeFpsComponentCount = FPSComponent::get_ActiveComponentCount();
+#endif
+#if __has_include("SceneEntityAsset.hpp")
+        liveSceneEntityAssetCount = SceneEntityAsset::get_LiveInstanceCount();
+#endif
+#if __has_include("SceneComponentAssetRecord.hpp")
+        liveSceneComponentRecordCount = SceneComponentAssetRecord::get_LiveInstanceCount();
+#endif
+
+        if (!DebugAllocationMenuBaselineCaptured &&
+            ownedTextureReferenceCount == 1 &&
+            ownedModelReferenceCount == 0 &&
+            ownedMaterialReferenceCount == 0 &&
+            entityCount == 59 &&
+            updateableCount == 6 &&
+            liveFontAssetCount == 1 &&
+            constructedFontAssetCount >= 3) {
+            _CrtMemCheckpoint(&DebugAllocationBaselineState);
+            DebugWin32HeapBaseline = currentHeapSummary;
+            if (EnableDebugAllocationCallsiteTracking && DebugTrackedAllocationStacks != nullptr) {
+                for (std::size_t stackIndex = 0; stackIndex < DebugAllocationTrackedStackCapacity; stackIndex++) {
+                    DebugTrackedAllocationStack* stackEntry = &DebugTrackedAllocationStacks[stackIndex];
+                    if (!stackEntry->Occupied) {
+                        continue;
+                    }
+
+                    stackEntry->BaselineLiveBytes = stackEntry->LiveBytes;
+                    stackEntry->BaselineLiveAllocations = stackEntry->LiveAllocations;
+                }
+
+                for (std::size_t requestIndex = 0; requestIndex < DebugAllocationTrackedRequestCapacity; requestIndex++) {
+                    DebugTrackedAllocationRequest* requestEntry = &DebugTrackedAllocationRequests[requestIndex];
+                    if (requestEntry->State == 1) {
+                        requestEntry->State = 3;
+                    }
+                }
+            }
+            DebugAllocationMenuBaselineCaptured = true;
+            WriteDebugAllocationLog("Debug allocation baseline recaptured at first stable menu state.");
+            return;
+        }
+
         char message[4096];
         std::size_t writtenLength = static_cast<std::size_t>(std::snprintf(
             message,
             sizeof(message),
-            "Debug allocation delta: normal_blocks=%ld normal_bytes=%ld crt_blocks=%ld crt_bytes=%ld client_blocks=%ld client_bytes=%ld free_blocks=%ld free_bytes=%ld | heap_count_delta=%lld failed_heap_count_delta=%lld busy_blocks_delta=%lld busy_bytes_delta=%lld region_committed_bytes_delta=%lld region_reserved_bytes_delta=%lld region_uncommitted_bytes_delta=%lld",
+            "Debug allocation delta: normal_blocks=%ld normal_bytes=%ld crt_blocks=%ld crt_bytes=%ld client_blocks=%ld client_bytes=%ld free_blocks=%ld free_bytes=%ld owned_fonts=%d owned_textures=%d owned_models=%d owned_materials=%d entities=%d updateables=%d cap_entities=%d cap_updateables=%d cap_d2=%d cap_d3=%d cap_interactables=%d pending_update_ops=%d cap_pending_update_ops=%d font_live=%d font_constructed=%d font_disposed=%d font_chars=%d fps_active=%d scene_entity_assets=%d scene_component_records=%d tex_res=%zu scene_tex_res=%zu engine_tex_res=%zu model_buffers=%zu material_shaders=%zu | heap_count_delta=%lld failed_heap_count_delta=%lld busy_blocks_delta=%lld busy_bytes_delta=%lld region_committed_bytes_delta=%lld region_reserved_bytes_delta=%lld region_uncommitted_bytes_delta=%lld",
             deltaState.lCounts[_NORMAL_BLOCK],
             deltaState.lSizes[_NORMAL_BLOCK],
             deltaState.lCounts[_CRT_BLOCK],
@@ -1635,6 +1829,31 @@ namespace helengine::windows {
             deltaState.lSizes[_CLIENT_BLOCK],
             deltaState.lCounts[_FREE_BLOCK],
             deltaState.lSizes[_FREE_BLOCK],
+            ownedFontReferenceCount,
+            ownedTextureReferenceCount,
+            ownedModelReferenceCount,
+            ownedMaterialReferenceCount,
+            entityCount,
+            updateableCount,
+            entityCapacity,
+            updateableCapacity,
+            drawable2DCapacity,
+            drawable3DCapacity,
+            interactableCapacity,
+            pendingUpdateOperationCount,
+            pendingUpdateOperationCapacity,
+            liveFontAssetCount,
+            constructedFontAssetCount,
+            disposedFontAssetCount,
+            liveFontCharacterCount,
+            activeFpsComponentCount,
+            liveSceneEntityAssetCount,
+            liveSceneComponentRecordCount,
+            renderCounters.TextureResourceCount,
+            renderCounters.SceneOwnedTextureResourceCount,
+            renderCounters.EngineOwnedTextureResourceCount,
+            renderCounters.ModelBufferCount,
+            renderCounters.MaterialShaderResourceCount,
             static_cast<long long>(currentHeapSummary.HeapCount) - static_cast<long long>(DebugWin32HeapBaseline.HeapCount),
             static_cast<long long>(currentHeapSummary.FailedHeapCount) - static_cast<long long>(DebugWin32HeapBaseline.FailedHeapCount),
             static_cast<long long>(currentHeapSummary.BusyBlockCount) - static_cast<long long>(DebugWin32HeapBaseline.BusyBlockCount),
@@ -1646,7 +1865,41 @@ namespace helengine::windows {
             AppendDebugWin32HeapBlockDelta(message, sizeof(message), writtenLength, currentHeapSnapshots, currentHeapSnapshotCount);
         }
         WriteDebugAllocationLog(message);
+        if (DebugAllocationMenuBaselineCaptured &&
+            DebugAllocationMenuDeltaDumpCount < 2 &&
+            entityCount == 59 &&
+            updateableCount == 6 &&
+            deltaState.lCounts[_NORMAL_BLOCK] > 0 &&
+            deltaState.lCounts[_NORMAL_BLOCK] != DebugAllocationLastDumpedNormalBlocks) {
+            DebugAllocationMenuDeltaDumpCount++;
+            DebugAllocationLastDumpedNormalBlocks = deltaState.lCounts[_NORMAL_BLOCK];
+            char dumpBeginMessage[256];
+            std::snprintf(
+                dumpBeginMessage,
+                sizeof(dumpBeginMessage),
+                "Debug allocation post-baseline menu object dump %d begin normal_blocks=%ld normal_bytes=%ld.",
+                DebugAllocationMenuDeltaDumpCount,
+                deltaState.lCounts[_NORMAL_BLOCK],
+                deltaState.lSizes[_NORMAL_BLOCK]);
+            WriteDebugAllocationLog(dumpBeginMessage);
+            if (DebugAllocationLogFile != nullptr) {
+                DebugAllocationRawReportLoggingActive = true;
+                _CrtMemDumpAllObjectsSince(&DebugAllocationBaselineState);
+                DebugAllocationRawReportLoggingActive = false;
+            }
+            char dumpEndMessage[128];
+            std::snprintf(
+                dumpEndMessage,
+                sizeof(dumpEndMessage),
+                "Debug allocation post-baseline menu object dump %d end.",
+                DebugAllocationMenuDeltaDumpCount);
+            WriteDebugAllocationLog(dumpEndMessage);
+        }
         if (EnableDebugAllocationCallsiteTracking &&
+            DebugAllocationMenuBaselineCaptured &&
+            entityCount == 59 &&
+            updateableCount == 6 &&
+            deltaState.lCounts[_NORMAL_BLOCK] > 0 &&
             DebugTrackedAllocationStacks != nullptr &&
             EnsureDebugSymbolsInitialized()) {
             struct TopTrackedAllocationStack {
@@ -1655,7 +1908,16 @@ namespace helengine::windows {
                 std::uint32_t DeltaAllocations;
             };
 
+            struct ExactTrackedAllocationStack {
+                std::uint32_t StackIndex;
+                std::uint64_t Size;
+                std::uint64_t Bytes;
+                std::uint32_t Allocations;
+            };
+
             std::array<TopTrackedAllocationStack, 5> topStacks {};
+            std::array<TopTrackedAllocationStack, 8> smallStacks {};
+            std::array<ExactTrackedAllocationStack, 8> exactSmallStacks {};
             for (std::size_t stackIndex = 0; stackIndex < DebugAllocationTrackedStackCapacity; stackIndex++) {
                 DebugTrackedAllocationStack* stackEntry = &DebugTrackedAllocationStacks[stackIndex];
                 if (!stackEntry->Occupied || stackEntry->LiveBytes <= stackEntry->BaselineLiveBytes) {
@@ -1680,9 +1942,61 @@ namespace helengine::windows {
                     topStacks[topIndex].DeltaAllocations = deltaAllocations;
                     break;
                 }
+
+                if (deltaBytes > 65536) {
+                    continue;
+                }
+
+                for (std::size_t smallIndex = 0; smallIndex < smallStacks.size(); smallIndex++) {
+                    if (deltaBytes <= smallStacks[smallIndex].DeltaBytes) {
+                        continue;
+                    }
+
+                    for (std::size_t shiftIndex = smallStacks.size() - 1; shiftIndex > smallIndex; shiftIndex--) {
+                        smallStacks[shiftIndex] = smallStacks[shiftIndex - 1];
+                    }
+
+                    smallStacks[smallIndex].StackIndex = static_cast<std::uint32_t>(stackIndex);
+                    smallStacks[smallIndex].DeltaBytes = deltaBytes;
+                    smallStacks[smallIndex].DeltaAllocations = deltaAllocations;
+                    break;
+                }
+            }
+
+            for (std::size_t requestIndex = 0; requestIndex < DebugAllocationTrackedRequestCapacity; requestIndex++) {
+                DebugTrackedAllocationRequest* requestEntry = &DebugTrackedAllocationRequests[requestIndex];
+                if (requestEntry->State != 1 ||
+                    requestEntry->StackIndex >= DebugAllocationTrackedStackCapacity ||
+                    (requestEntry->Size != 16 && requestEntry->Size != 24 && requestEntry->Size != 40)) {
+                    continue;
+                }
+
+                std::size_t targetIndex = exactSmallStacks.size();
+                for (std::size_t exactIndex = 0; exactIndex < exactSmallStacks.size(); exactIndex++) {
+                    if (exactSmallStacks[exactIndex].Bytes > 0 &&
+                        exactSmallStacks[exactIndex].StackIndex == requestEntry->StackIndex &&
+                        exactSmallStacks[exactIndex].Size == requestEntry->Size) {
+                        targetIndex = exactIndex;
+                        break;
+                    }
+
+                    if (exactSmallStacks[exactIndex].Bytes == 0 && targetIndex == exactSmallStacks.size()) {
+                        targetIndex = exactIndex;
+                    }
+                }
+
+                if (targetIndex == exactSmallStacks.size()) {
+                    continue;
+                }
+
+                exactSmallStacks[targetIndex].StackIndex = requestEntry->StackIndex;
+                exactSmallStacks[targetIndex].Size = requestEntry->Size;
+                exactSmallStacks[targetIndex].Bytes += requestEntry->Size;
+                exactSmallStacks[targetIndex].Allocations++;
             }
 
             DebugAllocationCallsiteTrackingSuspended = true;
+            DebugAllocationStackFrameLoggingActive = true;
             for (std::size_t topIndex = 0; topIndex < topStacks.size(); topIndex++) {
                 if (topStacks[topIndex].DeltaBytes == 0 || topStacks[topIndex].StackIndex >= DebugAllocationTrackedStackCapacity) {
                     continue;
@@ -1706,6 +2020,50 @@ namespace helengine::windows {
                     WriteResolvedStackFrame(frameIndex, reinterpret_cast<std::uint64_t>(stackEntry->Frames[frameIndex]));
                 }
             }
+            for (std::size_t smallIndex = 0; smallIndex < smallStacks.size(); smallIndex++) {
+                if (smallStacks[smallIndex].DeltaBytes == 0 || smallStacks[smallIndex].StackIndex >= DebugAllocationTrackedStackCapacity) {
+                    continue;
+                }
+
+                DebugTrackedAllocationStack* stackEntry = &DebugTrackedAllocationStacks[smallStacks[smallIndex].StackIndex];
+                std::ostringstream stackMessageBuilder;
+                stackMessageBuilder
+                    << "Debug allocation small stack #" << (smallIndex + 1)
+                    << ": delta_bytes=" << smallStacks[smallIndex].DeltaBytes
+                    << " delta_allocations=" << smallStacks[smallIndex].DeltaAllocations
+                    << " live_bytes=" << stackEntry->LiveBytes
+                    << " live_allocations=" << stackEntry->LiveAllocations;
+                if (DebugAllocationCallsiteTrackerOverflowed) {
+                    stackMessageBuilder << " tracker_overflowed=true";
+                }
+                std::string stackMessage = stackMessageBuilder.str();
+                WriteDebugAllocationLog(stackMessage.c_str());
+
+                for (USHORT frameIndex = 0; frameIndex < stackEntry->FrameCount; frameIndex++) {
+                    WriteResolvedStackFrame(frameIndex, reinterpret_cast<std::uint64_t>(stackEntry->Frames[frameIndex]));
+                }
+            }
+            for (std::size_t exactIndex = 0; exactIndex < exactSmallStacks.size(); exactIndex++) {
+                if (exactSmallStacks[exactIndex].Bytes == 0 ||
+                    exactSmallStacks[exactIndex].StackIndex >= DebugAllocationTrackedStackCapacity) {
+                    continue;
+                }
+
+                DebugTrackedAllocationStack* stackEntry = &DebugTrackedAllocationStacks[exactSmallStacks[exactIndex].StackIndex];
+                std::ostringstream stackMessageBuilder;
+                stackMessageBuilder
+                    << "Debug allocation exact small stack #" << (exactIndex + 1)
+                    << ": size=" << exactSmallStacks[exactIndex].Size
+                    << " bytes=" << exactSmallStacks[exactIndex].Bytes
+                    << " allocations=" << exactSmallStacks[exactIndex].Allocations;
+                std::string stackMessage = stackMessageBuilder.str();
+                WriteDebugAllocationLog(stackMessage.c_str());
+
+                for (USHORT frameIndex = 0; frameIndex < stackEntry->FrameCount; frameIndex++) {
+                    WriteResolvedStackFrame(frameIndex, reinterpret_cast<std::uint64_t>(stackEntry->Frames[frameIndex]));
+                }
+            }
+            DebugAllocationStackFrameLoggingActive = false;
             DebugAllocationCallsiteTrackingSuspended = false;
         }
     }
@@ -1925,11 +2283,16 @@ namespace helengine::windows {
 
     /// Writes one allocation-diagnostics line without mirroring it into structured runtime diagnostics.
     void Win32Application::WriteDebugAllocationLog(const char* message) const {
-        std::cout << "[Host] " << message << std::endl;
-        if (LifecycleLogFile.is_open()) {
-            LifecycleLogFile << "[Host] " << message << '\n';
-            LifecycleLogFile.flush();
+        if (DebugAllocationLogFile == nullptr) {
+            std::filesystem::path logPath = ResolveApplicationDirectoryPath() / "helengine_windows.alloc.log";
+            DebugAllocationLogFile = std::fopen(logPath.string().c_str(), "w");
         }
+        if (DebugAllocationLogFile == nullptr) {
+            return;
+        }
+
+        std::fprintf(DebugAllocationLogFile, "[Host] %s\n", message);
+        std::fflush(DebugAllocationLogFile);
     }
 #endif
 }

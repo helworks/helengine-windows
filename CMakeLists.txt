@@ -84,6 +84,10 @@ target_compile_definitions(helengine_windows PRIVATE
     $<$<CONFIG:Debug>:HELENGINE_WINDOWS_DEBUG_RUNTIME_DIAGNOSTICS>
 )
 
+if(MSVC)
+    target_compile_options(helengine_windows PRIVATE /bigobj)
+endif()
+
 target_include_directories(helengine_windows PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 
 if(HELENGINE_WINDOWS_INCLUDE_GENERATED_CORE)

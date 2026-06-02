@@ -15,6 +15,11 @@ namespace helengine::windows {
         /// Tracks how many times each asset id has been built during the current process lifetime.
         std::unordered_map<std::string, std::uint64_t> AssetBuildCounts;
 
+        /// Builds the diagnostics map key used to pair asset build and release records.
+        std::string BuildAssetCountKey(const std::string& assetClass, const std::string& assetId) {
+            return assetClass + "|" + assetId;
+        }
+
         /// Replaces multi-line values with one log-safe quoted representation.
         std::string Quote(const std::string& value) {
             std::string sanitized = value;
@@ -46,6 +51,9 @@ namespace helengine::windows {
 
     /// Initializes one per-run diagnostics log beside the packaged executable.
     void RuntimeRenderDiagnostics::Initialize(const std::filesystem::path& applicationDirectoryPath) {
+        DiagnosticsInitialized = false;
+        AssetBuildCounts.clear();
+
         DiagnosticsLogPath = applicationDirectoryPath / "helengine_windows.diagnostics.log";
         std::filesystem::create_directories(DiagnosticsLogPath.parent_path());
 
@@ -66,6 +74,10 @@ namespace helengine::windows {
 
     /// Writes one host-side lifecycle event into the diagnostics log.
     void RuntimeRenderDiagnostics::WriteHostEvent(const std::string& category, const std::string& message) {
+        if (!DiagnosticsInitialized) {
+            return;
+        }
+
         std::ostringstream builder;
         builder << "host.event"
             << " category=" << Quote(category)
@@ -75,6 +87,10 @@ namespace helengine::windows {
 
     /// Writes one structured packaged-asset load entry into the diagnostics log.
     void RuntimeRenderDiagnostics::RecordPackagedAssetLoad(const std::string& relativePath, const std::string& fullPath) {
+        if (!DiagnosticsInitialized) {
+            return;
+        }
+
         std::ostringstream builder;
         builder << "content.load"
             << " kind=" << Quote("packaged-asset")
@@ -89,7 +105,11 @@ namespace helengine::windows {
         const std::string& assetId,
         const std::string& detail,
         std::size_t liveResourceCount) {
-        const std::string key = assetClass + "|" + assetId;
+        if (!DiagnosticsInitialized) {
+            return;
+        }
+
+        const std::string key = BuildAssetCountKey(assetClass, assetId);
         std::uint64_t buildCount = ++AssetBuildCounts[key];
 
         std::ostringstream builder;
@@ -108,6 +128,10 @@ namespace helengine::windows {
         const std::string& assetClass,
         const std::string& assetId,
         const std::string& detail) {
+        if (!DiagnosticsInitialized) {
+            return;
+        }
+
         std::ostringstream builder;
         builder << "asset.release"
             << " phase=" << Quote("requested")
@@ -122,6 +146,12 @@ namespace helengine::windows {
         const std::string& assetClass,
         const std::string& assetId,
         const std::string& detail) {
+        if (!DiagnosticsInitialized) {
+            return;
+        }
+
+        AssetBuildCounts.erase(BuildAssetCountKey(assetClass, assetId));
+
         std::ostringstream builder;
         builder << "asset.release"
             << " phase=" << Quote("completed")
@@ -150,6 +180,10 @@ namespace helengine::windows {
         const std::string& textFontRelativePath,
         const std::string& textFontLoadStage,
         const std::string& fontDeserializeStage) {
+        if (!DiagnosticsInitialized) {
+            return;
+        }
+
         std::ostringstream builder;
         builder << "scene.checkpoint"
             << " label=" << Quote(label)

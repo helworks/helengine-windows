@@ -34,6 +34,7 @@ class RenderCommandListBuilder2D;
 #include "RenderManager2D.hpp"
 #include "RenderManager3D.hpp"
 #include "ShaderAsset.hpp"
+#include "ShaderStage.hpp"
 #include "ShaderMaterialAsset.hpp"
 #include "RuntimeMaterial.hpp"
 #include "ShaderRuntimeMaterial.hpp"
@@ -131,6 +132,9 @@ namespace helengine::windows {
         /// Builds a GPU-ready runtime model from raw mesh asset metadata.
         RuntimeModel* BuildModelFromRaw(ModelAsset* data) override;
 
+        /// Builds a shader-backed runtime material from one packaged raw material asset path.
+        RuntimeMaterial* BuildMaterialFromRawAsset(ContentManager* assetContentManager, std::string contentRootPath, std::string materialAssetPath) override;
+
         /// Builds a runtime material placeholder that keeps the packaged material identity.
         RuntimeMaterial* BuildMaterialFromRaw(ShaderMaterialAsset* materialAsset, ShaderAsset* shaderAsset) override;
 
@@ -203,6 +207,9 @@ namespace helengine::windows {
 
         /// Draws one shadow-casting mesh into the active directional shadow map.
         void DrawDirectionalShadowCaster(IDrawable3D* drawable, ::float4x4& lightViewProjection);
+
+        /// Returns whether one runtime material should contribute geometry to the directional shadow pass.
+        bool ShouldMaterialCastShadows(RuntimeMaterial* material) const;
 
         /// Builds the light-space view-projection matrix used by the active directional shadow pass.
         ::float4x4 BuildDirectionalShadowViewProjection(ICamera* camera, DirectionalLightComponent* light) const;
