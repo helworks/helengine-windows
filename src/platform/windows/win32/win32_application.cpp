@@ -43,6 +43,9 @@
 #if __has_include("Core.hpp")
 #include "Asset.hpp"
 #include "AssetSerializer.hpp"
+#if __has_include("BepuPhysicsWorld3D.hpp")
+#include "BepuPhysicsWorld3D.hpp"
+#endif
 #include "Core.hpp"
 #include "CoreInitializationOptions.hpp"
 #include "ObjectManager.hpp"
@@ -483,7 +486,8 @@ namespace helengine::windows {
           LastObservedSceneLoadRootEntityIndex(-1),
           LastObservedSceneLoadEntityDepth(-1),
           FramesSinceSceneTraceChange(0),
-          PendingSteadyStateCheckpoint(false)
+          PendingSteadyStateCheckpoint(false),
+          BepuDebugSnapshotStatusLogCount(0)
 #if defined(HELENGINE_WINDOWS_DEBUG_RUNTIME_DIAGNOSTICS)
           , DebugAllocationBaselineCaptured(false),
           DebugAllocationBaselineState(),
@@ -590,6 +594,13 @@ namespace helengine::windows {
         if (LifecycleLogFile.is_open()) {
             LifecycleLogFile << "[Host] Lifecycle log opened at " << logPath.string() << '\n';
             LifecycleLogFile.flush();
+        }
+
+        std::filesystem::path differentialTracePath = ResolveBepuDifferentialTraceFilePath();
+        std::filesystem::create_directories(differentialTracePath.parent_path());
+        BepuDifferentialTraceFile.open(differentialTracePath, std::ios::out | std::ios::trunc);
+        if (BepuDifferentialTraceFile.is_open()) {
+            BepuDifferentialTraceFile.flush();
         }
     }
 
@@ -1506,6 +1517,11 @@ namespace helengine::windows {
         return ResolveApplicationDirectoryPath() / "helengine_windows.startup.log";
     }
 
+    /// Resolves the reduced-BEPU differential trace file path beside the executable.
+    std::filesystem::path Win32Application::ResolveBepuDifferentialTraceFilePath() const {
+        return ResolveApplicationDirectoryPath() / "helengine_windows.bepu_differential_trace.log";
+    }
+
     /// Runs one non-blocking message pump pass.
     bool Win32Application::PumpMessages() {
         MSG message {};
@@ -1545,6 +1561,7 @@ namespace helengine::windows {
         if (EngineInitialized && EngineCore != nullptr) {
 #if __has_include("Core.hpp")
             EngineCore->Update();
+            LogBepuStackBoxesDebugSnapshot();
             PollSceneTransitionDiagnostics();
             EngineCore->Draw();
 #endif
@@ -1552,6 +1569,80 @@ namespace helengine::windows {
 
         Presenter->RenderFrame();
         UpdateFrameStatistics();
+    }
+
+    /// Writes one bounded BEPU stack-boxes physics snapshot into the lifecycle log when that diagnostic scene is active.
+    void Win32Application::LogBepuStackBoxesDebugSnapshot() {
+#if __has_include("Core.hpp") && __has_include("BepuPhysicsWorld3D.hpp")
+        if (EngineCore == nullptr) {
+            if (BepuDebugSnapshotStatusLogCount < 4) {
+                WriteLifecycleLog("BEPU debug snapshot skipped because EngineCore is null.");
+                BepuDebugSnapshotStatusLogCount++;
+            }
+            return;
+        }
+
+        IPhysicsRuntime* physicsRuntime = EngineCore->get_PhysicsRuntime();
+        if (physicsRuntime == nullptr) {
+            if (BepuDebugSnapshotStatusLogCount < 4) {
+                WriteLifecycleLog("BEPU debug snapshot skipped because physics runtime is null.");
+                BepuDebugSnapshotStatusLogCount++;
+            }
+            return;
+        }
+
+        BepuPhysicsWorld3D* bepuWorld = dynamic_cast<BepuPhysicsWorld3D*>(physicsRuntime);
+        if (bepuWorld == nullptr) {
+            if (BepuDebugSnapshotStatusLogCount < 4) {
+                WriteLifecycleLog("BEPU debug snapshot skipped because physics runtime is not BepuPhysicsWorld3D.");
+                BepuDebugSnapshotStatusLogCount++;
+            }
+            return;
+        }
+
+        if (BepuDebugSnapshotStatusLogCount < 4) {
+            std::string sentinel = bepuWorld->TryBuildStackBoxesDebugSentinel();
+            std::ostringstream sentinelStatusBuilder;
+            sentinelStatusBuilder << "BEPU sentinel length=" << sentinel.size()
+                                  << " registered_body_count=" << bepuWorld->get_RegisteredBodyCount();
+            std::string sentinelStatus = sentinelStatusBuilder.str();
+            WriteLifecycleLog(sentinelStatus.c_str());
+        }
+
+        std::string snapshot = bepuWorld->TryBuildStackBoxesDebugSnapshot();
+        if (BepuDebugSnapshotStatusLogCount < 4) {
+            std::ostringstream snapshotStatusBuilder;
+            snapshotStatusBuilder << "BEPU snapshot length=" << snapshot.size();
+            std::size_t byteCountToReport = snapshot.size() < 8 ? snapshot.size() : 8;
+            for (std::size_t index = 0; index < byteCountToReport; index++) {
+                snapshotStatusBuilder << " b" << index << "=" << static_cast<int>(static_cast<unsigned char>(snapshot[index]));
+            }
+            std::string snapshotStatus = snapshotStatusBuilder.str();
+            WriteLifecycleLog(snapshotStatus.c_str());
+        }
+
+        if (snapshot.empty()) {
+            if (BepuDebugSnapshotStatusLogCount < 4) {
+                WriteLifecycleLog("BEPU debug snapshot returned empty text.");
+                BepuDebugSnapshotStatusLogCount++;
+            }
+            return;
+        }
+
+        std::istringstream snapshotReader(snapshot);
+        std::string snapshotLine;
+        while (std::getline(snapshotReader, snapshotLine)) {
+            if (snapshotLine.rfind("frame=", 0) == 0) {
+                if (BepuDifferentialTraceFile.is_open()) {
+                    BepuDifferentialTraceFile << snapshotLine << '\n';
+                    BepuDifferentialTraceFile.flush();
+                }
+            } else if (LifecycleLogFile.is_open()) {
+                LifecycleLogFile << snapshotLine << '\n';
+                LifecycleLogFile.flush();
+            }
+        }
+#endif
     }
 
     /// Writes one lifecycle message to the host console.

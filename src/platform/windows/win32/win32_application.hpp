@@ -148,6 +148,9 @@ namespace helengine::windows {
         /// Polls generated core scene-transition trace fields and emits checkpoints when they change.
         void PollSceneTransitionDiagnostics();
 
+        /// Writes one bounded BEPU stack-boxes physics snapshot into the lifecycle log when that diagnostic scene is active.
+        void LogBepuStackBoxesDebugSnapshot();
+
         /// Loads one packaged serialized asset from a build-relative path.
         Asset* LoadPackagedAsset(const std::string& relativePath);
 
@@ -156,6 +159,9 @@ namespace helengine::windows {
 
         /// Resolves the lifecycle log file path beside the executable.
         std::filesystem::path ResolveLogFilePath() const;
+
+        /// Resolves the reduced-BEPU differential trace file path beside the executable.
+        std::filesystem::path ResolveBepuDifferentialTraceFilePath() const;
 
         /// Runs one non-blocking message pump pass.
         bool PumpMessages();
@@ -293,6 +299,9 @@ namespace helengine::windows {
         /// Streams lifecycle logs into a file beside the executable for crash debugging.
         mutable std::ofstream LifecycleLogFile;
 
+        /// Streams structured reduced-BEPU differential trace lines into a dedicated package-local file.
+        mutable std::ofstream BepuDifferentialTraceFile;
+
         /// Stores the last observed core-owned scene transition stage.
         std::string LastObservedCoreSceneTransitionStage;
 
@@ -325,6 +334,9 @@ namespace helengine::windows {
 
         /// Tracks whether one steady-state checkpoint should be emitted after the current scene transition settles.
         bool PendingSteadyStateCheckpoint;
+
+        /// Stores how many bounded BEPU snapshot-hook status lines have already been written for the current run.
+        std::uint32_t BepuDebugSnapshotStatusLogCount;
 
 #if defined(HELENGINE_WINDOWS_DEBUG_RUNTIME_DIAGNOSTICS) && __has_include("IRuntimeDiagnosticsProvider.hpp") && __has_include("RuntimeMemoryDiagnosticsSnapshot.hpp")
         /// Stores the debug-build Windows runtime diagnostics provider exposed to the shared core service.
