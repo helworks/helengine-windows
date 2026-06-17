@@ -24,7 +24,9 @@
 
 #if __has_include("CameraRenderSettings.hpp")
 #include "BuiltInMaterialIds.hpp"
+#if __has_include("BoxCollider3DComponent.hpp")
 #include "BoxCollider3DComponent.hpp"
+#endif
 #include "CameraRenderSettings.hpp"
 #include "Entity.hpp"
 #include "DirectionalLightComponent.hpp"
@@ -46,7 +48,9 @@
 #endif
 #include "ObjectManager.hpp"
 #include "RuntimeSceneLoadService.hpp"
+#if __has_include("RigidBody3DComponent.hpp")
 #include "RigidBody3DComponent.hpp"
+#endif
 #if __has_include("RuntimeSceneAssetReferenceResolver.hpp")
 #include "RuntimeSceneAssetReferenceResolver.hpp"
 #endif
@@ -79,6 +83,12 @@
 #include "RenderCommandListBuilder2D.hpp"
 #endif
 
+#if __has_include("BoxCollider3DComponent.hpp") && __has_include("RigidBody3DComponent.hpp")
+#define HE_WINDOWS_HAS_RUNTIME_PHYSICS_DEBUG_TYPES 1
+#else
+#define HE_WINDOWS_HAS_RUNTIME_PHYSICS_DEBUG_TYPES 0
+#endif
+
 namespace helengine::windows {
 #if __has_include("RenderManager2D.hpp")
     namespace {
@@ -87,6 +97,9 @@ namespace helengine::windows {
 
         /// Counts logged 3D draw visits for the first snapshot frame.
         int Logged3DVisitCount = 0;
+
+        /// Maximum number of 3D draw visits captured in the first-frame snapshot.
+        constexpr int MaxLogged3DVisitCount = 8;
 
         /// Tracks whether one native 2D summary has already been written.
         bool HasWritten2DSummary = false;
@@ -109,8 +122,20 @@ namespace helengine::windows {
         /// Counts probe-cube submissions written to diagnostics so the trace stays bounded.
         int GroundCubeProbeCubeDebugCount = 0;
 
-        /// Tracks the specific runtime entity instance chosen as the probe cube after the first matching frame.
-        Entity* GroundCubeProbeCubeEntity = nullptr;
+        /// Stores one tracked dynamic unit-cube probe entry.
+        struct ProbeCubeDebugSlot {
+            Entity* EntityValue = nullptr;
+            int FrameCount = 0;
+        };
+
+        /// Maximum number of dynamic unit cubes tracked by the probe diagnostics.
+        constexpr int MaxProbeCubeDebugSlotCount = 4;
+
+        /// Maximum number of frames logged for each tracked dynamic unit cube.
+        constexpr int MaxProbeCubeDebugFrameCount = 120;
+
+        /// Tracks the specific runtime entity instances chosen as the probed dynamic unit cubes.
+        std::array<ProbeCubeDebugSlot, MaxProbeCubeDebugSlotCount> ProbeCubeDebugSlots {};
 
         /// Counts 2D visitor dispatches for the first logged frame.
         int Logged2DVisitCount = 0;
@@ -745,12 +770,49 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
 
             const float3 position = entity->get_Position();
             const float3 scale = entity->get_Scale();
-            return IsApproximately(position.X, 0.0f, 0.1f)
-                && position.Y > 0.0f
+            return position.Y > 0.0f
                 && IsApproximately(position.Z, 0.0f, 0.1f)
                 && IsApproximately(scale.X, 1.0f, 0.1f)
                 && IsApproximately(scale.Y, 1.0f, 0.1f)
                 && IsApproximately(scale.Z, 1.0f, 0.1f);
+        }
+
+        /// Finds one tracked probe-cube slot for the supplied entity.
+        int FindProbeCubeDebugSlot(Entity* entity) {
+            if (entity == nullptr) {
+                return -1;
+            }
+
+            for (int index = 0; index < MaxProbeCubeDebugSlotCount; index++) {
+                if (ProbeCubeDebugSlots[static_cast<std::size_t>(index)].EntityValue == entity) {
+                    return index;
+                }
+            }
+
+            return -1;
+        }
+
+        /// Finds or reserves one tracked probe-cube slot for the supplied entity.
+        int GetOrCreateProbeCubeDebugSlot(Entity* entity) {
+            if (entity == nullptr) {
+                return -1;
+            }
+
+            int existingIndex = FindProbeCubeDebugSlot(entity);
+            if (existingIndex >= 0) {
+                return existingIndex;
+            }
+
+            for (int index = 0; index < MaxProbeCubeDebugSlotCount; index++) {
+                ProbeCubeDebugSlot& slot = ProbeCubeDebugSlots[static_cast<std::size_t>(index)];
+                if (slot.EntityValue == nullptr) {
+                    slot.EntityValue = entity;
+                    slot.FrameCount = 0;
+                    return index;
+                }
+            }
+
+            return -1;
         }
  
         /// Builds one stable generated identifier for a runtime texture that was created from embedded raw data. 
@@ -1387,6 +1449,7 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
                 + "[" + std::to_string(world.M31) + "," + std::to_string(world.M32) + "," + std::to_string(world.M33) + "," + std::to_string(world.M34) + "]"
                 + "[" + std::to_string(world.M41) + "," + std::to_string(world.M42) + "," + std::to_string(world.M43) + "," + std::to_string(world.M44) + "]");
             List<Component*>* components = parent->get_Components();
+#if HE_WINDOWS_HAS_RUNTIME_PHYSICS_DEBUG_TYPES
             for (int componentIndex = 0; componentIndex < components->Count(); componentIndex++) {
                 Component* component = components->get_Item(componentIndex);
                 if (RigidBody3DComponent* rigidBody = dynamic_cast<RigidBody3DComponent*>(component)) {
@@ -1408,17 +1471,23 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
                         + " trigger=" + std::to_string(boxCollider->get_IsTrigger() ? 1 : 0));
                 }
             }
+#endif
         }
 
-        if (GroundCubeProbeCubeEntity == nullptr && IsGroundCubeProbeCube(parent)) {
-            GroundCubeProbeCubeEntity = parent;
+        int probeCubeSlotIndex = -1;
+        if (IsGroundCubeProbeCube(parent)) {
+            probeCubeSlotIndex = GetOrCreateProbeCubeDebugSlot(parent);
         }
 
-        if (GroundCubeProbeCubeDebugCount < 16 && parent == GroundCubeProbeCubeEntity) {
+        if (probeCubeSlotIndex >= 0
+            && GroundCubeProbeCubeDebugCount < (MaxProbeCubeDebugFrameCount * MaxProbeCubeDebugSlotCount)
+            && ProbeCubeDebugSlots[static_cast<std::size_t>(probeCubeSlotIndex)].FrameCount < MaxProbeCubeDebugFrameCount) {
             HasWrittenGroundCubeProbeCubeDebug = true;
             GroundCubeProbeCubeDebugCount++;
+            ProbeCubeDebugSlots[static_cast<std::size_t>(probeCubeSlotIndex)].FrameCount++;
             AppendRenderDiagnosticsLine(
-                "ProbeCube frame=" + std::to_string(GroundCubeProbeCubeDebugCount)
+                "ProbeCube[" + std::to_string(probeCubeSlotIndex) + "] frame=" + std::to_string(ProbeCubeDebugSlots[static_cast<std::size_t>(probeCubeSlotIndex)].FrameCount)
+                + " material=" + (rootMaterial != nullptr ? rootMaterial->get_Id() : std::string("<null>"))
                 + " world position="
                 + std::to_string(position.X) + "," + std::to_string(position.Y) + "," + std::to_string(position.Z)
                 + " scale="
@@ -1431,13 +1500,14 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
                 + "[" + std::to_string(world.M31) + "," + std::to_string(world.M32) + "," + std::to_string(world.M33) + "," + std::to_string(world.M34) + "]"
                 + "[" + std::to_string(world.M41) + "," + std::to_string(world.M42) + "," + std::to_string(world.M43) + "," + std::to_string(world.M44) + "]");
             List<Component*>* components = parent->get_Components();
+#if HE_WINDOWS_HAS_RUNTIME_PHYSICS_DEBUG_TYPES
             for (int componentIndex = 0; componentIndex < components->Count(); componentIndex++) {
                 Component* component = components->get_Item(componentIndex);
                 if (RigidBody3DComponent* rigidBody = dynamic_cast<RigidBody3DComponent*>(component)) {
                     const float3 linearVelocity = rigidBody->get_LinearVelocity();
                     const float3 angularVelocity = rigidBody->get_AngularVelocity();
                     AppendRenderDiagnosticsLine(
-                        "ProbeCube rigidbody kind=" + std::to_string(static_cast<int>(rigidBody->get_BodyKind()))
+                        "ProbeCube[" + std::to_string(probeCubeSlotIndex) + "] rigidbody kind=" + std::to_string(static_cast<int>(rigidBody->get_BodyKind()))
                         + " gravity=" + std::to_string(rigidBody->get_UseGravity() ? 1 : 0)
                         + " mass=" + std::to_string(rigidBody->get_Mass())
                         + " linear=" + std::to_string(linearVelocity.X) + "," + std::to_string(linearVelocity.Y) + "," + std::to_string(linearVelocity.Z)
@@ -1445,13 +1515,14 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
                 } else if (BoxCollider3DComponent* boxCollider = dynamic_cast<BoxCollider3DComponent*>(component)) {
                     const float3 sizeValue = boxCollider->get_Size();
                     AppendRenderDiagnosticsLine(
-                        "ProbeCube collider size="
+                        "ProbeCube[" + std::to_string(probeCubeSlotIndex) + "] collider size="
                         + std::to_string(sizeValue.X) + "," + std::to_string(sizeValue.Y) + "," + std::to_string(sizeValue.Z)
                         + " layer=" + std::to_string(boxCollider->get_CollisionLayer())
                         + " mask=" + std::to_string(boxCollider->get_CollisionMask())
                         + " trigger=" + std::to_string(boxCollider->get_IsTrigger() ? 1 : 0));
                 }
             }
+#endif
         }
 
         ::float4x4 inverseTransposeNormalMatrix;
@@ -1468,11 +1539,25 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
         ::float4x4 transposedWorld;
         float4x4::Transpose__ref0_out1(world, transposedWorld);
 
-        if (Logged3DVisitCount < 4) {
+        if (Logged3DVisitCount < MaxLogged3DVisitCount) {
+            int rigidBodyKind = -1;
+            List<Component*>* components = parent->get_Components();
+#if HE_WINDOWS_HAS_RUNTIME_PHYSICS_DEBUG_TYPES
+            for (int componentIndex = 0; componentIndex < components->Count(); componentIndex++) {
+                if (RigidBody3DComponent* rigidBody = dynamic_cast<RigidBody3DComponent*>(components->get_Item(componentIndex))) {
+                    rigidBodyKind = static_cast<int>(rigidBody->get_BodyKind());
+                    break;
+                }
+            }
+#endif
+
+            std::string snapshotMaterialId = rootMaterial != nullptr ? rootMaterial->get_Id() : std::string("<null>");
             AppendRenderSnapshotLine(
                 "drawable[" + std::to_string(Logged3DVisitCount) + "] position=" + std::to_string(position.X) + "," + std::to_string(position.Y) + "," + std::to_string(position.Z) +
                 " scale=" + std::to_string(scale.X) + "," + std::to_string(scale.Y) + "," + std::to_string(scale.Z) +
                 " orientation=" + std::to_string(orientation.X) + "," + std::to_string(orientation.Y) + "," + std::to_string(orientation.Z) + "," + std::to_string(orientation.W) +
+                " material=" + snapshotMaterialId +
+                " rigidbody_kind=" + std::to_string(rigidBodyKind) +
                 " vertices=" + std::to_string(model->VertexCount) +
                 " indices=" + std::to_string(model->IndexCount));
             AppendRenderSnapshotLine(
@@ -1482,7 +1567,7 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
                 "[" + std::to_string(worldViewProjection.M31) + "," + std::to_string(worldViewProjection.M32) + "," + std::to_string(worldViewProjection.M33) + "," + std::to_string(worldViewProjection.M34) + "]"
                 "[" + std::to_string(worldViewProjection.M41) + "," + std::to_string(worldViewProjection.M42) + "," + std::to_string(worldViewProjection.M43) + "," + std::to_string(worldViewProjection.M44) + "]");
             Logged3DVisitCount++;
-            if (Logged3DVisitCount >= 4) {
+            if (Logged3DVisitCount >= MaxLogged3DVisitCount) {
                 HasWrittenRenderSnapshot = true;
             }
         }
