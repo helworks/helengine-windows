@@ -126,7 +126,7 @@ public class WindowsPlatformAssetBuilderTests {
                 ["receives-shadow"] = "true"
             }));
 
-        MaterialAsset materialAsset = Assert.IsType<MaterialAsset>(AssetSerializer.DeserializeFromBytes(result.CookedMaterialBytes));
+        ShaderMaterialAsset materialAsset = Assert.IsType<ShaderMaterialAsset>(global::helengine.files.AssetSerializer.DeserializeFromBytes(result.CookedMaterialBytes));
         Assert.Equal("ForwardStandardShader", materialAsset.ShaderAssetId);
         Assert.Equal("Textures/Checker", materialAsset.DiffuseTextureAssetId);
         Assert.False(materialAsset.CastsShadows);
@@ -160,7 +160,7 @@ public class WindowsPlatformAssetBuilderTests {
                 ["base-color"] = "#FF4040FF"
             }));
 
-        MaterialAsset materialAsset = Assert.IsType<MaterialAsset>(AssetSerializer.DeserializeFromBytes(result.CookedMaterialBytes));
+        ShaderMaterialAsset materialAsset = Assert.IsType<ShaderMaterialAsset>(global::helengine.files.AssetSerializer.DeserializeFromBytes(result.CookedMaterialBytes));
         MaterialConstantBufferAsset baseColorBuffer = Assert.Single(materialAsset.ConstantBuffers);
         float[] channels = ReadFloat4(baseColorBuffer.Data);
 

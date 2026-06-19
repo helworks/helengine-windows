@@ -1,15 +1,24 @@
 # HelEngine Windows Host
 
-This repository contains the native Windows host for HelEngine and the Windows platform builder assembly used by the editor.
+This repository contains the Windows platform host and builder integration for HelEngine.
 
-## Builder Output
+## Build
 
-The Windows builder assembly lives under `builder/` and is loaded dynamically by the editor through `user_settings/platforms.json`.
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File ..\helengine\artifacts\build-platform.ps1 `
+  -Project ..\helprojs\city\project.heproj `
+  -Platform windows `
+  -Output ..\helprojs\city\windows-build
+```
 
-The builder exposes the Windows platform metadata that the editor needs to render build profiles, graphics profiles, and platform-specific options without hardcoding Windows-specific knowledge in the editor process.
+## Run In Emulator
 
-## Generated Core Contract
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\launch_in_emulator.ps1 `
+  -ArtifactPath ..\helprojs\city\windows-build\helengine_windows.exe
+```
 
-This repository does not own generated engine C++ source.
+## More Docs
 
-Platform builds are expected to consume generated output from an external deployment root, using the generated source path passed into the native build configuration.
+- [Docker Build Notes](docs/Docker.md)
+- [Platform Notes](docs/PlatformNotes.md)
