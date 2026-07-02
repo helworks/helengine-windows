@@ -6,3 +6,4 @@ render-validation-output/
 .codex-build
 .codex-out/
 .worktrees/
+tmp/
