@@ -87,6 +87,8 @@ namespace helengine::windows {
             int rootEntityIndex,
             int entityDepth,
             const std::string& componentTypeId,
+            const std::string& textureRelativePath,
+            const std::string& textureLoadStage,
             const std::string& textFontRelativePath,
             const std::string& textFontLoadStage,
             const std::string& fontDeserializeStage);

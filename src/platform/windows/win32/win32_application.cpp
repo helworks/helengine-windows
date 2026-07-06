@@ -115,7 +115,7 @@ namespace helengine::windows {
         constexpr bool EnableDebugAllocationTracking = false;
 
         /// Controls whether the debug host emits scene-transition diagnostics checkpoints.
-        constexpr bool EnableSceneDiagnosticsCheckpointLogging = false;
+        constexpr bool EnableSceneDiagnosticsCheckpointLogging = true;
 
         /// Controls whether debug allocation tracking samples Win32 process heaps in addition to CRT checkpoints.
         constexpr bool EnableDebugWin32HeapSampling = false;
@@ -543,6 +543,7 @@ namespace helengine::windows {
             messageBuilder << "Fatal host/engine exception: " << (exception != nullptr ? exception->what() : "null");
             std::string message = messageBuilder.str();
             WriteLifecycleLog(message.c_str());
+            WriteSceneDiagnosticsCheckpoint("fatal_exception");
 #if defined(HELENGINE_WINDOWS_DEBUG_RUNTIME_DIAGNOSTICS)
             WriteCurrentThreadStackTrace("Fatal host/engine stack trace.", 1);
             UninstallDebugAbortHandlers();
@@ -555,6 +556,7 @@ namespace helengine::windows {
             messageBuilder << "Fatal host/engine exception: " << exception.what();
             std::string message = messageBuilder.str();
             WriteLifecycleLog(message.c_str());
+            WriteSceneDiagnosticsCheckpoint("fatal_exception");
 #if defined(HELENGINE_WINDOWS_DEBUG_RUNTIME_DIAGNOSTICS)
             WriteCurrentThreadStackTrace("Fatal host/engine stack trace.", 1);
             UninstallDebugAbortHandlers();
@@ -1341,6 +1343,8 @@ namespace helengine::windows {
         int rootEntityIndex = -1;
         int entityDepth = -1;
         std::string componentTypeId;
+        std::string textureRelativePath;
+        std::string textureLoadStage;
         std::string textFontRelativePath;
         std::string textFontLoadStage;
         std::string fontDeserializeStage;
@@ -1366,6 +1370,8 @@ namespace helengine::windows {
 #if __has_include("RuntimeSceneAssetReferenceResolver.hpp")
             RuntimeSceneAssetReferenceResolver* referenceResolver = EngineCore->get_SceneAssetReferenceResolver();
             if (referenceResolver != nullptr) {
+                textureRelativePath = referenceResolver->get_LastTextureRelativePath();
+                textureLoadStage = referenceResolver->get_LastTextureLoadStage();
                 textFontRelativePath = referenceResolver->get_LastTextFontRelativePath();
                 textFontLoadStage = referenceResolver->get_LastTextLoadStage();
             }
@@ -1390,6 +1396,8 @@ namespace helengine::windows {
             rootEntityIndex,
             entityDepth,
             componentTypeId,
+            textureRelativePath,
+            textureLoadStage,
             textFontRelativePath,
             textFontLoadStage,
             fontDeserializeStage);
@@ -1558,16 +1566,44 @@ namespace helengine::windows {
 #endif
         }
 
+        const bool shouldTraceFirstFrame = FramesSinceLastStatisticLog == 0;
         if (EngineInitialized && EngineCore != nullptr) {
 #if __has_include("Core.hpp")
+            if (shouldTraceFirstFrame) {
+                WriteLifecycleLog("First frame entering EngineCore->Update().");
+                WriteSceneDiagnosticsCheckpoint("first_frame_before_update");
+            }
             EngineCore->Update();
+            if (shouldTraceFirstFrame) {
+                WriteLifecycleLog("First frame completed EngineCore->Update().");
+                WriteSceneDiagnosticsCheckpoint("first_frame_after_update");
+            }
             LogBepuStackBoxesDebugSnapshot();
+            if (shouldTraceFirstFrame) {
+                WriteLifecycleLog("First frame entering PollSceneTransitionDiagnostics().");
+            }
             PollSceneTransitionDiagnostics();
+            if (shouldTraceFirstFrame) {
+                WriteLifecycleLog("First frame completed PollSceneTransitionDiagnostics().");
+                WriteSceneDiagnosticsCheckpoint("first_frame_after_poll");
+                WriteLifecycleLog("First frame entering EngineCore->Draw().");
+            }
             EngineCore->Draw();
+            if (shouldTraceFirstFrame) {
+                WriteLifecycleLog("First frame completed EngineCore->Draw().");
+                WriteSceneDiagnosticsCheckpoint("first_frame_after_draw");
+            }
 #endif
         }
 
+        if (shouldTraceFirstFrame) {
+            WriteLifecycleLog("First frame entering Presenter->RenderFrame().");
+        }
         Presenter->RenderFrame();
+        if (shouldTraceFirstFrame) {
+            WriteLifecycleLog("First frame completed Presenter->RenderFrame().");
+            WriteSceneDiagnosticsCheckpoint("first_frame_after_present");
+        }
         UpdateFrameStatistics();
     }
 
@@ -1600,32 +1636,8 @@ namespace helengine::windows {
             return;
         }
 
-        if (BepuDebugSnapshotStatusLogCount < 4) {
-            std::string sentinel = bepuWorld->TryBuildStackBoxesDebugSentinel();
-            std::ostringstream sentinelStatusBuilder;
-            sentinelStatusBuilder << "BEPU sentinel length=" << sentinel.size()
-                                  << " registered_body_count=" << bepuWorld->get_RegisteredBodyCount();
-            std::string sentinelStatus = sentinelStatusBuilder.str();
-            WriteLifecycleLog(sentinelStatus.c_str());
-        }
-
         std::string snapshot = bepuWorld->TryBuildStackBoxesDebugSnapshot();
-        if (BepuDebugSnapshotStatusLogCount < 4) {
-            std::ostringstream snapshotStatusBuilder;
-            snapshotStatusBuilder << "BEPU snapshot length=" << snapshot.size();
-            std::size_t byteCountToReport = snapshot.size() < 8 ? snapshot.size() : 8;
-            for (std::size_t index = 0; index < byteCountToReport; index++) {
-                snapshotStatusBuilder << " b" << index << "=" << static_cast<int>(static_cast<unsigned char>(snapshot[index]));
-            }
-            std::string snapshotStatus = snapshotStatusBuilder.str();
-            WriteLifecycleLog(snapshotStatus.c_str());
-        }
-
         if (snapshot.empty()) {
-            if (BepuDebugSnapshotStatusLogCount < 4) {
-                WriteLifecycleLog("BEPU debug snapshot returned empty text.");
-                BepuDebugSnapshotStatusLogCount++;
-            }
             return;
         }
 

@@ -413,6 +413,17 @@ namespace helengine::windows {
             float4 sourceRect,
             byte4 color);
 
+        /// Draws one textured quad in window-space pixel coordinates after applying a clockwise 2D rotation around its center.
+        void DrawTexturedQuadTransformed(
+            ID3D11ShaderResourceView* textureView,
+            float x,
+            float y,
+            float width,
+            float height,
+            float rotationRadians,
+            float4 sourceRect,
+            byte4 color);
+
         /// Uploads quad vertices into the reusable dynamic buffer and issues one draw from the written range.
         void DrawQuadVertices(const void* vertices, UINT vertexCount);
 

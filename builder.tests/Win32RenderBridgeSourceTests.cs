@@ -51,7 +51,8 @@ public sealed class Win32RenderBridgeSourceTests {
 
         Assert.Contains("bool ShouldMaterialCastShadows(RuntimeMaterial* material) const;", headerSource, StringComparison.Ordinal);
         Assert.Contains("bool Win32RenderManager3D::ShouldMaterialCastShadows(RuntimeMaterial* material) const", implementationSource, StringComparison.Ordinal);
-        Assert.Contains("if (!ShouldMaterialCastShadows(drawable->get_Material())) {", implementationSource, StringComparison.Ordinal);
+        Assert.Contains("Array<RuntimeMaterial*>* runtimeMaterials = drawable->get_Materials();", implementationSource, StringComparison.Ordinal);
+        Assert.Contains("if (!ShouldMaterialCastShadows(runtimeMaterial)) {", implementationSource, StringComparison.Ordinal);
         Assert.Contains("return rootMaterial->get_CastsShadows();", implementationSource, StringComparison.Ordinal);
     }
 
@@ -68,6 +69,32 @@ public sealed class Win32RenderBridgeSourceTests {
         Assert.Contains("texture = TextureUtils::get_PixelTexture();", implementationSource, StringComparison.Ordinal);
         Assert.Contains("context->PSSetShaderResources(0, 1, &nullResourceView);", implementationSource, StringComparison.Ordinal);
         Assert.Contains("context->PSSetSamplers(0, 1, &nullSampler);", implementationSource, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// Verifies the Windows native player includes the current generated engine header names for shared math and input value types.
+    /// </summary>
+    [Fact]
+    public void Win32RenderBridge_and_input_bridge_use_current_generated_engine_header_names() {
+        string repositoryRootPath = ResolveWindowsRepositoryRootPath();
+        string renderHeaderPath = Path.Combine(repositoryRootPath, "src", "platform", "windows", "win32", "win32_render_bridge.hpp");
+        string inputHeaderPath = Path.Combine(repositoryRootPath, "src", "platform", "windows", "win32", "win32_input_bridge.hpp");
+        string renderSourcePath = Path.Combine(repositoryRootPath, "src", "platform", "windows", "win32", "win32_render_bridge.cpp");
+        string inputSourcePath = Path.Combine(repositoryRootPath, "src", "platform", "windows", "win32", "win32_input_bridge.cpp");
+
+        string renderHeaderSource = File.ReadAllText(renderHeaderPath);
+        string inputHeaderSource = File.ReadAllText(inputHeaderPath);
+        string renderSource = File.ReadAllText(renderSourcePath);
+        string inputSource = File.ReadAllText(inputSourcePath);
+
+        Assert.Contains("#include \"float4x4.hpp\"", renderHeaderSource, StringComparison.Ordinal);
+        Assert.DoesNotContain("#include \"helengine_float4x4.hpp\"", renderHeaderSource, StringComparison.Ordinal);
+        Assert.Contains("#include \"int2.hpp\"", inputHeaderSource, StringComparison.Ordinal);
+        Assert.DoesNotContain("#include \"helengine_int2.hpp\"", inputHeaderSource, StringComparison.Ordinal);
+        Assert.DoesNotContain("#include \"helengine_helengine_int2.hpp\"", inputHeaderSource, StringComparison.Ordinal);
+        Assert.DoesNotContain("helengine_int2(", inputSource, StringComparison.Ordinal);
+        Assert.Contains("drawable->get_Materials()", renderSource, StringComparison.Ordinal);
+        Assert.DoesNotContain("drawable->get_Material()", renderSource, StringComparison.Ordinal);
     }
 
     /// <summary>

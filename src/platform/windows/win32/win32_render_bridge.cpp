@@ -174,6 +174,7 @@ namespace helengine::windows {
             DirectX::XMFLOAT4X4 WorldViewProjection;
             DirectX::XMFLOAT4X4 WorldNormal;
             DirectX::XMFLOAT4 CameraPosition;
+            DirectX::XMFLOAT4 MaterialFlags;
             DirectX::XMFLOAT4 LightDirection;
             DirectX::XMFLOAT4 LightColor;
             DirectX::XMFLOAT4 AmbientColor;
@@ -262,6 +263,7 @@ cbuffer TransformBuffer : register(b0) {
     float4x4 WorldViewProjection;
     float4x4 WorldNormal;
     float4 CameraPosition;
+    float4 MaterialFlags;
     float4 LightDirection;
     float4 LightColor;
     float4 AmbientColor;
@@ -285,7 +287,7 @@ PSInput VSMain(VSInput input) {
     PSInput output;
     float4 worldPosition = mul(float4(input.Position, 1.0f), World);
     float4 worldNormal = mul(float4(input.Normal, 0.0f), WorldNormal);
-    output.Position = mul(worldPosition, WorldViewProjection);
+    output.Position = mul(float4(input.Position, 1.0f), WorldViewProjection);
     output.WorldPosition = worldPosition.xyz;
     output.WorldNormal = normalize(worldNormal.xyz);
     return output;
@@ -299,6 +301,7 @@ cbuffer TransformBuffer : register(b0) {
     float4x4 WorldViewProjection;
     float4x4 WorldNormal;
     float4 CameraPosition;
+    float4 MaterialFlags;
     float4 Padding0;
     float4 Padding1;
     float4 Padding2;
@@ -698,12 +701,6 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
                 static_cast<float>(color.W) / 255.0f);
         }
 
-        /// Appends one one-line message to the temporary Windows render snapshot log.
-        void AppendRenderSnapshotLine(const std::string& line) {
-            std::ofstream stream("C:\\dev\\helengine\\tmp\\win32-render-snapshot.log", std::ios::app);
-            stream << line << '\n';
-        }
-
         /// Resolves one diagnostics log path beside the packaged executable.
         std::filesystem::path ResolveRenderDiagnosticsLogPath() {
             wchar_t buffer[MAX_PATH];
@@ -713,6 +710,27 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
             }
 
             return std::filesystem::path(buffer).parent_path() / "helengine_windows.render.log";
+        }
+
+        /// Resolves one first-frame render snapshot path beside the packaged executable.
+        std::filesystem::path ResolveRenderSnapshotLogPath() {
+            wchar_t buffer[MAX_PATH];
+            DWORD length = GetModuleFileNameW(nullptr, buffer, MAX_PATH);
+            if (length == 0) {
+                return std::filesystem::path("win32-render-snapshot.log");
+            }
+
+            return std::filesystem::path(buffer).parent_path() / "win32-render-snapshot.log";
+        }
+
+        /// Appends one one-line message to the first-frame Windows render snapshot log.
+        void AppendRenderSnapshotLine(const std::string& line) {
+            std::ofstream stream(ResolveRenderSnapshotLogPath(), std::ios::app);
+            if (!stream.is_open()) {
+                return;
+            }
+
+            stream << line << '\n';
         }
 
         /// Appends one line to the packaged Windows render diagnostics log.
@@ -1236,6 +1254,15 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
     void Win32RenderManager3D::FlushReleasedAssets() {
         MaterialConstantBuffers.clear();
         LiveMaterialConstantBufferBytes = 0;
+        HasWrittenRenderSnapshot = false;
+        Logged3DVisitCount = 0;
+        HasWritten2DSummary = false;
+        HasWritten2DDraw = false;
+        Logged2DVisitCount = 0;
+        Logged2DRectCount = 0;
+        Logged2DTextCount = 0;
+        Logged2DSpriteCount = 0;
+        Logged2DTextEarlyReturnCount = 0;
         ID3D11DeviceContext* context = Bootstrap.GetDeviceContext();
         if (context != nullptr) {
             context->ClearState();
@@ -1361,7 +1388,10 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
             return;
         }
 
-        RuntimeMaterial* runtimeMaterial = drawable->get_Material();
+        Array<RuntimeMaterial*>* runtimeMaterials = drawable->get_Materials();
+        RuntimeMaterial* runtimeMaterial = runtimeMaterials != nullptr && runtimeMaterials->Length > 0
+            ? (*runtimeMaterials)[0]
+            : nullptr;
         RuntimeMaterial* rootMaterial = runtimeMaterial != nullptr ? runtimeMaterial->ResolveRootMaterial() : nullptr;
         Win32ShaderResource* shaderResource = nullptr;
         if (rootMaterial != nullptr) {
@@ -1417,20 +1447,7 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
         float3 scale = parent->get_Scale();
         float3 position = parent->get_Position();
 
-        ::float4x4 rotation;
-        float4x4::CreateFromQuaternion__ref0_out1(orientation, rotation);
-
-        ::float4x4 size;
-        float4x4::CreateScale__out3(scale.X, scale.Y, scale.Z, size);
-
-        ::float4x4 rotationScale;
-        float4x4::Multiply__ref0_ref1_out2(rotation, size, rotationScale);
-
-        ::float4x4 translation;
-        float4x4::CreateTranslation__ref0_out1(position, translation);
-
-        ::float4x4 world;
-        float4x4::Multiply__ref0_ref1_out2(rotationScale, translation, world);
+        ::float4x4 world = parent->get_WorldTransformMatrix();
 
         if (GroundCubeProbeGroundDebugCount < 16 && IsGroundCubeProbeGround(parent)) {
             HasWrittenGroundCubeProbeGroundDebug = true;
@@ -1561,6 +1578,18 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
                 " vertices=" + std::to_string(model->VertexCount) +
                 " indices=" + std::to_string(model->IndexCount));
             AppendRenderSnapshotLine(
+                "drawable[" + std::to_string(Logged3DVisitCount) + "] world rows="
+                "[" + std::to_string(world.M11) + "," + std::to_string(world.M12) + "," + std::to_string(world.M13) + "," + std::to_string(world.M14) + "]"
+                "[" + std::to_string(world.M21) + "," + std::to_string(world.M22) + "," + std::to_string(world.M23) + "," + std::to_string(world.M24) + "]"
+                "[" + std::to_string(world.M31) + "," + std::to_string(world.M32) + "," + std::to_string(world.M33) + "," + std::to_string(world.M34) + "]"
+                "[" + std::to_string(world.M41) + "," + std::to_string(world.M42) + "," + std::to_string(world.M43) + "," + std::to_string(world.M44) + "]");
+            AppendRenderSnapshotLine(
+                "drawable[" + std::to_string(Logged3DVisitCount) + "] uploaded world rows="
+                "[" + std::to_string(transposedWorld.M11) + "," + std::to_string(transposedWorld.M12) + "," + std::to_string(transposedWorld.M13) + "," + std::to_string(transposedWorld.M14) + "]"
+                "[" + std::to_string(transposedWorld.M21) + "," + std::to_string(transposedWorld.M22) + "," + std::to_string(transposedWorld.M23) + "," + std::to_string(transposedWorld.M24) + "]"
+                "[" + std::to_string(transposedWorld.M31) + "," + std::to_string(transposedWorld.M32) + "," + std::to_string(transposedWorld.M33) + "," + std::to_string(transposedWorld.M34) + "]"
+                "[" + std::to_string(transposedWorld.M41) + "," + std::to_string(transposedWorld.M42) + "," + std::to_string(transposedWorld.M43) + "," + std::to_string(transposedWorld.M44) + "]");
+            AppendRenderSnapshotLine(
                 "drawable[" + std::to_string(Logged3DVisitCount) + "] wvp rows="
                 "[" + std::to_string(worldViewProjection.M11) + "," + std::to_string(worldViewProjection.M12) + "," + std::to_string(worldViewProjection.M13) + "," + std::to_string(worldViewProjection.M14) + "]"
                 "[" + std::to_string(worldViewProjection.M21) + "," + std::to_string(worldViewProjection.M22) + "," + std::to_string(worldViewProjection.M23) + "," + std::to_string(worldViewProjection.M24) + "]"
@@ -1600,6 +1629,11 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
         constants.WorldViewProjection = StoreMatrix(transposedWorldViewProjection);
         constants.WorldNormal = StoreMatrix(uploadedNormalMatrix);
         constants.CameraPosition = DirectX::XMFLOAT4(CurrentCameraPosition.X, CurrentCameraPosition.Y, CurrentCameraPosition.Z, 0.0f);
+        constants.MaterialFlags = DirectX::XMFLOAT4(
+            runtimeMaterial != nullptr && runtimeMaterial->get_ReceivesShadows() ? 1.0f : 0.0f,
+            0.0f,
+            0.0f,
+            0.0f);
         constants.LightDirection = DirectX::XMFLOAT4(-0.35f, -0.65f, -0.55f, 0.0f);
         constants.LightColor = DirectX::XMFLOAT4(1.0f, 1.0f, 1.0f, 1.0f);
         constants.AmbientColor = DirectX::XMFLOAT4(0.16f, 0.18f, 0.22f, 1.0f);
@@ -1697,7 +1731,7 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
 
         D3D11_RASTERIZER_DESC rasterizerDescription {};
         rasterizerDescription.FillMode = D3D11_FILL_SOLID;
-        rasterizerDescription.CullMode = D3D11_CULL_BACK;
+        rasterizerDescription.CullMode = D3D11_CULL_NONE;
         rasterizerDescription.FrontCounterClockwise = TRUE;
         rasterizerDescription.DepthClipEnable = TRUE;
 
@@ -1877,7 +1911,7 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
 
         D3D11_RASTERIZER_DESC shadowRasterizerDescription {};
         shadowRasterizerDescription.FillMode = D3D11_FILL_SOLID;
-        shadowRasterizerDescription.CullMode = D3D11_CULL_BACK;
+        shadowRasterizerDescription.CullMode = D3D11_CULL_NONE;
         shadowRasterizerDescription.FrontCounterClockwise = TRUE;
         shadowRasterizerDescription.DepthClipEnable = TRUE;
         shadowRasterizerDescription.DepthBias = ShadowDepthBias;
@@ -2313,7 +2347,11 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
             return;
         }
 
-        if (!ShouldMaterialCastShadows(drawable->get_Material())) {
+        Array<RuntimeMaterial*>* runtimeMaterials = drawable->get_Materials();
+        RuntimeMaterial* runtimeMaterial = runtimeMaterials != nullptr && runtimeMaterials->Length > 0
+            ? (*runtimeMaterials)[0]
+            : nullptr;
+        if (!ShouldMaterialCastShadows(runtimeMaterial)) {
             return;
         }
 
@@ -2345,16 +2383,7 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
         float3 scale = parent->get_Scale();
         float3 position = parent->get_Position();
 
-        ::float4x4 rotation;
-        float4x4::CreateFromQuaternion__ref0_out1(orientation, rotation);
-        ::float4x4 size;
-        float4x4::CreateScale__out3(scale.X, scale.Y, scale.Z, size);
-        ::float4x4 rotationScale;
-        float4x4::Multiply__ref0_ref1_out2(rotation, size, rotationScale);
-        ::float4x4 translation;
-        float4x4::CreateTranslation__ref0_out1(position, translation);
-        ::float4x4 world;
-        float4x4::Multiply__ref0_ref1_out2(rotationScale, translation, world);
+        ::float4x4 world = parent->get_WorldTransformMatrix();
         ::float4x4 worldViewProjection;
         float4x4::Multiply__ref0_ref1_out2(world, lightViewProjection, worldViewProjection);
         ::float4x4 transposedWorldViewProjection;
@@ -2700,6 +2729,19 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
         ShaderRuntimeMaterial* shaderRuntimeMaterial = RequireShaderRuntimeMaterial(material);
         MaterialLayout* layout = shaderRuntimeMaterial->get_Layout();
         MaterialPropertyBlock* properties = shaderRuntimeMaterial->get_Properties();
+        if (!HasWrittenRenderSnapshot) {
+            const int32_t textureBindingCount = layout != nullptr && layout->get_TextureBindings() != nullptr
+                ? layout->get_TextureBindings()->Length
+                : 0;
+            const int32_t constantBufferBindingCount = layout != nullptr && layout->get_ConstantBufferBindings() != nullptr
+                ? layout->get_ConstantBufferBindings()->Length
+                : 0;
+            AppendRenderDiagnosticsLine(
+                "3d.material_layout material_id=" + materialId
+                + " texture_bindings=" + std::to_string(textureBindingCount)
+                + " constant_buffer_bindings=" + std::to_string(constantBufferBindingCount)
+                + " has_properties=" + std::to_string(properties != nullptr ? 1 : 0));
+        }
         if (layout != nullptr && properties != nullptr) {
             Array<MaterialLayoutBinding*>* textureBindings = layout->get_TextureBindings();
             if (textureBindings != nullptr && textureBindings->Length > 0) {
@@ -2739,11 +2781,21 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
 
             std::string bindingName = binding->get_Name();
             if (IsEngineManagedConstantBufferBinding(bindingName)) {
+                if (!HasWrittenRenderSnapshot) {
+                    AppendRenderDiagnosticsLine(
+                        "3d.material_cb skip_engine_managed name=" + bindingName
+                        + " slot=" + std::to_string(binding->get_Slot()));
+                }
                 continue;
             }
 
             Array<uint8_t>* data = nullptr;
             if (!shaderRuntimeMaterial->TryResolveConstantBufferData__out1(bindingName, data) || data == nullptr || data->Length == 0) {
+                if (!HasWrittenRenderSnapshot) {
+                    AppendRenderDiagnosticsLine(
+                        "3d.material_cb missing name=" + bindingName
+                        + " slot=" + std::to_string(binding->get_Slot()));
+                }
                 ID3D11Buffer* nullBuffer = nullptr;
                 context->VSSetConstantBuffers(static_cast<UINT>(binding->get_Slot()), 1, &nullBuffer);
                 context->PSSetConstantBuffers(static_cast<UINT>(binding->get_Slot()), 1, &nullBuffer);
@@ -2751,6 +2803,12 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
             }
 
             int32_t dataLength = data->Length;
+            if (!HasWrittenRenderSnapshot) {
+                AppendRenderDiagnosticsLine(
+                    "3d.material_cb bind name=" + bindingName
+                    + " slot=" + std::to_string(binding->get_Slot())
+                    + " size=" + std::to_string(dataLength));
+            }
             ID3D11Buffer* constantBuffer = GetOrCreateMaterialConstantBuffer(binding->get_Slot(), dataLength);
             context->UpdateSubresource(constantBuffer, 0, nullptr, data->Data, 0, 0);
             delete data;
@@ -3336,6 +3394,58 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
         DrawQuadVertices(vertices.data(), static_cast<UINT>(vertices.size()));
     }
 
+    /// Draws one textured quad in window-space pixel coordinates after applying a clockwise 2D rotation around its center.
+    void Win32RenderManager2D::DrawTexturedQuadTransformed(
+        ID3D11ShaderResourceView* textureView,
+        float x,
+        float y,
+        float width,
+        float height,
+        float rotationRadians,
+        float4 sourceRect,
+        byte4 color) {
+        if (!HasActiveViewport || textureView == nullptr || width <= 0.0f || height <= 0.0f || CurrentViewport.Width <= 0.0f || CurrentViewport.Height <= 0.0f) {
+            return;
+        }
+
+        PrepareTexturedQuadDraw(textureView);
+
+        const float halfWidth = width * 0.5f;
+        const float halfHeight = height * 0.5f;
+        const float centerX = x + halfWidth;
+        const float centerYUp = -(y + halfHeight);
+        const float rotationSin = std::sin(rotationRadians);
+        const float rotationCos = std::cos(rotationRadians);
+        const DirectX::XMFLOAT4 tint = ConvertColor(color);
+
+        const float bottomLeftX = centerX + ((-halfWidth * rotationCos) - (-halfHeight * rotationSin));
+        const float bottomLeftY = -(centerYUp + ((-halfWidth * rotationSin) + (-halfHeight * rotationCos)));
+        const float topLeftX = centerX + ((-halfWidth * rotationCos) - (halfHeight * rotationSin));
+        const float topLeftY = -(centerYUp + ((-halfWidth * rotationSin) + (halfHeight * rotationCos)));
+        const float bottomRightX = centerX + ((halfWidth * rotationCos) - (-halfHeight * rotationSin));
+        const float bottomRightY = -(centerYUp + ((halfWidth * rotationSin) + (-halfHeight * rotationCos)));
+        const float topRightX = centerX + ((halfWidth * rotationCos) - (halfHeight * rotationSin));
+        const float topRightY = -(centerYUp + ((halfWidth * rotationSin) + (halfHeight * rotationCos)));
+
+        const float bottomLeftNdcX = (((bottomLeftX - CurrentViewport.TopLeftX) / CurrentViewport.Width) * 2.0f) - 1.0f;
+        const float bottomLeftNdcY = 1.0f - (((bottomLeftY - CurrentViewport.TopLeftY) / CurrentViewport.Height) * 2.0f);
+        const float topLeftNdcX = (((topLeftX - CurrentViewport.TopLeftX) / CurrentViewport.Width) * 2.0f) - 1.0f;
+        const float topLeftNdcY = 1.0f - (((topLeftY - CurrentViewport.TopLeftY) / CurrentViewport.Height) * 2.0f);
+        const float bottomRightNdcX = (((bottomRightX - CurrentViewport.TopLeftX) / CurrentViewport.Width) * 2.0f) - 1.0f;
+        const float bottomRightNdcY = 1.0f - (((bottomRightY - CurrentViewport.TopLeftY) / CurrentViewport.Height) * 2.0f);
+        const float topRightNdcX = (((topRightX - CurrentViewport.TopLeftX) / CurrentViewport.Width) * 2.0f) - 1.0f;
+        const float topRightNdcY = 1.0f - (((topRightY - CurrentViewport.TopLeftY) / CurrentViewport.Height) * 2.0f);
+
+        std::array<Win32QuadVertex, 4> vertices = {
+            Win32QuadVertex { DirectX::XMFLOAT3(bottomLeftNdcX, bottomLeftNdcY, 0.0f), DirectX::XMFLOAT2(sourceRect.X, sourceRect.Y + sourceRect.W), tint },
+            Win32QuadVertex { DirectX::XMFLOAT3(topLeftNdcX, topLeftNdcY, 0.0f), DirectX::XMFLOAT2(sourceRect.X, sourceRect.Y), tint },
+            Win32QuadVertex { DirectX::XMFLOAT3(bottomRightNdcX, bottomRightNdcY, 0.0f), DirectX::XMFLOAT2(sourceRect.X + sourceRect.Z, sourceRect.Y + sourceRect.W), tint },
+            Win32QuadVertex { DirectX::XMFLOAT3(topRightNdcX, topRightNdcY, 0.0f), DirectX::XMFLOAT2(sourceRect.X + sourceRect.Z, sourceRect.Y), tint }
+        };
+
+        DrawQuadVertices(vertices.data(), static_cast<UINT>(vertices.size()));
+    }
+
     /// Uploads quad vertices into the reusable dynamic buffer and issues one draw from the written range.
     void Win32RenderManager2D::DrawQuadVertices(const void* vertices, UINT vertexCount) {
         if (vertices == nullptr || vertexCount == 0U) {
@@ -3482,16 +3592,19 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
                         + std::to_string(bounds.X) + ","
                         + std::to_string(bounds.Y) + ","
                         + std::to_string(bounds.Z) + ","
-                        + std::to_string(bounds.W));
+                        + std::to_string(bounds.W)
+                        + " rotation="
+                        + std::to_string(commandList->GetTexturedQuadRotation(payloadIndex)));
                     HasWritten2DDraw = true;
                 }
 
-                DrawTexturedQuad(
+                DrawTexturedQuadTransformed(
                     textureView,
                     bounds.X,
                     bounds.Y,
                     bounds.Z,
                     bounds.W,
+                    commandList->GetTexturedQuadRotation(payloadIndex),
                     commandList->GetTexturedQuadSourceRect(payloadIndex),
                     commandList->GetTexturedQuadColor(payloadIndex));
                 continue;
@@ -3786,9 +3899,16 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
         }
 
         int2 size = sprite->get_Size();
-        const float width = size.X > 0 ? static_cast<float>(size.X) : static_cast<float>(texture->get_Width());
-        const float height = size.Y > 0 ? static_cast<float>(size.Y) : static_cast<float>(texture->get_Height());
-        const float3 position = sprite->get_Parent()->get_Position();
+        const float baseWidth = size.X > 0 ? static_cast<float>(size.X) : static_cast<float>(texture->get_Width());
+        const float baseHeight = size.Y > 0 ? static_cast<float>(size.Y) : static_cast<float>(texture->get_Height());
+        Entity* parent = sprite->get_Parent();
+        const float3 position = parent->get_Position();
+        const float3 scale = parent->get_Scale();
+        const float4 orientation = parent->get_Orientation();
+        const float width = baseWidth * scale.X;
+        const float height = baseHeight * scale.Y;
+        const float3 rotatedRight = float4::RotateVector(float3(1.0f, 0.0f, 0.0f), orientation);
+        const float rotationRadians = static_cast<float>(std::atan2(rotatedRight.Y, rotatedRight.X));
         if (!HasWritten2DDraw) {
             AppendRenderDiagnosticsLine(
                 "2d.draw_sprite pos="
@@ -3796,10 +3916,16 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
                 + std::to_string(position.Y)
                 + " size="
                 + std::to_string(width) + ","
-                + std::to_string(height));
+                + std::to_string(height)
+                + " scale="
+                + std::to_string(scale.X) + ","
+                + std::to_string(scale.Y) + ","
+                + std::to_string(scale.Z)
+                + " rotation="
+                + std::to_string(rotationRadians));
             HasWritten2DDraw = true;
         }
-        DrawTexturedQuad(textureView, position.X, position.Y, width, height, sprite->get_SourceRect(), sprite->get_Color());
+        DrawTexturedQuadTransformed(textureView, position.X, position.Y, width, height, rotationRadians, sprite->get_SourceRect(), sprite->get_Color());
     }
 
     /// Accepts a text draw request without issuing backend rendering yet.

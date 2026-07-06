@@ -11,7 +11,7 @@
 #include "KeyboardState.hpp"
 #include "Keys.hpp"
 #include "MouseState.hpp"
-#include "helengine_helengine_int2.hpp"
+#include "int2.hpp"
 
 #include "platform/windows/win32/win32_window.hpp"
 
@@ -23,10 +23,10 @@ namespace helengine::windows {
         explicit Win32InputBackend(Win32Window* window);
 
         /// Returns whether the backend continues reporting input while the host window is inactive.
-        bool get_ReceiveInputInBackground() override;
+        bool get_ReceiveInputInBackground();
 
         /// Updates whether the backend continues reporting input while the host window is inactive.
-        void set_ReceiveInputInBackground(bool value) override;
+        void set_ReceiveInputInBackground(bool value);
 
         /// Captures one input frame from the current Windows host state.
         InputFrameState CaptureFrame() override;
@@ -66,6 +66,6 @@ namespace helengine::windows {
         bool ReceiveInputInBackground;
 
         /// Stores the delta offset produced by the most recent wrap.
-        helengine_int2 PointerWrapDeltaOffset;
+        int2 PointerWrapDeltaOffset;
     };
 }
