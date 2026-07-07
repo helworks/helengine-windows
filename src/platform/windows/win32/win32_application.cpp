@@ -639,8 +639,7 @@ namespace helengine::windows {
     /// Initializes the generated engine core when it is available in the current build.
     void Win32Application::InitializeEngineCore() {
 #if __has_include("Core.hpp")
-        EngineCore = new Core();
-        CoreInitializationOptions* options = EngineCore->get_InitializationOptions();
+        CoreInitializationOptions* options = new CoreInitializationOptions();
         options->ContentStreamSource = new HostFileSystemContentStreamSource(ResolveApplicationDirectoryPath().string());
         options->UpdateOrderLayers = 4;
         options->RenderOrderLayers3D = 4;
@@ -652,6 +651,7 @@ namespace helengine::windows {
         RuntimeDiagnosticsProvider = std::make_unique<RuntimeMemoryDiagnosticsProvider>();
         options->set_RuntimeDiagnosticsProvider(RuntimeDiagnosticsProvider.get());
 #endif
+        EngineCore = new Core(options);
 
         EngineRenderManager3D = new Win32RenderManager3D(*Bootstrap);
         EngineRenderManager2D = new Win32RenderManager2D(*Bootstrap);
