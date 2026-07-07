@@ -87,6 +87,18 @@ public class WindowsPlatformAssetBuilderTests {
                 Assert.False(field.Required);
             },
             field => {
+                Assert.Equal("roughness", field.FieldId);
+                Assert.Equal(PlatformMaterialFieldKind.Text, field.FieldKind);
+                Assert.Equal("1.0", field.DefaultValue);
+                Assert.False(field.Required);
+            },
+            field => {
+                Assert.Equal("roughness-texture-id", field.FieldId);
+                Assert.Equal(PlatformMaterialFieldKind.AssetReference, field.FieldKind);
+                Assert.Equal(string.Empty, field.DefaultValue);
+                Assert.False(field.Required);
+            },
+            field => {
                 Assert.Equal("casts-shadow", field.FieldId);
                 Assert.Equal(PlatformMaterialFieldKind.Boolean, field.FieldKind);
                 Assert.Equal("true", field.DefaultValue);
@@ -135,6 +147,90 @@ public class WindowsPlatformAssetBuilderTests {
         Assert.Equal("BaseColorBuffer", materialAsset.ConstantBuffers[0].Name);
         Assert.Equal(16, materialAsset.ConstantBuffers[0].Data.Length);
         Assert.Equal(new[] { "ForwardStandardShader" }, result.ReferencedShaderAssetIds);
+    }
+
+    /// <summary>
+    /// Verifies the Windows material cook path preserves the authored roughness scalar and texture fields.
+    /// </summary>
+    [Fact]
+    public void CookMaterial_preserves_roughness_scalar_and_texture_fields() {
+        WindowsPlatformAssetBuilder builder = new();
+
+        PlatformMaterialCookResult result = builder.CookMaterial(new PlatformMaterialCookRequest(
+            "Materials/Test.helmat",
+            "Materials/Test.helmat",
+            "windows",
+            "debug",
+            "directx11",
+            "standard-shader",
+            new Dictionary<string, string> {
+                ["use-custom-shader"] = "false",
+                ["shader-asset-id"] = "ForwardStandardShader",
+                ["vertex-program"] = "ForwardStandardShader.vs",
+                ["pixel-program"] = "ForwardStandardShader.ps",
+                ["variant"] = "Mesh",
+                ["roughness"] = "0.35",
+                ["roughness-texture-id"] = "Textures/MarbleRoughness"
+            }));
+
+        ShaderMaterialAsset materialAsset = Assert.IsType<ShaderMaterialAsset>(global::helengine.files.AssetSerializer.DeserializeFromBytes(result.CookedMaterialBytes));
+        MaterialConstantBufferAsset roughnessBuffer = Assert.Single(materialAsset.ConstantBuffers, constantBuffer => constantBuffer.Name == "RoughnessBuffer");
+        float[] roughnessChannels = ReadFloat4(roughnessBuffer.Data);
+
+        Assert.Equal("Textures/MarbleRoughness", ReadStringField(materialAsset, "RoughnessTextureAssetId"));
+        Assert.Equal(0.35f, roughnessChannels[0], 5);
+        Assert.Equal(0.35f, roughnessChannels[1], 5);
+        Assert.Equal(0.35f, roughnessChannels[2], 5);
+        Assert.Equal(0.35f, roughnessChannels[3], 5);
+    }
+
+    /// <summary>
+    /// Verifies the Windows material schema publishes metallic and specular authored standard-material fields.
+    /// </summary>
+    [Fact]
+    public void Descriptor_and_definition_expose_standard_material_metallic_and_specular_fields() {
+        WindowsPlatformAssetBuilder builder = new();
+
+        PlatformMaterialSchemaDefinition schema = Assert.Single(builder.Definition.MaterialSchemas, materialSchema => materialSchema.SchemaId == "standard-shader");
+
+        Assert.Contains(schema.Fields, field => field.FieldId == "metallic" && field.FieldKind == PlatformMaterialFieldKind.Text && field.DefaultValue == "0.0" && !field.Required);
+        Assert.Contains(schema.Fields, field => field.FieldId == "specular" && field.FieldKind == PlatformMaterialFieldKind.Text && field.DefaultValue == "0.5" && !field.Required);
+    }
+
+    /// <summary>
+    /// Verifies the Windows material cook path preserves authored metallic and specular scalar values.
+    /// </summary>
+    [Fact]
+    public void CookMaterial_preserves_metallic_and_specular_scalar_fields() {
+        WindowsPlatformAssetBuilder builder = new();
+
+        PlatformMaterialCookResult result = builder.CookMaterial(new PlatformMaterialCookRequest(
+            "Materials/Test.helmat",
+            "Materials/Test.helmat",
+            "windows",
+            "debug",
+            "directx11",
+            "standard-shader",
+            new Dictionary<string, string> {
+                ["use-custom-shader"] = "false",
+                ["shader-asset-id"] = "ForwardStandardShader",
+                ["vertex-program"] = "ForwardStandardShader.vs",
+                ["pixel-program"] = "ForwardStandardShader.ps",
+                ["variant"] = "Mesh",
+                ["metallic"] = "0.25",
+                ["specular"] = "0.75"
+            }));
+
+        ShaderMaterialAsset materialAsset = Assert.IsType<ShaderMaterialAsset>(global::helengine.files.AssetSerializer.DeserializeFromBytes(result.CookedMaterialBytes));
+        MaterialConstantBufferAsset metallicBuffer = Assert.Single(
+            materialAsset.ConstantBuffers,
+            constantBuffer => constantBuffer.Name == StandardMaterialMetallicDefaults.MetallicBufferName);
+        MaterialConstantBufferAsset specularBuffer = Assert.Single(
+            materialAsset.ConstantBuffers,
+            constantBuffer => constantBuffer.Name == StandardMaterialSpecularDefaults.SpecularBufferName);
+
+        Assert.Equal(StandardMaterialMetallicDefaults.CreateConstantBufferData(0.25f), metallicBuffer.Data);
+        Assert.Equal(StandardMaterialSpecularDefaults.CreateConstantBufferData(0.75f), specularBuffer.Data);
     }
 
     /// <summary>
@@ -465,6 +561,24 @@ public class WindowsPlatformAssetBuilderTests {
             reader.ReadSingle(),
             reader.ReadSingle()
         ];
+    }
+
+    /// <summary>
+    /// Reads one public instance string field via reflection so tests can fail cleanly before the field is implemented.
+    /// </summary>
+    /// <param name="instance">Object instance to inspect.</param>
+    /// <param name="fieldName">Public instance field name.</param>
+    /// <returns>Current string value.</returns>
+    static string ReadStringField(object instance, string fieldName) {
+        if (instance == null) {
+            throw new ArgumentNullException(nameof(instance));
+        } else if (string.IsNullOrWhiteSpace(fieldName)) {
+            throw new ArgumentException("Field name must be provided.", nameof(fieldName));
+        }
+
+        System.Reflection.FieldInfo field = instance.GetType().GetField(fieldName, System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public);
+        Assert.NotNull(field);
+        return Assert.IsType<string>(field.GetValue(instance));
     }
 
     /// <summary>

@@ -24,6 +24,26 @@ public sealed class WindowsPlatformAssetBuilder : IPlatformAssetBuilder {
     const string BaseColorBufferName = "BaseColorBuffer";
 
     /// <summary>
+    /// Stable material field identifier used for the authored roughness scalar.
+    /// </summary>
+    const string RoughnessFieldId = "roughness";
+
+    /// <summary>
+    /// Stable material field identifier used for the authored roughness texture asset id.
+    /// </summary>
+    const string RoughnessTextureFieldId = "roughness-texture-id";
+
+    /// <summary>
+    /// Stable material field identifier used for the authored metallic scalar.
+    /// </summary>
+    const string MetallicFieldId = "metallic";
+
+    /// <summary>
+    /// Stable material field identifier used for the authored specular scalar.
+    /// </summary>
+    const string SpecularFieldId = "specular";
+
+    /// <summary>
     /// Native build executor used to invoke the Windows CMake build.
     /// </summary>
     readonly IWindowsNativeBuildExecutor NativeBuildExecutor;
@@ -75,6 +95,12 @@ public sealed class WindowsPlatformAssetBuilder : IPlatformAssetBuilder {
         string diffuseTextureAssetId = request.FieldValues.TryGetValue("texture-id", out string authoredTextureAssetId) && !string.IsNullOrWhiteSpace(authoredTextureAssetId)
             ? authoredTextureAssetId
             : string.Empty;
+        string roughnessTextureAssetId = request.FieldValues.TryGetValue(RoughnessTextureFieldId, out string authoredRoughnessTextureAssetId) && !string.IsNullOrWhiteSpace(authoredRoughnessTextureAssetId)
+            ? authoredRoughnessTextureAssetId
+            : string.Empty;
+        float roughness = ReadOptionalFloatField(request.FieldValues, RoughnessFieldId, StandardMaterialRoughnessDefaults.DefaultRoughness);
+        float metallic = ReadOptionalFloatField(request.FieldValues, MetallicFieldId, StandardMaterialMetallicDefaults.DefaultMetallic);
+        float specular = ReadOptionalFloatField(request.FieldValues, SpecularFieldId, StandardMaterialSpecularDefaults.DefaultSpecular);
         bool castsShadows = ReadOptionalBooleanField(request.FieldValues, "casts-shadow", true);
         bool receivesShadows = ReadOptionalBooleanField(request.FieldValues, "receives-shadow", true);
 
@@ -85,6 +111,7 @@ public sealed class WindowsPlatformAssetBuilder : IPlatformAssetBuilder {
             PixelProgram = pixelProgram,
             Variant = variant,
             DiffuseTextureAssetId = diffuseTextureAssetId,
+            RoughnessTextureAssetId = roughnessTextureAssetId,
             CastsShadows = castsShadows,
             ReceivesShadows = receivesShadows,
             RenderState = new MaterialRenderState(),
@@ -92,6 +119,18 @@ public sealed class WindowsPlatformAssetBuilder : IPlatformAssetBuilder {
                 new MaterialConstantBufferAsset {
                     Name = BaseColorBufferName,
                     Data = CreateFloat4ConstantBufferData(ParseBaseColor(baseColor))
+                },
+                new MaterialConstantBufferAsset {
+                    Name = StandardMaterialRoughnessDefaults.RoughnessBufferName,
+                    Data = StandardMaterialRoughnessDefaults.CreateConstantBufferData(roughness)
+                },
+                new MaterialConstantBufferAsset {
+                    Name = StandardMaterialMetallicDefaults.MetallicBufferName,
+                    Data = StandardMaterialMetallicDefaults.CreateConstantBufferData(metallic)
+                },
+                new MaterialConstantBufferAsset {
+                    Name = StandardMaterialSpecularDefaults.SpecularBufferName,
+                    Data = StandardMaterialSpecularDefaults.CreateConstantBufferData(specular)
                 }
             ]
         };
@@ -172,6 +211,32 @@ public sealed class WindowsPlatformAssetBuilder : IPlatformAssetBuilder {
 
         if (!bool.TryParse(value, out bool parsedValue)) {
             throw new InvalidOperationException($"Material field '{fieldId}' must be a boolean value.");
+        }
+
+        return parsedValue;
+    }
+
+    /// <summary>
+    /// Reads an optional floating-point material field from the builder-owned field map.
+    /// </summary>
+    /// <param name="fieldValues">Serialized material field values keyed by field id.</param>
+    /// <param name="fieldId">Field identifier to read.</param>
+    /// <param name="defaultValue">Value returned when the field is missing or blank.</param>
+    /// <returns>Resolved floating-point value.</returns>
+    static float ReadOptionalFloatField(IReadOnlyDictionary<string, string> fieldValues, string fieldId, float defaultValue) {
+        if (fieldValues == null) {
+            throw new ArgumentNullException(nameof(fieldValues));
+        } else if (string.IsNullOrWhiteSpace(fieldId)) {
+            throw new ArgumentException("Field id must be provided.", nameof(fieldId));
+        }
+
+        string value;
+        if (!fieldValues.TryGetValue(fieldId, out value) || string.IsNullOrWhiteSpace(value)) {
+            return defaultValue;
+        }
+
+        if (!float.TryParse(value, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out float parsedValue)) {
+            throw new InvalidOperationException($"Material field '{fieldId}' must be a floating-point value.");
         }
 
         return parsedValue;
