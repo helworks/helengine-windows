@@ -1089,8 +1089,8 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
         return runtimeModel;
     }
 
-    RuntimeMaterial* Win32RenderManager3D::BuildMaterialFromRawAsset(ContentManager* assetContentManager, std::string contentRootPath, std::string materialAssetPath) {
-        return ShaderRuntimeMaterialLoader::BuildMaterialFromRawAsset(this, assetContentManager, contentRootPath, materialAssetPath);
+    RuntimeMaterial* Win32RenderManager3D::BuildMaterialFromRawAsset(ContentManager* assetContentManager, std::string materialAssetPath) {
+        return ShaderRuntimeMaterialLoader::BuildMaterialFromRawAsset(this, assetContentManager, materialAssetPath);
     }
 
     /// Builds a runtime material placeholder that keeps the packaged material identity.

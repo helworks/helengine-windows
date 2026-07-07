@@ -16,9 +16,9 @@ public sealed class Win32RenderBridgeSourceTests {
         string headerSource = File.ReadAllText(headerPath);
         string implementationSource = File.ReadAllText(sourcePath);
 
-        Assert.Contains("RuntimeMaterial* BuildMaterialFromRawAsset(ContentManager* assetContentManager, std::string contentRootPath, std::string materialAssetPath) override;", headerSource, StringComparison.Ordinal);
-        Assert.Contains("RuntimeMaterial* Win32RenderManager3D::BuildMaterialFromRawAsset(ContentManager* assetContentManager, std::string contentRootPath, std::string materialAssetPath)", implementationSource, StringComparison.Ordinal);
-        Assert.Contains("ShaderRuntimeMaterialLoader::BuildMaterialFromRawAsset(this, assetContentManager, contentRootPath, materialAssetPath);", implementationSource, StringComparison.Ordinal);
+        Assert.Contains("RuntimeMaterial* BuildMaterialFromRawAsset(ContentManager* assetContentManager, std::string materialAssetPath) override;", headerSource, StringComparison.Ordinal);
+        Assert.Contains("RuntimeMaterial* Win32RenderManager3D::BuildMaterialFromRawAsset(ContentManager* assetContentManager, std::string materialAssetPath)", implementationSource, StringComparison.Ordinal);
+        Assert.Contains("ShaderRuntimeMaterialLoader::BuildMaterialFromRawAsset(this, assetContentManager, materialAssetPath);", implementationSource, StringComparison.Ordinal);
     }
 
     /// <summary>

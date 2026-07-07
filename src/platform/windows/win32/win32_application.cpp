@@ -48,6 +48,7 @@
 #endif
 #include "Core.hpp"
 #include "CoreInitializationOptions.hpp"
+#include "HostFileSystemContentStreamSource.hpp"
 #include "ObjectManager.hpp"
 #include "Logger.hpp"
 #include "PlatformInfo.hpp"
@@ -640,7 +641,7 @@ namespace helengine::windows {
 #if __has_include("Core.hpp")
         EngineCore = new Core();
         CoreInitializationOptions* options = EngineCore->get_InitializationOptions();
-        options->ContentRootPath = ResolveApplicationDirectoryPath().string();
+        options->ContentStreamSource = new HostFileSystemContentStreamSource(ResolveApplicationDirectoryPath().string());
         options->UpdateOrderLayers = 4;
         options->RenderOrderLayers3D = 4;
         options->UpdateListInitialCapacity = 64;
