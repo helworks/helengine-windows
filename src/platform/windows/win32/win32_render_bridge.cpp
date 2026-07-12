@@ -38,6 +38,9 @@
 #include "IRenderQueue3D.hpp"
 #include "LightComponent.hpp"
 #include "LightDirectionUtility.hpp"
+#if __has_include("MaterialPropertyBlock.hpp")
+#include "MaterialPropertyBlock.hpp"
+#endif
 #include "MaterialLayoutBinding.hpp"
 #if __has_include("MaterialConstantBufferAsset.hpp")
 #include "MaterialConstantBufferAsset.hpp"
@@ -253,6 +256,12 @@ namespace helengine::windows {
         constexpr const char* PointShadowTextureBindingName1 = "pointShadowTexture1";
         constexpr const char* PointShadowTextureBindingName2 = "pointShadowTexture2";
         constexpr const char* PointShadowTextureBindingName3 = "pointShadowTexture3";
+
+        /// Unified texture-slot shift used by the shared shader binding policy before native backends remap slots back to DirectX11 registers.
+        constexpr int32_t MaterialTextureUnifiedSlotShift = 100;
+
+        /// Number of pixel-shader texture slots proactively cleared before each material rebind so stale resources do not bleed between materials.
+        constexpr UINT ClearedMaterialTextureSlotCount = 16;
 
         bool LoggedGeneratedCubeMeshData = false;
 
@@ -1119,6 +1128,10 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
         ShaderRuntimeMaterial* shaderRuntimeMaterial = new ShaderRuntimeMaterial();
         RuntimeMaterial* runtimeMaterial = shaderRuntimeMaterial;
         runtimeMaterial->set_Id(materialId);
+        runtimeMaterial->set_SupportsNormalMapping(!String::IsNullOrWhiteSpace(materialAsset->NormalTextureAssetId));
+        runtimeMaterial->set_SupportsEmissive(!String::IsNullOrWhiteSpace(materialAsset->EmissiveTextureAssetId));
+        runtimeMaterial->set_CastsShadows(materialAsset->CastsShadows);
+        runtimeMaterial->set_ReceivesShadows(materialAsset->ReceivesShadows);
         MaterialLayout* layout = MaterialLayoutBuilder::Build(materialAsset, shaderAsset);
         shaderRuntimeMaterial->SetLayout(layout);
         runtimeMaterial->SetRenderState(materialAsset->RenderState);
@@ -1282,6 +1295,8 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
         ForwardLightConstantBuffer.Reset();
         ShadowConstantBuffer.Reset();
         TextureSamplerState.Reset();
+        WhiteTextureFallbackShaderResourceView.Reset();
+        WhiteTextureFallback.Reset();
         ShadowSamplerState.Reset();
         DiagnosticVertexShader.Reset();
         DiagnosticPixelShader.Reset();
@@ -1415,6 +1430,7 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
         }
 
         Entity* parent = drawable->get_Parent();
+        const char* visitStage = "begin";
         if (!HasWrittenPlazaTowerViewDebug && IsDirectionalShadowCentralTower(parent)) {
             HasWrittenPlazaTowerViewDebug = true;
             const float3 entityPosition = parent->get_Position();
@@ -1601,29 +1617,6 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
             }
         }
 
-        if (shaderResource != nullptr && rootMaterial != nullptr) {
-            ApplyMaterial(runtimeMaterial != nullptr ? runtimeMaterial : rootMaterial);
-            ID3D11Buffer* forwardLightBuffer = ForwardLightConstantBuffer.Get();
-            context->PSSetConstantBuffers(1, 1, &forwardLightBuffer);
-            ID3D11Buffer* shadowBuffer = ShadowConstantBuffer.Get();
-            context->PSSetConstantBuffers(2, 1, &shadowBuffer);
-            ID3D11ShaderResourceView* shadowShaderResourceView = ShadowMapShaderResourceView.Get();
-            context->PSSetShaderResources(1, 1, &shadowShaderResourceView);
-            ID3D11SamplerState* shadowSamplerState = ShadowSamplerState.Get();
-            context->PSSetSamplers(1, 1, &shadowSamplerState);
-            ID3D11ShaderResourceView* pointShadowShaderResources[4] = { nullptr, nullptr, nullptr, nullptr };
-            context->PSSetShaderResources(2, 4, pointShadowShaderResources);
-            ID3D11SamplerState* pointShadowSamplerState = nullptr;
-            context->PSSetSamplers(2, 1, &pointShadowSamplerState);
-        } else {
-            context->IASetInputLayout(InputLayout.Get());
-            context->VSSetShader(VertexShader.Get(), nullptr, 0);
-            context->PSSetShader(PixelShader.Get(), nullptr, 0);
-            ID3D11Buffer* transformBuffer = TransformBuffer.Get();
-            context->VSSetConstantBuffers(0, 1, &transformBuffer);
-            context->PSSetConstantBuffers(0, 1, &transformBuffer);
-        }
-
         Win32TransformConstants constants {};
         constants.World = StoreMatrix(transposedWorld);
         constants.WorldViewProjection = StoreMatrix(transposedWorldViewProjection);
@@ -1631,7 +1624,7 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
         constants.CameraPosition = DirectX::XMFLOAT4(CurrentCameraPosition.X, CurrentCameraPosition.Y, CurrentCameraPosition.Z, 0.0f);
         constants.MaterialFlags = DirectX::XMFLOAT4(
             runtimeMaterial != nullptr && runtimeMaterial->get_ReceivesShadows() ? 1.0f : 0.0f,
-            0.0f,
+            runtimeMaterial != nullptr && runtimeMaterial->get_SupportsEmissive() ? 1.0f : 0.0f,
             0.0f,
             0.0f);
         constants.LightDirection = DirectX::XMFLOAT4(-0.35f, -0.65f, -0.55f, 0.0f);
@@ -1639,14 +1632,53 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
         constants.AmbientColor = DirectX::XMFLOAT4(0.16f, 0.18f, 0.22f, 1.0f);
         constants.SpecularColor = DirectX::XMFLOAT4(0.9f, 0.9f, 0.95f, 1.0f);
         constants.MaterialParameters = DirectX::XMFLOAT4(24.0f, 0.55f, 0.0f, 0.0f);
-        context->UpdateSubresource(TransformBuffer.Get(), 0, nullptr, &constants, 0, 0);
+        try {
+            if (shaderResource != nullptr && rootMaterial != nullptr) {
+                visitStage = "apply_material";
+                ApplyMaterial(runtimeMaterial != nullptr ? runtimeMaterial : rootMaterial);
+                ID3D11Buffer* forwardLightBuffer = ForwardLightConstantBuffer.Get();
+                context->PSSetConstantBuffers(1, 1, &forwardLightBuffer);
+                ID3D11Buffer* shadowBuffer = ShadowConstantBuffer.Get();
+                context->PSSetConstantBuffers(2, 1, &shadowBuffer);
+                ID3D11ShaderResourceView* shadowShaderResourceView = ShadowMapShaderResourceView.Get();
+                context->PSSetShaderResources(1, 1, &shadowShaderResourceView);
+                ID3D11SamplerState* shadowSamplerState = ShadowSamplerState.Get();
+                context->PSSetSamplers(1, 1, &shadowSamplerState);
+                ID3D11ShaderResourceView* pointShadowShaderResources[4] = { nullptr, nullptr, nullptr, nullptr };
+                context->PSSetShaderResources(2, 4, pointShadowShaderResources);
+                ID3D11SamplerState* pointShadowSamplerState = nullptr;
+                context->PSSetSamplers(2, 1, &pointShadowSamplerState);
+            } else {
+                visitStage = "bind_default_pipeline";
+                context->IASetInputLayout(InputLayout.Get());
+                context->VSSetShader(VertexShader.Get(), nullptr, 0);
+                context->PSSetShader(PixelShader.Get(), nullptr, 0);
+                ID3D11Buffer* transformBuffer = TransformBuffer.Get();
+                context->VSSetConstantBuffers(0, 1, &transformBuffer);
+                context->PSSetConstantBuffers(0, 1, &transformBuffer);
+            }
 
-        if (model->IndexBuffer && model->IndexCount > 0) {
-            context->DrawIndexed(model->IndexCount, 0, 0);
-        } else {
-            context->Draw(model->VertexCount, 0);
+            visitStage = "update_transform_buffer";
+            context->UpdateSubresource(TransformBuffer.Get(), 0, nullptr, &constants, 0, 0);
+
+            visitStage = model->IndexBuffer && model->IndexCount > 0 ? "draw_indexed" : "draw_vertices";
+            if (model->IndexBuffer && model->IndexCount > 0) {
+                context->DrawIndexed(model->IndexCount, 0, 0);
+            } else {
+                context->Draw(model->VertexCount, 0);
+            }
+        } catch (const std::bad_alloc&) {
+            std::string materialId = rootMaterial != nullptr ? rootMaterial->get_Id() : std::string("<null>");
+            std::string modelId = modelBase != nullptr ? modelBase->get_Id() : std::string("<null>");
+            RuntimeRenderDiagnostics::WriteHostEvent(
+                "render-bad-alloc",
+                "stage=" + std::string(visitStage)
+                    + " entity_position=" + std::to_string(position.X) + "," + std::to_string(position.Y) + "," + std::to_string(position.Z)
+                    + " material=" + materialId
+                    + " model=" + modelId
+                    + " shadow_pass=" + std::to_string(IsShadowPassActive ? 1 : 0));
+            throw;
         }
-
     }
 
     /// Creates the shaders, input layout, and fixed pipeline state on first use.
@@ -1654,6 +1686,7 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
         if (VertexShader && PixelShader && InputLayout && TransformBuffer && RasterizerState && DepthStencilState) {
             EnsureShadowPipelineState();
             EnsureTextureSamplerState();
+            EnsureWhiteTextureFallbackResource();
             return;
         }
 
@@ -1728,6 +1761,7 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
         }
 
         EnsureTextureSamplerState();
+        EnsureWhiteTextureFallbackResource();
 
         D3D11_RASTERIZER_DESC rasterizerDescription {};
         rasterizerDescription.FillMode = D3D11_FILL_SOLID;
@@ -1947,6 +1981,42 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
         ThrowIfFailed(
             Bootstrap.GetDevice()->CreateSamplerState(&samplerDescription, TextureSamplerState.GetAddressOf()),
             "ID3D11Device::CreateSamplerState failed for the Windows bridge texture sampler.");
+    }
+
+    /// Creates the opaque-white fallback texture used when one standard material omits an authored diffuse texture.
+    void Win32RenderManager3D::EnsureWhiteTextureFallbackResource() {
+        if (WhiteTextureFallback && WhiteTextureFallbackShaderResourceView) {
+            return;
+        }
+
+        const uint32_t whitePixel = 0xFFFFFFFFu;
+        D3D11_TEXTURE2D_DESC whiteTextureDescription {};
+        whiteTextureDescription.Width = 1;
+        whiteTextureDescription.Height = 1;
+        whiteTextureDescription.MipLevels = 1;
+        whiteTextureDescription.ArraySize = 1;
+        whiteTextureDescription.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+        whiteTextureDescription.SampleDesc.Count = 1;
+        whiteTextureDescription.Usage = D3D11_USAGE_DEFAULT;
+        whiteTextureDescription.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+
+        D3D11_SUBRESOURCE_DATA whiteTextureData {};
+        whiteTextureData.pSysMem = &whitePixel;
+        whiteTextureData.SysMemPitch = sizeof(uint32_t);
+
+        ThrowIfFailed(
+            Bootstrap.GetDevice()->CreateTexture2D(&whiteTextureDescription, &whiteTextureData, WhiteTextureFallback.GetAddressOf()),
+            "ID3D11Device::CreateTexture2D failed for the Windows bridge white fallback texture.");
+
+        D3D11_SHADER_RESOURCE_VIEW_DESC whiteResourceViewDescription {};
+        whiteResourceViewDescription.Format = whiteTextureDescription.Format;
+        whiteResourceViewDescription.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
+        whiteResourceViewDescription.Texture2D.MostDetailedMip = 0;
+        whiteResourceViewDescription.Texture2D.MipLevels = 1;
+
+        ThrowIfFailed(
+            Bootstrap.GetDevice()->CreateShaderResourceView(WhiteTextureFallback.Get(), &whiteResourceViewDescription, WhiteTextureFallbackShaderResourceView.GetAddressOf()),
+            "ID3D11Device::CreateShaderResourceView failed for the Windows bridge white fallback texture.");
     }
 
     /// Creates the small diagnostic triangle buffer used to prove the native pipeline can draw to the back buffer.
@@ -2745,7 +2815,7 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
         if (layout != nullptr && properties != nullptr) {
             Array<MaterialLayoutBinding*>* textureBindings = layout->get_TextureBindings();
             if (textureBindings != nullptr && textureBindings->Length > 0) {
-                BindMaterialTexture(material);
+                BindMaterialTextures(material);
             } else {
                 ID3D11ShaderResourceView* nullResourceView = nullptr;
                 context->PSSetShaderResources(0, 1, &nullResourceView);
@@ -2817,34 +2887,96 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
         }
     }
 
-    /// Binds the resolved runtime material texture to the pixel shader slot consumed by the Windows forward path.
-    void Win32RenderManager3D::BindMaterialTexture(RuntimeMaterial* material) {
+    /// Resolves one runtime texture for the requested material binding name after applying parent-material inheritance.
+    RuntimeTexture* Win32RenderManager3D::ResolveMaterialTexture(ShaderRuntimeMaterial* material, std::string bindingName) {
+        if (material == nullptr) {
+            throw new ArgumentNullException("material");
+        }
+
+        if (String::IsNullOrWhiteSpace(bindingName)) {
+            return nullptr;
+        }
+
+        MaterialLayout* layout = material->get_Layout();
+        MaterialPropertyBlock* properties = material->get_Properties();
+        if (layout != nullptr && properties != nullptr) {
+            int32_t bindingIndex = layout->FindTextureBindingIndex(bindingName);
+            if (bindingIndex >= 0) {
+                RuntimeTexture* runtimeTexture = properties->GetTexture(bindingIndex);
+                if (runtimeTexture != nullptr) {
+                    return runtimeTexture;
+                }
+            }
+        }
+
+        RuntimeMaterial* parentMaterial = material->get_ParentMaterial();
+        ShaderRuntimeMaterial* parentShaderMaterial = dynamic_cast<ShaderRuntimeMaterial*>(parentMaterial);
+        if (parentShaderMaterial != nullptr) {
+            return ResolveMaterialTexture(parentShaderMaterial, bindingName);
+        }
+
+        return nullptr;
+    }
+
+    /// Binds the resolved runtime material textures to the pixel shader slots consumed by the Windows forward path.
+    void Win32RenderManager3D::BindMaterialTextures(RuntimeMaterial* material) {
         if (material == nullptr) {
             throw new ArgumentNullException("material");
         }
 
         ShaderRuntimeMaterial* shaderRuntimeMaterial = RequireShaderRuntimeMaterial(material);
-        RuntimeTexture* texture = shaderRuntimeMaterial->ResolveTexture();
-#if __has_include("StandardMaterialTextureBindingDefaults.hpp")
-        if (texture == nullptr) {
-            MaterialLayout* layout = shaderRuntimeMaterial->get_Layout();
-            if (layout != nullptr) {
-                int32_t diffuseTextureBindingIndex = layout->FindTextureBindingIndex(StandardMaterialTextureBindingDefaults::DiffuseTextureBindingName);
-                if (diffuseTextureBindingIndex >= 0) {
-                    texture = TextureUtils::get_PixelTexture();
-                }
-            }
-        }
-#endif
-        ID3D11ShaderResourceView* resourceView = ResolveTextureResourceView(texture);
         ID3D11DeviceContext* context = Bootstrap.GetDeviceContext();
-        context->PSSetShaderResources(0, 1, &resourceView);
-        if (resourceView != nullptr) {
-            ID3D11SamplerState* samplerState = TextureSamplerState.Get();
-            context->PSSetSamplers(0, 1, &samplerState);
-        } else {
-            ID3D11SamplerState* nullSampler = nullptr;
-            context->PSSetSamplers(0, 1, &nullSampler);
+        ID3D11ShaderResourceView* clearedShaderResources[ClearedMaterialTextureSlotCount] = {};
+        ID3D11SamplerState* clearedSamplers[ClearedMaterialTextureSlotCount] = {};
+        context->PSSetShaderResources(0, ClearedMaterialTextureSlotCount, clearedShaderResources);
+        context->PSSetSamplers(0, ClearedMaterialTextureSlotCount, clearedSamplers);
+
+        MaterialLayout* layout = shaderRuntimeMaterial->get_Layout();
+        if (layout == nullptr || layout->get_TextureBindings() == nullptr) {
+            return;
+        }
+
+        Array<MaterialLayoutBinding*>* textureBindings = layout->get_TextureBindings();
+        for (int32_t bindingIndex = 0; bindingIndex < textureBindings->Length; bindingIndex++) {
+            MaterialLayoutBinding* binding = (*textureBindings)[bindingIndex];
+            if (binding == nullptr) {
+                continue;
+            }
+
+            std::string bindingName = binding->get_Name();
+            if (IsEngineManagedTextureBinding(bindingName)) {
+                continue;
+            }
+
+            RuntimeTexture* texture = ResolveMaterialTexture(shaderRuntimeMaterial, bindingName);
+#if __has_include("StandardMaterialTextureBindingDefaults.hpp")
+            if (texture == nullptr && String::Equals(bindingName, StandardMaterialTextureBindingDefaults::DiffuseTextureBindingName, StringComparison::Ordinal)) {
+                texture = TextureUtils::get_PixelTexture();
+            }
+#endif
+            ID3D11ShaderResourceView* resourceView = ResolveTextureResourceView(texture);
+            if (resourceView == nullptr && texture == TextureUtils::get_PixelTexture()) {
+                EnsureWhiteTextureFallbackResource();
+                resourceView = WhiteTextureFallbackShaderResourceView.Get();
+            }
+
+            const int32_t shaderSlot = ResolveDirectX11TextureBindingSlot(binding->get_Slot());
+            if (shaderSlot < 0) {
+                continue;
+            }
+
+            context->PSSetShaderResources(static_cast<UINT>(shaderSlot), 1, &resourceView);
+            ID3D11SamplerState* samplerState = resourceView != nullptr ? TextureSamplerState.Get() : nullptr;
+            context->PSSetSamplers(static_cast<UINT>(shaderSlot), 1, &samplerState);
+
+            if (!HasWrittenRenderSnapshot) {
+                AppendRenderDiagnosticsLine(
+                    "3d.material_tex "
+                    + std::string(resourceView != nullptr ? "bind" : "clear")
+                    + " name=" + bindingName
+                    + " unified_slot=" + std::to_string(binding->get_Slot())
+                    + " shader_slot=" + std::to_string(shaderSlot));
+            }
         }
     }
 
@@ -2910,6 +3042,24 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
         return bindingName == "TransformBuffer"
             || bindingName == "ForwardLightBuffer"
             || bindingName == "ShadowBuffer";
+    }
+
+    /// Returns whether one texture binding is owned by the renderer instead of material-authored property data.
+    bool Win32RenderManager3D::IsEngineManagedTextureBinding(std::string bindingName) {
+        return bindingName == ShadowAtlasTextureBindingName
+            || bindingName == PointShadowTextureBindingName0
+            || bindingName == PointShadowTextureBindingName1
+            || bindingName == PointShadowTextureBindingName2
+            || bindingName == PointShadowTextureBindingName3;
+    }
+
+    /// Resolves one unified material texture slot back to the native DirectX11 register index.
+    int32_t Win32RenderManager3D::ResolveDirectX11TextureBindingSlot(int32_t unifiedSlot) {
+        if (unifiedSlot >= MaterialTextureUnifiedSlotShift) {
+            return unifiedSlot - MaterialTextureUnifiedSlotShift;
+        }
+
+        return unifiedSlot;
     }
 
     /// Clears the back buffer to a solid fallback color when nothing else renders.

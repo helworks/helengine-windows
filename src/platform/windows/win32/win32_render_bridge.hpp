@@ -172,6 +172,9 @@ namespace helengine::windows {
         /// Creates the default sampler used by material texture bindings.
         void EnsureTextureSamplerState();
 
+        /// Creates the opaque-white fallback texture used when one standard material omits an authored diffuse texture.
+        void EnsureWhiteTextureFallbackResource();
+
         /// Creates the small debug-triangle vertex buffer used to validate the native draw pipeline.
         void EnsureDebugTriangleBuffer();
 
@@ -226,8 +229,11 @@ namespace helengine::windows {
         /// Applies authored material constant-buffer payloads for one runtime material while leaving engine-managed buffers untouched.
         void BindMaterialConstantBuffers(RuntimeMaterial* material);
 
-        /// Binds the resolved runtime material texture to the pixel shader slot consumed by the Windows forward path.
-        void BindMaterialTexture(RuntimeMaterial* material);
+        /// Binds the resolved runtime material textures to the pixel shader slots consumed by the Windows forward path.
+        void BindMaterialTextures(RuntimeMaterial* material);
+
+        /// Resolves one runtime texture for the requested material binding name after applying parent-material inheritance.
+        RuntimeTexture* ResolveMaterialTexture(ShaderRuntimeMaterial* material, std::string bindingName);
 
         /// Resolves an uploaded shader resource view for one runtime texture.
         ID3D11ShaderResourceView* ResolveTextureResourceView(RuntimeTexture* texture) const;
@@ -237,6 +243,12 @@ namespace helengine::windows {
 
         /// Returns whether one constant-buffer binding is owned by the renderer instead of material-authored property data.
         static bool IsEngineManagedConstantBufferBinding(std::string bindingName);
+
+        /// Returns whether one texture binding is owned by the renderer instead of material-authored property data.
+        static bool IsEngineManagedTextureBinding(std::string bindingName);
+
+        /// Resolves one unified material texture slot back to the native DirectX11 register index.
+        static int32_t ResolveDirectX11TextureBindingSlot(int32_t unifiedSlot);
 
         /// Clears the back buffer to a solid fallback color when nothing else renders.
         void ClearBackBuffer(float red, float green, float blue, float alpha);
@@ -261,6 +273,12 @@ namespace helengine::windows {
 
         /// Stores the default sampler state used by material texture bindings.
         Microsoft::WRL::ComPtr<ID3D11SamplerState> TextureSamplerState;
+
+        /// Stores the 1x1 opaque-white texture used by non-textured standard materials on the Windows 3D bridge.
+        Microsoft::WRL::ComPtr<ID3D11Texture2D> WhiteTextureFallback;
+
+        /// Stores the shader resource view used to sample the 3D opaque-white fallback texture.
+        Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> WhiteTextureFallbackShaderResourceView;
 
         /// Stores the sampler state used by the directional shadow atlas texture.
         Microsoft::WRL::ComPtr<ID3D11SamplerState> ShadowSamplerState;
