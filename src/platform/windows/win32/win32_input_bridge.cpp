@@ -1,6 +1,9 @@
 #include "platform/windows/win32/win32_input_bridge.hpp"
 
 #include <array>
+#include <filesystem>
+#include <fstream>
+#include <sstream>
 
 #include "runtime/native_list.hpp"
 
@@ -12,6 +15,94 @@ namespace helengine::windows {
                 ? ButtonState::Pressed
                 : ButtonState::Released;
         }
+
+        /// Resolves the application-adjacent watched-input diagnostics log path.
+        std::filesystem::path ResolveInputTraceLogPath() {
+            wchar_t modulePathBuffer[MAX_PATH] {};
+            DWORD characterCount = ::GetModuleFileNameW(nullptr, modulePathBuffer, MAX_PATH);
+            if (characterCount == 0 || characterCount >= MAX_PATH) {
+                return std::filesystem::path("helengine_windows.input.log");
+            }
+
+            return std::filesystem::path(modulePathBuffer).parent_path() / "helengine_windows.input.log";
+        }
+
+        /// Returns whether the supplied key state buffer marks one Win32 virtual key as pressed.
+        bool IsVirtualKeyPressed(const std::array<BYTE, 256>& keyStates, int virtualKey) {
+            if (virtualKey < 0 || virtualKey > 255) {
+                return false;
+            }
+
+            return (keyStates[static_cast<size_t>(virtualKey)] & 0x80) != 0;
+        }
+
+        /// Builds one compact watched-key bit mask for menu-navigation diagnostics.
+        std::uint32_t BuildWatchedKeyMask(const std::array<BYTE, 256>& keyStates) {
+            std::uint32_t mask = 0;
+            if (IsVirtualKeyPressed(keyStates, VK_UP)) {
+                mask |= 1u << 0;
+            }
+            if (IsVirtualKeyPressed(keyStates, VK_DOWN)) {
+                mask |= 1u << 1;
+            }
+            if (IsVirtualKeyPressed(keyStates, VK_RETURN)) {
+                mask |= 1u << 2;
+            }
+            if (IsVirtualKeyPressed(keyStates, VK_SPACE)) {
+                mask |= 1u << 3;
+            }
+            if (IsVirtualKeyPressed(keyStates, VK_ESCAPE)) {
+                mask |= 1u << 4;
+            }
+            if (IsVirtualKeyPressed(keyStates, 'W')) {
+                mask |= 1u << 5;
+            }
+            if (IsVirtualKeyPressed(keyStates, 'S')) {
+                mask |= 1u << 6;
+            }
+
+            return mask;
+        }
+
+        /// Builds one compact watched-key bit mask from the generated keyboard-state container.
+        std::uint32_t BuildKeyboardStateWatchedKeyMask(KeyboardState& keyboardState) {
+            std::uint32_t mask = 0;
+            if (keyboardState.IsKeyDown(Keys::Up)) {
+                mask |= 1u << 0;
+            }
+            if (keyboardState.IsKeyDown(Keys::Down)) {
+                mask |= 1u << 1;
+            }
+            if (keyboardState.IsKeyDown(Keys::Enter)) {
+                mask |= 1u << 2;
+            }
+            if (keyboardState.IsKeyDown(Keys::Space)) {
+                mask |= 1u << 3;
+            }
+            if (keyboardState.IsKeyDown(Keys::Escape)) {
+                mask |= 1u << 4;
+            }
+            if (keyboardState.IsKeyDown(Keys::W)) {
+                mask |= 1u << 5;
+            }
+            if (keyboardState.IsKeyDown(Keys::S)) {
+                mask |= 1u << 6;
+            }
+
+            return mask;
+        }
+
+        /// Appends one single-line watched-input trace message beside the packaged player executable.
+        void AppendInputTraceLine(const std::string& message) {
+            std::filesystem::path logPath = ResolveInputTraceLogPath();
+            std::ofstream stream(logPath, std::ios::out | std::ios::app);
+            if (!stream.is_open()) {
+                return;
+            }
+
+            stream << message << '\n';
+            stream.flush();
+        }
     }
 
     /// Creates an input backend bound to the host window.
@@ -21,7 +112,10 @@ namespace helengine::windows {
         , State()
         , PointerWrapEnabled(false)
         , ReceiveInputInBackground(false)
-        , PointerWrapDeltaOffset() {
+        , PointerWrapDeltaOffset()
+        , HasLoggedInputTraceSample(false)
+        , LastLoggedForegroundActive(false)
+        , LastLoggedWatchedKeyMask(0) {
     }
 
     /// Returns whether the backend continues reporting input while the host window is inactive.
@@ -44,13 +138,26 @@ namespace helengine::windows {
 
     /// Reads the current keyboard state from Win32 keyboard APIs.
     KeyboardState Win32InputBackend::CaptureKeyboardState() {
-        if (!ReceiveInputInBackground && Window != nullptr && Window->GetHandle() != nullptr && !IsWindowForegroundActive(Window->GetHandle())) {
+        HWND windowHandle = Window != nullptr ? Window->GetHandle() : nullptr;
+        bool isForegroundActive = windowHandle != nullptr && IsWindowForegroundActive(windowHandle);
+        if (!ReceiveInputInBackground && windowHandle != nullptr && !isForegroundActive) {
+            if (!HasLoggedInputTraceSample || !LastLoggedForegroundActive || LastLoggedWatchedKeyMask != 0) {
+                std::ostringstream messageBuilder;
+                messageBuilder
+                    << "foreground=0 receive_background=" << (ReceiveInputInBackground ? 1 : 0)
+                    << " watched_mask=0";
+                AppendInputTraceLine(messageBuilder.str());
+                HasLoggedInputTraceSample = true;
+                LastLoggedForegroundActive = false;
+                LastLoggedWatchedKeyMask = 0;
+            }
             return KeyboardState();
         }
 
         List<Keys> pressedKeys;
         std::array<BYTE, 256> keyStates {};
-        if (::GetKeyboardState(keyStates.data())) {
+        bool capturedKeyboardState = ::GetKeyboardState(keyStates.data()) == TRUE;
+        if (capturedKeyboardState) {
             for (int keyCode = 1; keyCode <= 255; keyCode++) {
                 if ((keyStates[static_cast<size_t>(keyCode)] & 0x80) == 0) {
                     continue;
@@ -60,9 +167,29 @@ namespace helengine::windows {
             }
         }
 
+        std::uint32_t watchedKeyMask = capturedKeyboardState
+            ? BuildWatchedKeyMask(keyStates)
+            : 0;
         bool capsLock = (::GetKeyState(VK_CAPITAL) & 0x0001) != 0;
         bool numLock = (::GetKeyState(VK_NUMLOCK) & 0x0001) != 0;
         KeyboardState keyboardState = KeyboardState(&pressedKeys, capsLock, numLock);
+        std::uint32_t keyboardStateWatchedKeyMask = BuildKeyboardStateWatchedKeyMask(keyboardState);
+        if (!HasLoggedInputTraceSample
+            || LastLoggedForegroundActive != isForegroundActive
+            || LastLoggedWatchedKeyMask != watchedKeyMask) {
+            std::ostringstream messageBuilder;
+            messageBuilder
+                << "foreground=" << (isForegroundActive ? 1 : 0)
+                << " receive_background=" << (ReceiveInputInBackground ? 1 : 0)
+                << " get_keyboard_state=" << (capturedKeyboardState ? 1 : 0)
+                << " watched_mask=" << watchedKeyMask
+                << " keyboard_state_mask=" << keyboardStateWatchedKeyMask
+                << " pressed_key_count=" << keyboardState.GetPressedKeyCount();
+            AppendInputTraceLine(messageBuilder.str());
+            HasLoggedInputTraceSample = true;
+            LastLoggedForegroundActive = isForegroundActive;
+            LastLoggedWatchedKeyMask = watchedKeyMask;
+        }
         return keyboardState;
     }
 

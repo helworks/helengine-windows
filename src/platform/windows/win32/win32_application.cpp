@@ -32,6 +32,9 @@
 #include "platform/windows/runtime/runtime_memory_diagnostics_provider.hpp"
 #include "platform/windows/runtime/runtime_player_profile_loader.hpp"
 #include "platform/windows/runtime/runtime_render_diagnostics.hpp"
+#if __has_include("IAudioBackend.hpp")
+#include "platform/windows/win32/win32_audio_backend.hpp"
+#endif
 #include "platform/windows/win32/win32_input_bridge.hpp"
 #include "platform/windows/win32/win32_render_bridge.hpp"
 #include "platform/windows/win32/win32_window.hpp"
@@ -478,6 +481,7 @@ namespace helengine::windows {
           EngineCore(nullptr),
           EngineRenderManager3D(nullptr),
           EngineRenderManager2D(nullptr),
+          EngineAudioBackend(nullptr),
           EngineInputBackend(nullptr),
           EngineInitialized(false),
           FrameStatisticStartTime(std::chrono::steady_clock::now()),
@@ -513,6 +517,7 @@ namespace helengine::windows {
             EngineCore->Dispose();
         }
         delete EngineCore;
+        delete EngineAudioBackend;
         delete EngineInputBackend;
         delete EngineRenderManager2D;
         delete EngineRenderManager3D;
@@ -655,6 +660,7 @@ namespace helengine::windows {
 
         EngineRenderManager3D = new Win32RenderManager3D(*Bootstrap);
         EngineRenderManager2D = new Win32RenderManager2D(*Bootstrap);
+        EngineAudioBackend = new Win32AudioBackend();
         EngineInputBackend = new Win32InputBackend(MainWindow.get());
 
         EngineRenderManager3D->AddWindow(
@@ -664,6 +670,7 @@ namespace helengine::windows {
 
         PlatformInfo* platformInfo = BuildRuntimePlatformInfo();
         EngineCore->Initialize(EngineRenderManager3D, EngineRenderManager2D, EngineInputBackend, platformInfo, options);
+        EngineCore->SetAudioBackend(EngineAudioBackend);
 #if defined(HELENGINE_WINDOWS_HAS_PHYSICS3D_RUNTIME)
         Physics3DRuntimeComponentRegistration::Register(EngineCore);
         WriteLifecycleLog("3D physics runtime registered.");
@@ -1555,57 +1562,71 @@ namespace helengine::windows {
             return;
         }
 
-        if (Bootstrap->GetWidth() != clientWidth || Bootstrap->GetHeight() != clientHeight) {
-            Bootstrap->Resize(clientWidth, clientHeight);
-#if __has_include("Core.hpp")
-            if (EngineInitialized && EngineRenderManager3D != nullptr) {
-                EngineRenderManager3D->OnWindowResize(
-                    reinterpret_cast<intptr_t>(MainWindow->GetHandle()),
-                    clientWidth,
-                    clientHeight);
-            }
-#endif
-        }
+        const char* frameStage = "begin";
 
-        const bool shouldTraceFirstFrame = FramesSinceLastStatisticLog == 0;
-        if (EngineInitialized && EngineCore != nullptr) {
+        try {
+            if (Bootstrap->GetWidth() != clientWidth || Bootstrap->GetHeight() != clientHeight) {
+                frameStage = "resize";
+                Bootstrap->Resize(clientWidth, clientHeight);
 #if __has_include("Core.hpp")
-            if (shouldTraceFirstFrame) {
-                WriteLifecycleLog("First frame entering EngineCore->Update().");
-                WriteSceneDiagnosticsCheckpoint("first_frame_before_update");
-            }
-            EngineCore->Update();
-            if (shouldTraceFirstFrame) {
-                WriteLifecycleLog("First frame completed EngineCore->Update().");
-                WriteSceneDiagnosticsCheckpoint("first_frame_after_update");
-            }
-            LogBepuStackBoxesDebugSnapshot();
-            if (shouldTraceFirstFrame) {
-                WriteLifecycleLog("First frame entering PollSceneTransitionDiagnostics().");
-            }
-            PollSceneTransitionDiagnostics();
-            if (shouldTraceFirstFrame) {
-                WriteLifecycleLog("First frame completed PollSceneTransitionDiagnostics().");
-                WriteSceneDiagnosticsCheckpoint("first_frame_after_poll");
-                WriteLifecycleLog("First frame entering EngineCore->Draw().");
-            }
-            EngineCore->Draw();
-            if (shouldTraceFirstFrame) {
-                WriteLifecycleLog("First frame completed EngineCore->Draw().");
-                WriteSceneDiagnosticsCheckpoint("first_frame_after_draw");
-            }
+                if (EngineInitialized && EngineRenderManager3D != nullptr) {
+                    EngineRenderManager3D->OnWindowResize(
+                        reinterpret_cast<intptr_t>(MainWindow->GetHandle()),
+                        clientWidth,
+                        clientHeight);
+                }
 #endif
-        }
+            }
 
-        if (shouldTraceFirstFrame) {
-            WriteLifecycleLog("First frame entering Presenter->RenderFrame().");
+            const bool shouldTraceFirstFrame = FramesSinceLastStatisticLog == 0;
+            if (EngineInitialized && EngineCore != nullptr) {
+#if __has_include("Core.hpp")
+                if (shouldTraceFirstFrame) {
+                    WriteLifecycleLog("First frame entering EngineCore->Update().");
+                    WriteSceneDiagnosticsCheckpoint("first_frame_before_update");
+                }
+                frameStage = "engine_update";
+                EngineCore->Update();
+                if (shouldTraceFirstFrame) {
+                    WriteLifecycleLog("First frame completed EngineCore->Update().");
+                    WriteSceneDiagnosticsCheckpoint("first_frame_after_update");
+                }
+                frameStage = "bepu_debug_snapshot";
+                LogBepuStackBoxesDebugSnapshot();
+                if (shouldTraceFirstFrame) {
+                    WriteLifecycleLog("First frame entering PollSceneTransitionDiagnostics().");
+                }
+                frameStage = "scene_transition_diagnostics";
+                PollSceneTransitionDiagnostics();
+                if (shouldTraceFirstFrame) {
+                    WriteLifecycleLog("First frame completed PollSceneTransitionDiagnostics().");
+                    WriteSceneDiagnosticsCheckpoint("first_frame_after_poll");
+                    WriteLifecycleLog("First frame entering EngineCore->Draw().");
+                }
+                frameStage = "engine_draw";
+                EngineCore->Draw();
+                if (shouldTraceFirstFrame) {
+                    WriteLifecycleLog("First frame completed EngineCore->Draw().");
+                    WriteSceneDiagnosticsCheckpoint("first_frame_after_draw");
+                }
+#endif
+            }
+
+            if (shouldTraceFirstFrame) {
+                WriteLifecycleLog("First frame entering Presenter->RenderFrame().");
+            }
+            frameStage = "present";
+            Presenter->RenderFrame();
+            if (shouldTraceFirstFrame) {
+                WriteLifecycleLog("First frame completed Presenter->RenderFrame().");
+                WriteSceneDiagnosticsCheckpoint("first_frame_after_present");
+            }
+            frameStage = "update_frame_statistics";
+            UpdateFrameStatistics();
+        } catch (const std::bad_alloc&) {
+            RuntimeRenderDiagnostics::WriteHostEvent("frame-bad-alloc", std::string("stage=") + frameStage);
+            throw;
         }
-        Presenter->RenderFrame();
-        if (shouldTraceFirstFrame) {
-            WriteLifecycleLog("First frame completed Presenter->RenderFrame().");
-            WriteSceneDiagnosticsCheckpoint("first_frame_after_present");
-        }
-        UpdateFrameStatistics();
     }
 
     /// Writes one bounded BEPU stack-boxes physics snapshot into the lifecycle log when that diagnostic scene is active.

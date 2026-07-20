@@ -31,6 +31,7 @@ class float4;
 namespace helengine::windows {
     class DirectX11Bootstrap;
     class DirectX11Presenter;
+    class Win32AudioBackend;
     class Win32InputBackend;
     class Win32RenderManager2D;
     class Win32RenderManager3D;
@@ -283,6 +284,9 @@ namespace helengine::windows {
 
         /// Stores the generated 2D render manager used by the engine core.
         Win32RenderManager2D* EngineRenderManager2D;
+
+        /// Stores the generated audio backend used by the engine core.
+        Win32AudioBackend* EngineAudioBackend;
 
         /// Stores the generated input backend used by the engine core.
         Win32InputBackend* EngineInputBackend;

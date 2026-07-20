@@ -4,6 +4,7 @@
 
 #include <array>
 #include <cstdint>
+#include <string>
 
 #include "ButtonState.hpp"
 #include "IInputBackend.hpp"
@@ -67,5 +68,14 @@ namespace helengine::windows {
 
         /// Stores the delta offset produced by the most recent wrap.
         int2 PointerWrapDeltaOffset;
+
+        /// Tracks whether one previous input trace sample has been emitted.
+        bool HasLoggedInputTraceSample;
+
+        /// Stores the previously logged foreground-active state for watched-key diagnostics.
+        bool LastLoggedForegroundActive;
+
+        /// Stores the previously logged watched-key mask for compact input diagnostics.
+        std::uint32_t LastLoggedWatchedKeyMask;
     };
 }

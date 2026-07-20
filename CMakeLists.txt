@@ -51,6 +51,7 @@ set(HELENGINE_WINDOWS_SOURCES
 
 if(HELENGINE_WINDOWS_INCLUDE_GENERATED_CORE)
     list(APPEND HELENGINE_WINDOWS_SOURCES
+        src/platform/windows/win32/win32_audio_backend.cpp
         src/platform/windows/win32/win32_input_bridge.cpp
         src/platform/windows/win32/win32_render_bridge.cpp
     )
@@ -102,4 +103,5 @@ target_link_libraries(helengine_windows PRIVATE
     psapi
     user32
     gdi32
+    winmm
 )

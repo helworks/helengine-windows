@@ -52,6 +52,10 @@ namespace helengine::windows {
     void Win32Window::Show() const {
         ShowWindow(Handle, SW_SHOWDEFAULT);
         UpdateWindow(Handle);
+        BringWindowToTop(Handle);
+        SetActiveWindow(Handle);
+        SetForegroundWindow(Handle);
+        SetFocus(Handle);
     }
 
     /// Gets the native window handle.

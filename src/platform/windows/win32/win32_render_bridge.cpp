@@ -50,9 +50,15 @@
 #include "RuntimeDiagnosticsService.hpp"
 #endif
 #include "ObjectManager.hpp"
+#if __has_include("ModelPrimitiveTopology.hpp")
+#include "ModelPrimitiveTopology.hpp"
+#endif
 #include "RuntimeSceneLoadService.hpp"
 #if __has_include("RigidBody3DComponent.hpp")
 #include "RigidBody3DComponent.hpp"
+#endif
+#if __has_include("RuntimeSubmesh.hpp")
+#include "RuntimeSubmesh.hpp"
 #endif
 #if __has_include("RuntimeSceneAssetReferenceResolver.hpp")
 #include "RuntimeSceneAssetReferenceResolver.hpp"
@@ -103,6 +109,87 @@ namespace helengine::windows {
 
         /// Maximum number of 3D draw visits captured in the first-frame snapshot.
         constexpr int MaxLogged3DVisitCount = 8;
+
+        /// Resolves the number of draw ranges that should be submitted for one runtime model.
+        int32_t ResolveRuntimeSubmeshCount(RuntimeModel* model) {
+            if (model == nullptr) {
+                return 0;
+            }
+
+            Array<RuntimeSubmesh*>* submeshes = model->get_Submeshes();
+            return submeshes != nullptr && submeshes->Length > 0
+                ? submeshes->Length
+                : 1;
+        }
+
+        /// Resolves one runtime submesh when present; otherwise returns null to signal a whole-model fallback draw.
+        RuntimeSubmesh* ResolveRuntimeSubmesh(RuntimeModel* model, int32_t submeshIndex) {
+            if (model == nullptr || submeshIndex < 0) {
+                return nullptr;
+            }
+
+            Array<RuntimeSubmesh*>* submeshes = model->get_Submeshes();
+            if (submeshes == nullptr || submeshes->Length == 0 || submeshIndex >= submeshes->Length) {
+                return nullptr;
+            }
+
+            return (*submeshes)[submeshIndex];
+        }
+
+        /// Resolves the runtime material bound to one submesh slot, falling back to slot zero when needed.
+        RuntimeMaterial* ResolveRuntimeMaterialForSubmesh(Array<RuntimeMaterial*>* materials, int32_t submeshIndex) {
+            if (materials == nullptr || materials->Length == 0) {
+                return nullptr;
+            }
+            if (submeshIndex >= 0 && submeshIndex < materials->Length) {
+                return (*materials)[submeshIndex];
+            }
+
+            return (*materials)[0];
+        }
+
+        /// Maps one runtime submesh topology to the corresponding Direct3D primitive topology.
+        D3D11_PRIMITIVE_TOPOLOGY ResolveDirectXTopology(RuntimeSubmesh* submesh) {
+            if (submesh == nullptr) {
+                return D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
+            }
+
+            switch (submesh->get_PrimitiveTopology()) {
+                case ModelPrimitiveTopology::LineList:
+                    return D3D11_PRIMITIVE_TOPOLOGY_LINELIST;
+                case ModelPrimitiveTopology::TriangleList:
+                default:
+                    return D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
+            }
+        }
+
+        /// Returns whether one runtime submesh should participate in triangle-only shadow passes.
+        bool UsesTriangleTopology(RuntimeSubmesh* submesh) {
+            return submesh == nullptr || submesh->get_PrimitiveTopology() == ModelPrimitiveTopology::TriangleList;
+        }
+
+        /// Resolves the first element offset for one runtime submesh draw.
+        int32_t ResolveRuntimeSubmeshStart(RuntimeSubmesh* submesh) {
+            if (submesh == nullptr) {
+                return 0;
+            }
+
+            return std::max(submesh->get_IndexStart(), 0);
+        }
+
+        /// Resolves the number of elements that should be drawn for one runtime submesh.
+        int32_t ResolveRuntimeSubmeshElementCount(RuntimeSubmesh* submesh, const Win32RuntimeModel* model) {
+            if (submesh != nullptr && submesh->get_IndexCount() > 0) {
+                return submesh->get_IndexCount();
+            }
+            if (model == nullptr) {
+                return 0;
+            }
+
+            return model->IndexBuffer && model->IndexCount > 0
+                ? static_cast<int32_t>(model->IndexCount)
+                : static_cast<int32_t>(model->VertexCount);
+        }
 
         /// Tracks whether one native 2D summary has already been written.
         bool HasWritten2DSummary = false;
@@ -1404,20 +1491,8 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
         }
 
         Array<RuntimeMaterial*>* runtimeMaterials = drawable->get_Materials();
-        RuntimeMaterial* runtimeMaterial = runtimeMaterials != nullptr && runtimeMaterials->Length > 0
-            ? (*runtimeMaterials)[0]
-            : nullptr;
-        RuntimeMaterial* rootMaterial = runtimeMaterial != nullptr ? runtimeMaterial->ResolveRootMaterial() : nullptr;
-        Win32ShaderResource* shaderResource = nullptr;
-        if (rootMaterial != nullptr) {
-            std::string materialId = rootMaterial->get_Id();
-            if (!materialId.empty()) {
-                auto materialResource = MaterialShaderResources.find(materialId);
-                if (materialResource != MaterialShaderResources.end()) {
-                    shaderResource = materialResource->second.get();
-                }
-            }
-        }
+        RuntimeMaterial* snapshotRuntimeMaterial = ResolveRuntimeMaterialForSubmesh(runtimeMaterials, 0);
+        RuntimeMaterial* snapshotRootMaterial = snapshotRuntimeMaterial != nullptr ? snapshotRuntimeMaterial->ResolveRootMaterial() : nullptr;
 
         ID3D11DeviceContext* context = Bootstrap.GetDeviceContext();
         const UINT stride = sizeof(Win32VertexPositionNormalUV);
@@ -1520,7 +1595,7 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
             ProbeCubeDebugSlots[static_cast<std::size_t>(probeCubeSlotIndex)].FrameCount++;
             AppendRenderDiagnosticsLine(
                 "ProbeCube[" + std::to_string(probeCubeSlotIndex) + "] frame=" + std::to_string(ProbeCubeDebugSlots[static_cast<std::size_t>(probeCubeSlotIndex)].FrameCount)
-                + " material=" + (rootMaterial != nullptr ? rootMaterial->get_Id() : std::string("<null>"))
+                + " material=" + (snapshotRootMaterial != nullptr ? snapshotRootMaterial->get_Id() : std::string("<null>"))
                 + " world position="
                 + std::to_string(position.X) + "," + std::to_string(position.Y) + "," + std::to_string(position.Z)
                 + " scale="
@@ -1584,7 +1659,7 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
             }
 #endif
 
-            std::string snapshotMaterialId = rootMaterial != nullptr ? rootMaterial->get_Id() : std::string("<null>");
+            std::string snapshotMaterialId = snapshotRootMaterial != nullptr ? snapshotRootMaterial->get_Id() : std::string("<null>");
             AppendRenderSnapshotLine(
                 "drawable[" + std::to_string(Logged3DVisitCount) + "] position=" + std::to_string(position.X) + "," + std::to_string(position.Y) + "," + std::to_string(position.Z) +
                 " scale=" + std::to_string(scale.X) + "," + std::to_string(scale.Y) + "," + std::to_string(scale.Z) +
@@ -1617,58 +1692,83 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
             }
         }
 
-        Win32TransformConstants constants {};
-        constants.World = StoreMatrix(transposedWorld);
-        constants.WorldViewProjection = StoreMatrix(transposedWorldViewProjection);
-        constants.WorldNormal = StoreMatrix(uploadedNormalMatrix);
-        constants.CameraPosition = DirectX::XMFLOAT4(CurrentCameraPosition.X, CurrentCameraPosition.Y, CurrentCameraPosition.Z, 0.0f);
-        constants.MaterialFlags = DirectX::XMFLOAT4(
-            runtimeMaterial != nullptr && runtimeMaterial->get_ReceivesShadows() ? 1.0f : 0.0f,
-            runtimeMaterial != nullptr && runtimeMaterial->get_SupportsEmissive() ? 1.0f : 0.0f,
-            0.0f,
-            0.0f);
-        constants.LightDirection = DirectX::XMFLOAT4(-0.35f, -0.65f, -0.55f, 0.0f);
-        constants.LightColor = DirectX::XMFLOAT4(1.0f, 1.0f, 1.0f, 1.0f);
-        constants.AmbientColor = DirectX::XMFLOAT4(0.16f, 0.18f, 0.22f, 1.0f);
-        constants.SpecularColor = DirectX::XMFLOAT4(0.9f, 0.9f, 0.95f, 1.0f);
-        constants.MaterialParameters = DirectX::XMFLOAT4(24.0f, 0.55f, 0.0f, 0.0f);
         try {
-            if (shaderResource != nullptr && rootMaterial != nullptr) {
-                visitStage = "apply_material";
-                ApplyMaterial(runtimeMaterial != nullptr ? runtimeMaterial : rootMaterial);
-                ID3D11Buffer* forwardLightBuffer = ForwardLightConstantBuffer.Get();
-                context->PSSetConstantBuffers(1, 1, &forwardLightBuffer);
-                ID3D11Buffer* shadowBuffer = ShadowConstantBuffer.Get();
-                context->PSSetConstantBuffers(2, 1, &shadowBuffer);
-                ID3D11ShaderResourceView* shadowShaderResourceView = ShadowMapShaderResourceView.Get();
-                context->PSSetShaderResources(1, 1, &shadowShaderResourceView);
-                ID3D11SamplerState* shadowSamplerState = ShadowSamplerState.Get();
-                context->PSSetSamplers(1, 1, &shadowSamplerState);
-                ID3D11ShaderResourceView* pointShadowShaderResources[4] = { nullptr, nullptr, nullptr, nullptr };
-                context->PSSetShaderResources(2, 4, pointShadowShaderResources);
-                ID3D11SamplerState* pointShadowSamplerState = nullptr;
-                context->PSSetSamplers(2, 1, &pointShadowSamplerState);
-            } else {
-                visitStage = "bind_default_pipeline";
-                context->IASetInputLayout(InputLayout.Get());
-                context->VSSetShader(VertexShader.Get(), nullptr, 0);
-                context->PSSetShader(PixelShader.Get(), nullptr, 0);
-                ID3D11Buffer* transformBuffer = TransformBuffer.Get();
-                context->VSSetConstantBuffers(0, 1, &transformBuffer);
-                context->PSSetConstantBuffers(0, 1, &transformBuffer);
-            }
+            int32_t submeshCount = ResolveRuntimeSubmeshCount(modelBase);
+            for (int32_t submeshIndex = 0; submeshIndex < submeshCount; submeshIndex++) {
+                RuntimeSubmesh* submesh = ResolveRuntimeSubmesh(modelBase, submeshIndex);
+                RuntimeMaterial* runtimeMaterial = ResolveRuntimeMaterialForSubmesh(runtimeMaterials, submeshIndex);
+                RuntimeMaterial* rootMaterial = runtimeMaterial != nullptr ? runtimeMaterial->ResolveRootMaterial() : nullptr;
+                Win32ShaderResource* shaderResource = nullptr;
+                if (rootMaterial != nullptr) {
+                    std::string materialId = rootMaterial->get_Id();
+                    if (!materialId.empty()) {
+                        auto materialResource = MaterialShaderResources.find(materialId);
+                        if (materialResource != MaterialShaderResources.end()) {
+                            shaderResource = materialResource->second.get();
+                        }
+                    }
+                }
 
-            visitStage = "update_transform_buffer";
-            context->UpdateSubresource(TransformBuffer.Get(), 0, nullptr, &constants, 0, 0);
+                Win32TransformConstants constants {};
+                constants.World = StoreMatrix(transposedWorld);
+                constants.WorldViewProjection = StoreMatrix(transposedWorldViewProjection);
+                constants.WorldNormal = StoreMatrix(uploadedNormalMatrix);
+                constants.CameraPosition = DirectX::XMFLOAT4(CurrentCameraPosition.X, CurrentCameraPosition.Y, CurrentCameraPosition.Z, 0.0f);
+                constants.MaterialFlags = DirectX::XMFLOAT4(
+                    runtimeMaterial != nullptr && runtimeMaterial->get_ReceivesShadows() ? 1.0f : 0.0f,
+                    runtimeMaterial != nullptr && runtimeMaterial->get_SupportsEmissive() ? 1.0f : 0.0f,
+                    0.0f,
+                    0.0f);
+                constants.LightDirection = DirectX::XMFLOAT4(-0.35f, -0.65f, -0.55f, 0.0f);
+                constants.LightColor = DirectX::XMFLOAT4(1.0f, 1.0f, 1.0f, 1.0f);
+                constants.AmbientColor = DirectX::XMFLOAT4(0.16f, 0.18f, 0.22f, 1.0f);
+                constants.SpecularColor = DirectX::XMFLOAT4(0.9f, 0.9f, 0.95f, 1.0f);
+                constants.MaterialParameters = DirectX::XMFLOAT4(24.0f, 0.55f, 0.0f, 0.0f);
 
-            visitStage = model->IndexBuffer && model->IndexCount > 0 ? "draw_indexed" : "draw_vertices";
-            if (model->IndexBuffer && model->IndexCount > 0) {
-                context->DrawIndexed(model->IndexCount, 0, 0);
-            } else {
-                context->Draw(model->VertexCount, 0);
+                if (shaderResource != nullptr && rootMaterial != nullptr) {
+                    visitStage = "apply_material";
+                    ApplyMaterial(runtimeMaterial != nullptr ? runtimeMaterial : rootMaterial);
+                    ID3D11Buffer* forwardLightBuffer = ForwardLightConstantBuffer.Get();
+                    context->PSSetConstantBuffers(1, 1, &forwardLightBuffer);
+                    ID3D11Buffer* shadowBuffer = ShadowConstantBuffer.Get();
+                    context->PSSetConstantBuffers(2, 1, &shadowBuffer);
+                    ID3D11ShaderResourceView* shadowShaderResourceView = ShadowMapShaderResourceView.Get();
+                    context->PSSetShaderResources(1, 1, &shadowShaderResourceView);
+                    ID3D11SamplerState* shadowSamplerState = ShadowSamplerState.Get();
+                    context->PSSetSamplers(1, 1, &shadowSamplerState);
+                    ID3D11ShaderResourceView* pointShadowShaderResources[4] = { nullptr, nullptr, nullptr, nullptr };
+                    context->PSSetShaderResources(2, 4, pointShadowShaderResources);
+                    ID3D11SamplerState* pointShadowSamplerState = nullptr;
+                    context->PSSetSamplers(2, 1, &pointShadowSamplerState);
+                } else {
+                    visitStage = "bind_default_pipeline";
+                    context->IASetInputLayout(InputLayout.Get());
+                    context->VSSetShader(VertexShader.Get(), nullptr, 0);
+                    context->PSSetShader(PixelShader.Get(), nullptr, 0);
+                    ID3D11Buffer* transformBuffer = TransformBuffer.Get();
+                    context->VSSetConstantBuffers(0, 1, &transformBuffer);
+                    context->PSSetConstantBuffers(0, 1, &transformBuffer);
+                }
+
+                visitStage = "update_transform_buffer";
+                context->UpdateSubresource(TransformBuffer.Get(), 0, nullptr, &constants, 0, 0);
+
+                int32_t startElement = ResolveRuntimeSubmeshStart(submesh);
+                int32_t elementCount = ResolveRuntimeSubmeshElementCount(submesh, model);
+                if (elementCount <= 0) {
+                    continue;
+                }
+
+                context->IASetPrimitiveTopology(ResolveDirectXTopology(submesh));
+                visitStage = model->IndexBuffer && model->IndexCount > 0 ? "draw_indexed" : "draw_vertices";
+                if (model->IndexBuffer && model->IndexCount > 0) {
+                    context->DrawIndexed(static_cast<UINT>(elementCount), static_cast<UINT>(startElement), 0);
+                } else {
+                    context->Draw(static_cast<UINT>(elementCount), static_cast<UINT>(startElement));
+                }
             }
         } catch (const std::bad_alloc&) {
-            std::string materialId = rootMaterial != nullptr ? rootMaterial->get_Id() : std::string("<null>");
+            std::string materialId = snapshotRootMaterial != nullptr ? snapshotRootMaterial->get_Id() : std::string("<null>");
             std::string modelId = modelBase != nullptr ? modelBase->get_Id() : std::string("<null>");
             RuntimeRenderDiagnostics::WriteHostEvent(
                 "render-bad-alloc",
@@ -2418,12 +2518,6 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
         }
 
         Array<RuntimeMaterial*>* runtimeMaterials = drawable->get_Materials();
-        RuntimeMaterial* runtimeMaterial = runtimeMaterials != nullptr && runtimeMaterials->Length > 0
-            ? (*runtimeMaterials)[0]
-            : nullptr;
-        if (!ShouldMaterialCastShadows(runtimeMaterial)) {
-            return;
-        }
 
         RuntimeModel* modelBase = drawable->get_Model();
         if (modelBase == nullptr) {
@@ -2463,10 +2557,26 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
         constants.WorldViewProjection = StoreMatrix(transposedWorldViewProjection);
         context->UpdateSubresource(ShadowTransformBuffer.Get(), 0, nullptr, &constants, 0, 0);
 
-        if (model->IndexBuffer && model->IndexCount > 0) {
-            context->DrawIndexed(model->IndexCount, 0, 0);
-        } else {
-            context->Draw(model->VertexCount, 0);
+        int32_t submeshCount = ResolveRuntimeSubmeshCount(modelBase);
+        for (int32_t submeshIndex = 0; submeshIndex < submeshCount; submeshIndex++) {
+            RuntimeSubmesh* submesh = ResolveRuntimeSubmesh(modelBase, submeshIndex);
+            RuntimeMaterial* runtimeMaterial = ResolveRuntimeMaterialForSubmesh(runtimeMaterials, submeshIndex);
+            if (!ShouldMaterialCastShadows(runtimeMaterial) || !UsesTriangleTopology(submesh)) {
+                continue;
+            }
+
+            int32_t startElement = ResolveRuntimeSubmeshStart(submesh);
+            int32_t elementCount = ResolveRuntimeSubmeshElementCount(submesh, model);
+            if (elementCount <= 0) {
+                continue;
+            }
+
+            context->IASetPrimitiveTopology(ResolveDirectXTopology(submesh));
+            if (model->IndexBuffer && model->IndexCount > 0) {
+                context->DrawIndexed(static_cast<UINT>(elementCount), static_cast<UINT>(startElement), 0);
+            } else {
+                context->Draw(static_cast<UINT>(elementCount), static_cast<UINT>(startElement));
+            }
         }
     }
 

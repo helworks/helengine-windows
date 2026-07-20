@@ -367,6 +367,115 @@ public class WindowsPlatformAssetBuilderTests {
     }
 
     /// <summary>
+    /// Verifies the builder stages builder-owned cook outputs like externalized font atlases into the final package.
+    /// </summary>
+    [Fact]
+    public async Task BuildAsync_copies_platform_cook_work_item_outputs_into_the_output_root() {
+        string workingRoot = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+        string outputRoot = Path.Combine(workingRoot, "out");
+        string sourceRoot = Path.Combine(workingRoot, "project");
+        string generatedCoreRoot = Path.Combine(workingRoot, "generated-core");
+        string sceneSourcePath = Path.Combine(sourceRoot, "scenes", "main-menu.hasset");
+        string fontAtlasSourcePath = Path.Combine(sourceRoot, "generated", "packaged-font-atlases", "fredoka.hasset");
+
+        Directory.CreateDirectory(Path.GetDirectoryName(sceneSourcePath)!);
+        Directory.CreateDirectory(Path.GetDirectoryName(fontAtlasSourcePath)!);
+        Directory.CreateDirectory(generatedCoreRoot);
+        File.WriteAllText(sceneSourcePath, "scene payload");
+        File.WriteAllText(fontAtlasSourcePath, "font atlas payload");
+
+        string previousDirectory = Directory.GetCurrentDirectory();
+        try {
+            Directory.SetCurrentDirectory(sourceRoot);
+
+            PlatformBuildManifest manifest = new(
+                1,
+                "project",
+                "1.0.0",
+                "1.0.0",
+                "windows",
+                "1.0.0",
+                "startup",
+                [
+                    new PlatformBuildScene(
+                        "startup",
+                        "Startup",
+                        "scenes/main-menu.hasset",
+                        [],
+                        [new KeyValuePair<string, string>("cooked-relative-path", "scenes/main-menu.hasset")])
+                ],
+                [],
+                [],
+                [],
+                [],
+                new PlatformContainerWritePlan(string.Empty, []),
+                [
+                    new PlatformCookWorkItem(
+                        "fredoka-font-atlas",
+                        "generated/packaged-font-atlases/fredoka.hasset",
+                        "font-atlas-texture",
+                        "windows",
+                        "texture",
+                        "cooked/fonts/fredoka.hetex",
+                        "fredoka-atlas",
+                        "hash-source",
+                        "hash-settings",
+                        "{}",
+                        [])
+                ]);
+
+            PlatformBuildRequest request = new(
+                manifest,
+                [new PlatformBuildTargetVariant("windows-default", "windows", "windows", "debug")],
+                [new PlatformCookProfile(
+                    "debug",
+                    "Debug",
+                    new PlatformCookProfileCapabilities(
+                        "windows",
+                        "raw",
+                        "rgba",
+                        "windows-scene-v1",
+                        PlatformSerializationEndianness.LittleEndian))],
+                outputRoot,
+                Path.Combine(workingRoot, "tmp"),
+                "debug",
+                "directx11",
+                string.Empty,
+                new Dictionary<string, string>(),
+                new Dictionary<string, string> {
+                    ["default-width"] = "1280",
+                    ["default-height"] = "720"
+                },
+                new Dictionary<string, string>(),
+                generatedCoreRoot);
+
+            RecordingNativeBuildExecutor nativeBuildExecutor = new();
+            WindowsPlatformAssetBuilder builder = new(nativeBuildExecutor);
+            RecordingProgressReporter progressReporter = new();
+            RecordingDiagnosticReporter diagnosticReporter = new();
+
+            PlatformBuildReport report = await builder.BuildAsync(request, progressReporter, diagnosticReporter, CancellationToken.None);
+
+            Assert.True(report.Succeeded);
+            Assert.Empty(diagnosticReporter.Diagnostics);
+            Assert.True(File.Exists(Path.Combine(outputRoot, "cooked", "fonts", "fredoka.hetex")));
+            Assert.Equal("font atlas payload", File.ReadAllText(Path.Combine(outputRoot, "cooked", "fonts", "fredoka.hetex")));
+        } finally {
+            try {
+                Directory.SetCurrentDirectory(previousDirectory);
+            } catch {
+            }
+
+            try {
+                if (Directory.Exists(workingRoot)) {
+                    Directory.Delete(workingRoot, recursive: true);
+                }
+            } catch {
+            }
+        }
+    }
+
+    /// <summary>
     /// Verifies the builder runs the native Windows build step and copies the produced executable into the output root.
     /// </summary>
     [Fact]

@@ -49,7 +49,7 @@ public static class WindowsBuildWorkspace {
         List<WindowsBuildManifestEntry> sceneEntries = [];
         List<WindowsBuildManifestEntry> looseAssetEntries = [];
 
-        int totalItems = request.Manifest.Scenes.Length + request.Manifest.LooseAssets.Length + 1;
+        int totalItems = request.Manifest.Scenes.Length + request.Manifest.LooseAssets.Length + request.Manifest.PlatformCookWorkItems.Length + 1;
         int completedItems = 0;
         bool nativeBuildSucceeded = false;
         string repositoryRoot = ResolveRepositoryRoot();
@@ -113,6 +113,32 @@ public static class WindowsBuildWorkspace {
             if (copied) {
                 looseAssetEntries.Add(new WindowsBuildManifestEntry(asset.AssetId, asset.SourceIdentity, outputPath));
             }
+        }
+
+        for (int workItemIndex = 0; workItemIndex < request.Manifest.PlatformCookWorkItems.Length; workItemIndex++) {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            PlatformCookWorkItem workItem = request.Manifest.PlatformCookWorkItems[workItemIndex];
+            CopyPlatformCookWorkItem(
+                workItem,
+                request.OutputRoot,
+                diagnostics,
+                diagnosticReporter,
+                out bool copied,
+                out string outputPath);
+
+            completedItems++;
+            string workItemLabel = workItem == null || string.IsNullOrWhiteSpace(workItem.OutputLogicalArtifactId)
+                ? $"platform-work-item-{workItemIndex}"
+                : workItem.OutputLogicalArtifactId;
+            progressReporter.Report(new PlatformBuildProgressUpdate(
+                "Stage Builder-Owned Assets",
+                workItemLabel,
+                completedItems,
+                totalItems,
+                copied
+                    ? $"Staged builder-owned asset '{workItemLabel}'."
+                    : $"Failed to stage builder-owned asset '{workItemLabel}'."));
         }
 
         WriteBuildManifest(request, builderWorkingRoot, sceneEntries, looseAssetEntries);
@@ -235,6 +261,62 @@ public static class WindowsBuildWorkspace {
 
         outputPath = ResolveOutputPath(outputRoot, sourceIdentity);
         string destinationDirectory = Path.GetDirectoryName(outputPath);
+        if (!string.IsNullOrWhiteSpace(destinationDirectory)) {
+            Directory.CreateDirectory(destinationDirectory);
+        }
+
+        File.Copy(sourcePath, outputPath, true);
+        copied = true;
+    }
+
+    /// <summary>
+    /// Copies one builder-owned cooked artifact into the output root using its resolved runtime-relative output path.
+    /// </summary>
+    /// <param name="workItem">Builder-owned cook work item to materialize.</param>
+    /// <param name="outputRoot">Final output root for the build.</param>
+    /// <param name="diagnostics">Diagnostic list collecting failures.</param>
+    /// <param name="diagnosticReporter">Diagnostic reporter that mirrors collected failures.</param>
+    /// <param name="copied">Returns whether the cooked artifact was copied.</param>
+    /// <param name="outputPath">Returns the destination path for the copied artifact.</param>
+    static void CopyPlatformCookWorkItem(
+        PlatformCookWorkItem workItem,
+        string outputRoot,
+        List<PlatformBuildDiagnostic> diagnostics,
+        IPlatformBuildDiagnosticReporter diagnosticReporter,
+        out bool copied,
+        out string outputPath) {
+        copied = false;
+        outputPath = string.Empty;
+
+        if (workItem == null) {
+            AddDiagnostic(
+                diagnostics,
+                diagnosticReporter,
+                PlatformBuildDiagnosticSeverity.Error,
+                "WINBUILD004",
+                "Builder-owned cook work item was missing.",
+                string.Empty,
+                string.Empty,
+                string.Empty);
+            return;
+        }
+
+        string sourcePath = ResolveSourcePath(workItem.SourceAssetPath);
+        if (!File.Exists(sourcePath)) {
+            AddDiagnostic(
+                diagnostics,
+                diagnosticReporter,
+                PlatformBuildDiagnosticSeverity.Error,
+                "WINBUILD005",
+                $"Builder-owned source asset '{workItem.SourceAssetPath}' was not found.",
+                string.Empty,
+                workItem.OutputLogicalArtifactId,
+                workItem.SourceAssetPath);
+            return;
+        }
+
+        outputPath = Path.GetFullPath(Path.Combine(outputRoot, ResolveCookedRelativePath(workItem.OutputRelativePath)));
+        string? destinationDirectory = Path.GetDirectoryName(outputPath);
         if (!string.IsNullOrWhiteSpace(destinationDirectory)) {
             Directory.CreateDirectory(destinationDirectory);
         }
