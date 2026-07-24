@@ -5,11 +5,16 @@ This repository contains the Windows platform host and builder integration for H
 ## Build
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File ..\helengine\artifacts\build-platform.ps1 `
+dotnet run --project ..\helengine\tools\build-waiter\helengine.buildwaiter.csproj -- `
+  --output ..\helprojs\city\windows-build `
+  --require helengine_windows.exe `
+  -- powershell -NoProfile -ExecutionPolicy Bypass -File ..\helengine\scripts\build-platform.ps1 `
   -Project ..\helprojs\city\project.heproj `
   -Platform windows `
   -Output ..\helprojs\city\windows-build
 ```
+
+The Build Waiter returns successfully only after `helengine_windows.exe` is fresh and non-empty.
 
 ## Run In Emulator
 
