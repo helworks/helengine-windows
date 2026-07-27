@@ -7,3 +7,12 @@ render-validation-output/
 .codex-out/
 .worktrees/
 tmp/
+
+# Local build, log, and temporary artifacts
+*.log
+*.err
+*.exitcode
+*.vpk
+/.codex-temp/
+/tmp-*/
+/tmp_*/
