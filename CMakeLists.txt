@@ -70,8 +70,8 @@ if(HELENGINE_WINDOWS_INCLUDE_GENERATED_CORE)
         list(APPEND HELENGINE_WINDOWS_SOURCES "${HELENGINE_CORE_CPP_ROOT}/runtime/runtime_scene_catalog_manifest.cpp")
     endif()
 
-    if(EXISTS "${HELENGINE_CORE_CPP_ROOT}/runtime/runtime_player_settings_manifest.cpp")
-        list(APPEND HELENGINE_WINDOWS_SOURCES "${HELENGINE_CORE_CPP_ROOT}/runtime/runtime_player_settings_manifest.cpp")
+    if(EXISTS "${HELENGINE_CORE_CPP_ROOT}/runtime/player_settings.cpp")
+        list(APPEND HELENGINE_WINDOWS_SOURCES "${HELENGINE_CORE_CPP_ROOT}/runtime/player_settings.cpp")
     endif()
 endif()
 

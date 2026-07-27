@@ -87,7 +87,7 @@ public sealed class WindowsRuntimeNativeManifestWriter {
         int defaultWindowWidth = ResolveRequiredPositiveIntegerOption(selectedGraphicsOptionValues, "default-width");
         int defaultWindowHeight = ResolveRequiredPositiveIntegerOption(selectedGraphicsOptionValues, "default-height");
         string headerPath = Path.Combine(runtimeRootPath, "runtime_player_settings_manifest.hpp");
-        string sourcePath = Path.Combine(runtimeRootPath, "runtime_player_settings_manifest.cpp");
+        string sourcePath = Path.Combine(runtimeRootPath, "player_settings.cpp");
 
         File.WriteAllText(headerPath, BuildPlayerSettingsManifestHeaderContents());
         File.WriteAllText(sourcePath, BuildPlayerSettingsManifestSourceContents(defaultWindowWidth, defaultWindowHeight));

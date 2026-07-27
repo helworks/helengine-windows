@@ -114,7 +114,7 @@ public sealed class WindowsRuntimeNativeManifestWriterTests : IDisposable {
 
         string runtimeRootPath = Path.Combine(GeneratedCoreRootPath, "runtime");
         string settingsHeaderPath = Path.Combine(runtimeRootPath, "runtime_player_settings_manifest.hpp");
-        string settingsSourcePath = Path.Combine(runtimeRootPath, "runtime_player_settings_manifest.cpp");
+        string settingsSourcePath = Path.Combine(runtimeRootPath, "player_settings.cpp");
 
         Assert.True(File.Exists(settingsHeaderPath));
         Assert.True(File.Exists(settingsSourcePath));
@@ -158,7 +158,7 @@ public sealed class WindowsRuntimeNativeManifestWriterTests : IDisposable {
         writer.Write(GeneratedCoreRootPath, manifest, graphicsOptionValues);
 
         string runtimeRootPath = Path.Combine(GeneratedCoreRootPath, "runtime");
-        string settingsSourcePath = Path.Combine(runtimeRootPath, "runtime_player_settings_manifest.cpp");
+        string settingsSourcePath = Path.Combine(runtimeRootPath, "player_settings.cpp");
         string settingsSource = File.ReadAllText(settingsSourcePath);
 
         Assert.Contains("kRuntimeDefaultWindowWidth = 640", settingsSource, StringComparison.Ordinal);
