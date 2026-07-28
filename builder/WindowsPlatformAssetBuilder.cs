@@ -166,7 +166,7 @@ public sealed class WindowsPlatformAssetBuilder : IPlatformAssetBuilder {
             new EngineCompatibilityRange("1.0.0", "999.0.0"),
             new ManifestCompatibilityRange(1, 1),
             ["windows"],
-            ["debug", "release"]);
+            ["debug", "release", "profiler"]);
     }
 
     /// <summary>

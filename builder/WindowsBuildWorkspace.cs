@@ -37,6 +37,8 @@ public static class WindowsBuildWorkspace {
 
         string stagingRoot = Directory.GetCurrentDirectory();
         string builderWorkingRoot = ResolveBuilderWorkingRoot(request.WorkingRoot, stagingRoot);
+        WindowsNativeBuildProfileResolution profileResolution = WindowsNativeBuildProfileResolver.Resolve(request.SelectedBuildProfileId);
+        ValidateGeneratedFunctionProfilingConfiguration(profileResolution, request.SelectedCodegenOptionValues);
 
         ResetDirectoryIfPresent(request.OutputRoot);
         ResetDirectoryIfPresent(builderWorkingRoot);
@@ -155,20 +157,25 @@ public static class WindowsBuildWorkspace {
         string nativeBuildRoot = Path.Combine(builderWorkingRoot, "native");
 
         try {
-            string nativeExecutablePath = nativeBuildExecutor.Build(
+            WindowsNativeBuildResult nativeBuildResult = nativeBuildExecutor.Build(
                 repositoryRoot,
                 nativeBuildRoot,
                 generatedCoreRoot,
                 Path.Combine(stagingRoot, "code"),
+                profileResolution.Profile,
                 cancellationToken);
+            string nativeExecutablePath = nativeBuildResult.ExecutablePath;
             string destinationExecutablePath = Path.Combine(request.OutputRoot, Path.GetFileName(nativeExecutablePath));
             Directory.CreateDirectory(request.OutputRoot);
             File.Copy(nativeExecutablePath, destinationExecutablePath, true);
 
-            string sourcePdbPath = Path.ChangeExtension(nativeExecutablePath, ".pdb");
-            if (File.Exists(sourcePdbPath)) {
+            if (profileResolution.PdbRequired && string.IsNullOrWhiteSpace(nativeBuildResult.PdbPath)) {
+                throw new InvalidOperationException("Native Windows profiler build completed without a required PDB.");
+            }
+
+            if (!string.IsNullOrWhiteSpace(nativeBuildResult.PdbPath)) {
                 string destinationPdbPath = Path.ChangeExtension(destinationExecutablePath, ".pdb");
-                File.Copy(sourcePdbPath, destinationPdbPath, true);
+                File.Copy(nativeBuildResult.PdbPath, destinationPdbPath, true);
             }
 
             nativeBuildSucceeded = true;
@@ -209,6 +216,32 @@ public static class WindowsBuildWorkspace {
             [.. diagnostics],
             [.. sceneOutcomes],
             [.. looseAssetOutcomes]));
+    }
+
+    /// <summary>
+    /// Ensures the selected code-generation instrumentation setting matches the requested native Windows player profile.
+    /// </summary>
+    /// <param name="profileResolution">Validated native Windows player profile settings.</param>
+    /// <param name="codegenOptionValues">Resolved code-generation option values from the build request.</param>
+    static void ValidateGeneratedFunctionProfilingConfiguration(
+        WindowsNativeBuildProfileResolution profileResolution,
+        IReadOnlyDictionary<string, string> codegenOptionValues) {
+        if (profileResolution == null) {
+            throw new ArgumentNullException(nameof(profileResolution));
+        } else if (codegenOptionValues == null) {
+            throw new ArgumentNullException(nameof(codegenOptionValues));
+        }
+
+        const string profilingSettingId = "codegen-generated-function-profiling";
+        bool profilingEnabled = codegenOptionValues.TryGetValue(profilingSettingId, out string profilingValue)
+            && bool.TryParse(profilingValue, out bool parsedProfilingEnabled)
+            && parsedProfilingEnabled;
+
+        if (profileResolution.ProfilerEnabled && !profilingEnabled) {
+            throw new InvalidOperationException($"Windows profiler builds require '{profilingSettingId}' to be true.");
+        } else if (!profileResolution.ProfilerEnabled && profilingEnabled) {
+            throw new InvalidOperationException($"Windows {profileResolution.Profile.ToString().ToLowerInvariant()} builds require '{profilingSettingId}' to be false.");
+        }
     }
 
     /// <summary>

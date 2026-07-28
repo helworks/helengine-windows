@@ -37,7 +37,10 @@ public static class WindowsPlatformDefinitionFactory {
                             "true",
                             true,
                             [])
-                    ]),
+                    ],
+                    new Dictionary<string, string>(StringComparer.Ordinal) {
+                        ["codegen-generated-function-profiling"] = "false"
+                    }),
                 new PlatformBuildProfileDefinition(
                     "release",
                     "Release",
@@ -59,7 +62,35 @@ public static class WindowsPlatformDefinitionFactory {
                             "true",
                             true,
                             [])
-                    ])
+                    ],
+                    new Dictionary<string, string>(StringComparer.Ordinal) {
+                        ["codegen-generated-function-profiling"] = "false"
+                    }),
+                new PlatformBuildProfileDefinition(
+                    "profiler",
+                    "Profiler",
+                    "Optimized Windows player with generated C++ profiling",
+                    "directx11",
+                    "default",
+                    [
+                        new PlatformSettingDefinition(
+                            "texture-scale-percent",
+                            "Texture Scale Percent",
+                            PlatformSettingKind.Text,
+                            "100",
+                            true,
+                            []),
+                        new PlatformSettingDefinition(
+                            "shader-variant-pruning",
+                            "Shader Variant Pruning",
+                            PlatformSettingKind.Boolean,
+                            "true",
+                            true,
+                            [])
+                    ],
+                    new Dictionary<string, string>(StringComparer.Ordinal) {
+                        ["codegen-generated-function-profiling"] = "true"
+                    })
             ],
             [
                 new PlatformGraphicsProfileDefinition(
@@ -265,6 +296,13 @@ public static class WindowsPlatformDefinitionFactory {
                             "Load Native Runtime Metadata",
                             PlatformSettingKind.Boolean,
                             "true",
+                            true,
+                            []),
+                        new PlatformSettingDefinition(
+                            "codegen-generated-function-profiling",
+                            "Generated Function Profiling",
+                            PlatformSettingKind.Boolean,
+                            "false",
                             true,
                             [])
                     ])
