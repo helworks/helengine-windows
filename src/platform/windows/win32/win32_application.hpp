@@ -176,6 +176,9 @@ namespace helengine::windows {
         /// Updates and emits periodic frame statistics for the host loop.
         void UpdateFrameStatistics();
 
+        /// Emits profiler plots from the core-owned snapshot without inventing unavailable runtime metrics.
+        void EmitWindowsTracyProfilerPlots() const;
+
 #if defined(HELENGINE_WINDOWS_DEBUG_RUNTIME_DIAGNOSTICS)
         /// Stores one sampled summary of the Win32 process heaps.
         struct DebugWin32HeapSummary {

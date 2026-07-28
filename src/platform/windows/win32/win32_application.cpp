@@ -32,6 +32,7 @@
 #include "platform/windows/runtime/runtime_memory_diagnostics_provider.hpp"
 #include "platform/windows/runtime/runtime_player_profile_loader.hpp"
 #include "platform/windows/runtime/runtime_render_diagnostics.hpp"
+#include "platform/windows/runtime/windows_tracy_profiler.hpp"
 #if __has_include("IAudioBackend.hpp")
 #include "platform/windows/win32/win32_audio_backend.hpp"
 #endif
@@ -62,6 +63,10 @@
 #include "SceneManager.hpp"
 #include "RuntimeSceneCatalog.hpp"
 #include "RuntimeSceneCatalogEntry.hpp"
+#if __has_include("RuntimeProfilerMetricsSnapshot.hpp")
+#include "RuntimeProfilerMetricsSnapshot.hpp"
+#define HELENGINE_WINDOWS_HAS_RUNTIME_PROFILER_METRICS 1
+#endif
 #include "runtime/runtime_startup_manifest.hpp"
 #include "runtime/runtime_scene_catalog_manifest.hpp"
 #include "runtime/array.hpp"
@@ -506,6 +511,7 @@ namespace helengine::windows {
 
     /// Releases native bootstrap objects after the application loop finishes.
     Win32Application::~Win32Application() {
+        ShutdownWindowsTracyProfiler();
 #if defined(HELENGINE_WINDOWS_DEBUG_RUNTIME_DIAGNOSTICS)
         if (DebugAllocationLogFile != nullptr) {
             std::fclose(DebugAllocationLogFile);
@@ -538,6 +544,7 @@ namespace helengine::windows {
             WriteLifecycleLog("Host startup began.");
             CreateMainWindow();
             CreateGraphicsBootstrap();
+            InitializeWindowsTracyProfiler(Bootstrap->GetDevice(), Bootstrap->GetDeviceContext());
             InitializeEngineCore();
             WriteLifecycleLog("Entering render loop.");
 
@@ -1556,6 +1563,8 @@ namespace helengine::windows {
 
     /// Renders and presents the current frame.
     void Win32Application::RenderFrame() {
+        HELENGINE_TRACY_ZONE_N("Frame");
+        BeginWindowsTracyProfilerFrame();
         int clientWidth = MainWindow->GetClientWidth();
         int clientHeight = MainWindow->GetClientHeight();
         if (clientWidth <= 0 || clientHeight <= 0) {
@@ -1586,7 +1595,11 @@ namespace helengine::windows {
                     WriteSceneDiagnosticsCheckpoint("first_frame_before_update");
                 }
                 frameStage = "engine_update";
-                EngineCore->Update();
+                {
+                    HELENGINE_TRACY_ZONE_N("Engine.Update");
+                    HELENGINE_TRACY_ZONE_N("Engine.FixedUpdatePhysicsSceneCommit");
+                    EngineCore->Update();
+                }
                 if (shouldTraceFirstFrame) {
                     WriteLifecycleLog("First frame completed EngineCore->Update().");
                     WriteSceneDiagnosticsCheckpoint("first_frame_after_update");
@@ -1604,7 +1617,11 @@ namespace helengine::windows {
                     WriteLifecycleLog("First frame entering EngineCore->Draw().");
                 }
                 frameStage = "engine_draw";
-                EngineCore->Draw();
+                {
+                    HELENGINE_TRACY_ZONE_N("Engine.Draw");
+                    EngineCore->Draw();
+                }
+                EmitWindowsTracyProfilerPlots();
                 if (shouldTraceFirstFrame) {
                     WriteLifecycleLog("First frame completed EngineCore->Draw().");
                     WriteSceneDiagnosticsCheckpoint("first_frame_after_draw");
@@ -1616,17 +1633,53 @@ namespace helengine::windows {
                 WriteLifecycleLog("First frame entering Presenter->RenderFrame().");
             }
             frameStage = "present";
-            Presenter->RenderFrame();
+            {
+                HELENGINE_TRACY_ZONE_N("Frame.PacingAndIdle");
+                Presenter->RenderFrame();
+            }
             if (shouldTraceFirstFrame) {
                 WriteLifecycleLog("First frame completed Presenter->RenderFrame().");
                 WriteSceneDiagnosticsCheckpoint("first_frame_after_present");
             }
+            CollectWindowsTracyProfilerGpu();
             frameStage = "update_frame_statistics";
             UpdateFrameStatistics();
         } catch (const std::bad_alloc&) {
             RuntimeRenderDiagnostics::WriteHostEvent("frame-bad-alloc", std::string("stage=") + frameStage);
             throw;
         }
+    }
+
+    /// Emits profiler plots from the core-owned snapshot without inventing unavailable runtime metrics.
+    void Win32Application::EmitWindowsTracyProfilerPlots() const {
+#if __has_include("Core.hpp") && defined(HELENGINE_WINDOWS_HAS_RUNTIME_PROFILER_METRICS)
+        if (EngineCore == nullptr) {
+            return;
+        }
+
+        RuntimeProfilerMetricsSnapshot* snapshot = EngineCore->get_RuntimeProfilerMetrics();
+        if (snapshot == nullptr) {
+            return;
+        }
+
+        HELENGINE_TRACY_PLOT("Core.FixedUpdates", snapshot->get_FixedUpdateCount());
+        HELENGINE_TRACY_PLOT("Core.SceneOperations", snapshot->get_SceneOperationCount());
+        if (snapshot->get_HasPhysicsBodyCount()) {
+            HELENGINE_TRACY_PLOT("Physics.Bodies", snapshot->get_PhysicsBodyCount());
+        }
+        if (snapshot->get_HasPhysicsContactCount()) {
+            HELENGINE_TRACY_PLOT("Physics.Contacts", snapshot->get_PhysicsContactCount());
+        }
+        if (snapshot->get_HasPhysicsConstraintCount()) {
+            HELENGINE_TRACY_PLOT("Physics.Constraints", snapshot->get_PhysicsConstraintCount());
+        }
+        if (snapshot->get_HasDrawCallCount()) {
+            HELENGINE_TRACY_PLOT("Render.DrawCalls", snapshot->get_DrawCallCount());
+        }
+        if (snapshot->get_HasTriangleCount()) {
+            HELENGINE_TRACY_PLOT("Render.Triangles", snapshot->get_TriangleCount());
+        }
+#endif
     }
 
     /// Writes one bounded BEPU stack-boxes physics snapshot into the lifecycle log when that diagnostic scene is active.
