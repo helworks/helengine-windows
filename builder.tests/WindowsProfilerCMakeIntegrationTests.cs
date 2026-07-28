@@ -13,10 +13,16 @@ public sealed class WindowsProfilerCMakeIntegrationTests {
 
         Assert.Contains("set(HELENGINE_WINDOWS_NATIVE_PROFILE \"Debug\" CACHE STRING", cmakeSource, StringComparison.Ordinal);
         Assert.Contains("set_property(CACHE HELENGINE_WINDOWS_NATIVE_PROFILE PROPERTY STRINGS Debug Release Profiler)", cmakeSource, StringComparison.Ordinal);
-        Assert.Contains("if(HELENGINE_WINDOWS_NATIVE_PROFILE STREQUAL \"Profiler\")", cmakeSource, StringComparison.Ordinal);
-        Assert.Contains("add_subdirectory(\"${CMAKE_CURRENT_SOURCE_DIR}/third_party/tracy\"", cmakeSource, StringComparison.Ordinal);
-        Assert.Contains("target_compile_definitions(helengine_windows PRIVATE TRACY_ENABLE)", cmakeSource, StringComparison.Ordinal);
-        Assert.Contains("target_link_libraries(helengine_windows PRIVATE TracyClient)", cmakeSource, StringComparison.Ordinal);
+
+        string profilerBody = ExtractConditionalBody(cmakeSource, "if(HELENGINE_WINDOWS_NATIVE_PROFILE STREQUAL \"Profiler\")");
+        string preProfilerSource = cmakeSource[..cmakeSource.IndexOf("if(HELENGINE_WINDOWS_NATIVE_PROFILE STREQUAL \"Profiler\")", StringComparison.Ordinal)];
+
+        Assert.Contains("add_subdirectory(\"${CMAKE_CURRENT_SOURCE_DIR}/third_party/tracy\"", profilerBody, StringComparison.Ordinal);
+        Assert.Contains("target_compile_definitions(helengine_windows PRIVATE TRACY_ENABLE)", profilerBody, StringComparison.Ordinal);
+        Assert.Contains("target_link_libraries(helengine_windows PRIVATE TracyClient)", profilerBody, StringComparison.Ordinal);
+        Assert.DoesNotContain("third_party/tracy", preProfilerSource, StringComparison.Ordinal);
+        Assert.DoesNotContain("TRACY_ENABLE", preProfilerSource, StringComparison.Ordinal);
+        Assert.DoesNotContain("TracyClient", preProfilerSource, StringComparison.Ordinal);
     }
 
     /// <summary>
@@ -52,6 +58,36 @@ public sealed class WindowsProfilerCMakeIntegrationTests {
             @"C:\vs\VsDevCmd.bat",
             profile
         ]) ?? throw new InvalidOperationException("The native configure command builder returned no arguments."));
+    }
+
+    /// <summary>
+    /// Extracts the direct body of one exact CMake conditional while accounting for nested conditionals.
+    /// </summary>
+    /// <param name="cmakeSource">Complete CMake source to inspect.</param>
+    /// <param name="conditionalLine">Exact opening conditional line whose direct body is required.</param>
+    /// <returns>Source lines contained directly by the requested conditional, excluding its opening and closing lines.</returns>
+    static string ExtractConditionalBody(string cmakeSource, string conditionalLine) {
+        string[] lines = cmakeSource.Replace("\r\n", "\n", StringComparison.Ordinal).Split('\n');
+        int openingLineIndex = Array.IndexOf(lines, conditionalLine);
+        if (openingLineIndex < 0) {
+            throw new InvalidOperationException($"Could not find CMake conditional '{conditionalLine}'.");
+        }
+
+        int nestedConditionalDepth = 0;
+        for (int lineIndex = openingLineIndex + 1; lineIndex < lines.Length; lineIndex++) {
+            string trimmedLine = lines[lineIndex].TrimStart();
+            if (trimmedLine.StartsWith("if(", StringComparison.Ordinal) || trimmedLine.StartsWith("if (", StringComparison.Ordinal)) {
+                nestedConditionalDepth++;
+            } else if (trimmedLine.StartsWith("endif", StringComparison.Ordinal)) {
+                if (nestedConditionalDepth == 0) {
+                    return string.Join("\n", lines[(openingLineIndex + 1)..lineIndex]);
+                }
+
+                nestedConditionalDepth--;
+            }
+        }
+
+        throw new InvalidOperationException($"CMake conditional '{conditionalLine}' has no closing endif.");
     }
 
     /// <summary>
