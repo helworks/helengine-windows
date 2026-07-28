@@ -92,6 +92,24 @@ public sealed class WindowsNativeBuildExecutorTests {
     }
 
     /// <summary>
+    /// Verifies the debug build configures Ninja with debug symbols and keeps the native profiler client disabled.
+    /// </summary>
+    [Fact]
+    public void BuildConfigureArguments_for_debug_uses_debug_and_disables_profiler() {
+        string arguments = InvokePrivateCommandBuilder(
+            "BuildConfigureArguments",
+            @"C:\repo",
+            @"C:\build",
+            @"C:\generated",
+            @"C:\staged-code",
+            @"C:\vs\VsDevCmd.bat",
+            WindowsNativeBuildProfile.Debug);
+
+        Assert.Contains("-DCMAKE_BUILD_TYPE=Debug", arguments, StringComparison.Ordinal);
+        Assert.Contains("-DHELENGINE_WINDOWS_PROFILER=OFF", arguments, StringComparison.Ordinal);
+    }
+
+    /// <summary>
     /// Invokes one private static command-builder helper from the production executor.
     /// </summary>
     /// <param name="methodName">Private helper method name.</param>

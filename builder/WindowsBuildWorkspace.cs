@@ -223,7 +223,7 @@ public static class WindowsBuildWorkspace {
     /// </summary>
     /// <param name="profileResolution">Validated native Windows player profile settings.</param>
     /// <param name="codegenOptionValues">Resolved code-generation option values from the build request.</param>
-    static void ValidateGeneratedFunctionProfilingConfiguration(
+    internal static void ValidateGeneratedFunctionProfilingConfiguration(
         WindowsNativeBuildProfileResolution profileResolution,
         IReadOnlyDictionary<string, string> codegenOptionValues) {
         if (profileResolution == null) {
