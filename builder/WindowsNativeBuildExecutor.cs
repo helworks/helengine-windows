@@ -111,7 +111,7 @@ internal sealed class WindowsNativeBuildExecutor : IWindowsNativeBuildExecutor {
         WindowsNativeBuildProfileResolution profileResolution = WindowsNativeBuildProfileResolver.Resolve(profile);
         return string.Join(" ", [
             "/c",
-            $"call \"{vsDevCmdPath}\" -arch=amd64 -host_arch=amd64 && cmake -S \"{repositoryRoot}\" -B \"{buildRoot}\" -G Ninja -DCMAKE_BUILD_TYPE={profileResolution.CmakeBuildType} -DHELENGINE_WINDOWS_PROFILER={(profileResolution.ProfilerEnabled ? "ON" : "OFF")} -DHELENGINE_WINDOWS_INCLUDE_GENERATED_CORE=ON -DHELENGINE_CORE_CPP_ROOT=\"{generatedCoreCppRootPath}\" -DHELENGINE_CODE_ROOT=\"{stagedCodeRootPath}\" -DHELENGINE_WINDOWS_RENDER_BACKEND=DirectX11"
+            $"call \"{vsDevCmdPath}\" -arch=amd64 -host_arch=amd64 && cmake -S \"{repositoryRoot}\" -B \"{buildRoot}\" -G Ninja -DCMAKE_BUILD_TYPE={profileResolution.CmakeBuildType} -DHELENGINE_WINDOWS_NATIVE_PROFILE={profile} -DHELENGINE_WINDOWS_INCLUDE_GENERATED_CORE=ON -DHELENGINE_CORE_CPP_ROOT=\"{generatedCoreCppRootPath}\" -DHELENGINE_CODE_ROOT=\"{stagedCodeRootPath}\" -DHELENGINE_WINDOWS_RENDER_BACKEND=DirectX11"
         ]);
     }
 

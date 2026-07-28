@@ -5,8 +5,14 @@ project(helengine_windows LANGUAGES CXX)
 set(HELENGINE_CORE_CPP_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/generated/helengine.core" CACHE PATH "Path to the generated helengine.core C++ output folder.")
 set(HELENGINE_CODE_ROOT "" CACHE PATH "Path to the staged generated code-module root folder.")
 set(HELENGINE_WINDOWS_RENDER_BACKEND "DirectX11" CACHE STRING "Windows rendering backend to compile.")
+set(HELENGINE_WINDOWS_NATIVE_PROFILE "Debug" CACHE STRING "Native Windows player profile used to select profile-specific dependencies.")
 option(HELENGINE_WINDOWS_INCLUDE_GENERATED_CORE "Build the Windows host with generated helengine.core sources." ON)
 set_property(CACHE HELENGINE_WINDOWS_RENDER_BACKEND PROPERTY STRINGS DirectX11 Vulkan)
+set_property(CACHE HELENGINE_WINDOWS_NATIVE_PROFILE PROPERTY STRINGS Debug Release Profiler)
+
+if(NOT HELENGINE_WINDOWS_NATIVE_PROFILE STREQUAL "Debug" AND NOT HELENGINE_WINDOWS_NATIVE_PROFILE STREQUAL "Release" AND NOT HELENGINE_WINDOWS_NATIVE_PROFILE STREQUAL "Profiler")
+    message(FATAL_ERROR "HELENGINE_WINDOWS_NATIVE_PROFILE must be Debug, Release, or Profiler.")
+endif()
 
 if(HELENGINE_WINDOWS_INCLUDE_GENERATED_CORE)
     set(HELENGINE_CORE_TRANSLATION_UNIT "")
@@ -78,6 +84,13 @@ endif()
 add_executable(helengine_windows WIN32 ${HELENGINE_WINDOWS_SOURCES})
 
 target_compile_features(helengine_windows PRIVATE cxx_std_20)
+
+if(HELENGINE_WINDOWS_NATIVE_PROFILE STREQUAL "Profiler")
+    set(TRACY_ENABLE ON CACHE BOOL "Enable Tracy instrumentation for the native profiler player profile." FORCE)
+    add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/third_party/tracy" "${CMAKE_CURRENT_BINARY_DIR}/third_party/tracy")
+    target_compile_definitions(helengine_windows PRIVATE TRACY_ENABLE)
+    target_link_libraries(helengine_windows PRIVATE TracyClient)
+endif()
 
 target_compile_definitions(helengine_windows PRIVATE
     WIN32_LEAN_AND_MEAN
