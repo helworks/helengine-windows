@@ -34,13 +34,27 @@ public sealed class WindowsProfilerNativeSourceTests {
         Assert.Contains("ShutdownWindowsTracyProfiler", applicationSource, StringComparison.Ordinal);
         Assert.Contains("HELENGINE_TRACY_ZONE_N(\"Frame\")", applicationSource, StringComparison.Ordinal);
         Assert.Contains("HELENGINE_TRACY_ZONE_N(\"Engine.Update\")", applicationSource, StringComparison.Ordinal);
+        Assert.DoesNotContain("Engine.FixedUpdatePhysicsSceneCommit", applicationSource, StringComparison.Ordinal);
         Assert.Contains("HELENGINE_TRACY_PLOT", applicationSource, StringComparison.Ordinal);
+        Assert.True(
+            applicationSource.IndexOf("if (clientWidth <= 0 || clientHeight <= 0)", StringComparison.Ordinal) < applicationSource.IndexOf("BeginWindowsTracyProfilerFrame();", StringComparison.Ordinal),
+            "The frame marker must not start before the minimized-window early return.");
+        Assert.True(
+            applicationSource.IndexOf("catch (const std::bad_alloc&)", StringComparison.Ordinal) < applicationSource.IndexOf("CollectWindowsTracyProfilerGpu();", applicationSource.IndexOf("catch (const std::bad_alloc&)", StringComparison.Ordinal), StringComparison.Ordinal),
+            "The bad-allocation path must close the Tracy frame marker.");
+        Assert.True(
+            applicationSource.IndexOf("catch (...)", StringComparison.Ordinal) < applicationSource.IndexOf("CollectWindowsTracyProfilerGpu();", applicationSource.IndexOf("catch (...)", StringComparison.Ordinal), StringComparison.Ordinal),
+            "The general exception path must close the Tracy frame marker.");
         Assert.True(applicationSource.IndexOf("EngineCore->Draw();", StringComparison.Ordinal) < applicationSource.IndexOf("EmitWindowsTracyProfilerPlots", StringComparison.Ordinal));
         Assert.True(applicationSource.IndexOf("EmitWindowsTracyProfilerPlots", StringComparison.Ordinal) < applicationSource.IndexOf("Presenter->RenderFrame();", StringComparison.Ordinal));
         Assert.True(applicationSource.IndexOf("Presenter->RenderFrame();", StringComparison.Ordinal) < applicationSource.IndexOf("CollectWindowsTracyProfilerGpu", StringComparison.Ordinal));
 
         Assert.Contains("HELENGINE_TRACY_ZONE_N(\"Input.Capture\")", inputSource, StringComparison.Ordinal);
-        Assert.Contains("HELENGINE_TRACY_ZONE_N(\"Render.ExtractAndBuild\")", renderBridgeSource, StringComparison.Ordinal);
+        int renderCameraStartIndex = renderBridgeSource.IndexOf("void Win32RenderManager3D::RenderCamera", StringComparison.Ordinal);
+        int renderQueueTraversalIndex = renderBridgeSource.IndexOf("renderQueue->VisitOrdered(this);", StringComparison.Ordinal);
+        int renderQueueScopeIndex = renderBridgeSource.LastIndexOf("HELENGINE_TRACY_ZONE_N(\"Render.ExtractAndBuild\")", renderQueueTraversalIndex, StringComparison.Ordinal);
+        Assert.True(renderCameraStartIndex < renderQueueScopeIndex);
+        Assert.True(renderQueueScopeIndex < renderQueueTraversalIndex);
         Assert.Contains("HELENGINE_TRACY_GPU_ZONE_N(\"D3D11.MainDraw\")", renderBridgeSource, StringComparison.Ordinal);
         Assert.Contains("HELENGINE_TRACY_GPU_ZONE_N(\"D3D11.ShadowDraw\")", renderBridgeSource, StringComparison.Ordinal);
         Assert.Contains("HELENGINE_TRACY_GPU_ZONE_N(\"D3D11.Draw2D\")", renderBridgeSource, StringComparison.Ordinal);

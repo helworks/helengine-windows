@@ -2150,7 +2150,6 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
 
     /// Clears and renders one camera directly into the main back buffer.
     void Win32RenderManager3D::RenderCamera(ICamera* camera, bool clearColorBuffer) {
-        HELENGINE_TRACY_ZONE_N("Render.ExtractAndBuild");
         HELENGINE_TRACY_ZONE_N("D3D11.RenderCamera");
         ID3D11DeviceContext* context = Bootstrap.GetDeviceContext();
         ID3D11RenderTargetView* renderTargetView = Bootstrap.GetRenderTargetView();
@@ -2242,6 +2241,7 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
 
         IRenderQueue3D* renderQueue = camera->get_RenderQueue3D();
         if (renderQueue != nullptr) {
+            HELENGINE_TRACY_ZONE_N("Render.ExtractAndBuild");
             renderQueue->VisitOrdered(this);
         }
 

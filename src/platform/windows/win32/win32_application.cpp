@@ -1564,13 +1564,13 @@ namespace helengine::windows {
     /// Renders and presents the current frame.
     void Win32Application::RenderFrame() {
         HELENGINE_TRACY_ZONE_N("Frame");
-        BeginWindowsTracyProfilerFrame();
         int clientWidth = MainWindow->GetClientWidth();
         int clientHeight = MainWindow->GetClientHeight();
         if (clientWidth <= 0 || clientHeight <= 0) {
             return;
         }
 
+        BeginWindowsTracyProfilerFrame();
         const char* frameStage = "begin";
 
         try {
@@ -1597,7 +1597,6 @@ namespace helengine::windows {
                 frameStage = "engine_update";
                 {
                     HELENGINE_TRACY_ZONE_N("Engine.Update");
-                    HELENGINE_TRACY_ZONE_N("Engine.FixedUpdatePhysicsSceneCommit");
                     EngineCore->Update();
                 }
                 if (shouldTraceFirstFrame) {
@@ -1641,11 +1640,15 @@ namespace helengine::windows {
                 WriteLifecycleLog("First frame completed Presenter->RenderFrame().");
                 WriteSceneDiagnosticsCheckpoint("first_frame_after_present");
             }
-            CollectWindowsTracyProfilerGpu();
             frameStage = "update_frame_statistics";
             UpdateFrameStatistics();
+            CollectWindowsTracyProfilerGpu();
         } catch (const std::bad_alloc&) {
+            CollectWindowsTracyProfilerGpu();
             RuntimeRenderDiagnostics::WriteHostEvent("frame-bad-alloc", std::string("stage=") + frameStage);
+            throw;
+        } catch (...) {
+            CollectWindowsTracyProfilerGpu();
             throw;
         }
     }
