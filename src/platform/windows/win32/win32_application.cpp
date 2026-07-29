@@ -107,6 +107,11 @@
 
 namespace helengine::windows {
     namespace {
+#if !defined(HELENGINE_WINDOWS_DEBUG_RUNTIME_DIAGNOSTICS)
+        constexpr bool EnableFrameStatisticLifecycleLogging = false;
+        constexpr bool EnableFrameStatisticRuntimeSampling = false;
+        constexpr bool EnableSceneDiagnosticsCheckpointLogging = false;
+#endif
 #if defined(HELENGINE_WINDOWS_DEBUG_RUNTIME_DIAGNOSTICS)
         /// Maximum number of frames emitted for one debug stack trace.
         constexpr USHORT StackTraceFrameCapacity = 62;
