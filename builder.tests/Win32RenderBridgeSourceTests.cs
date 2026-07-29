@@ -52,7 +52,7 @@ public sealed class Win32RenderBridgeSourceTests {
         Assert.Contains("bool ShouldMaterialCastShadows(RuntimeMaterial* material) const;", headerSource, StringComparison.Ordinal);
         Assert.Contains("bool Win32RenderManager3D::ShouldMaterialCastShadows(RuntimeMaterial* material) const", implementationSource, StringComparison.Ordinal);
         Assert.Contains("Array<RuntimeMaterial*>* runtimeMaterials = drawable->get_Materials();", implementationSource, StringComparison.Ordinal);
-        Assert.Contains("if (!ShouldMaterialCastShadows(runtimeMaterial)) {", implementationSource, StringComparison.Ordinal);
+        Assert.Contains("if (!ShouldMaterialCastShadows(runtimeMaterial) || !UsesTriangleTopology(submesh)) {", implementationSource, StringComparison.Ordinal);
         Assert.Contains("return rootMaterial->get_CastsShadows();", implementationSource, StringComparison.Ordinal);
     }
 

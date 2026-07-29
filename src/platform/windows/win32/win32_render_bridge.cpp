@@ -1242,6 +1242,10 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
         }
 
         MaterialShaderResources[materialId] = std::make_unique<Win32ShaderResource>(BuildShaderResource(materialAsset, shaderAsset));
+        if (!HasWrittenRenderSnapshot) {
+            AppendRenderDiagnosticsLine(
+                "3d.material_shader_asset_id=" + materialId + " shader_asset_id=" + shaderAsset->get_Id());
+        }
         RuntimeRenderDiagnostics::RecordAssetBuild(
             "material",
             materialId,
@@ -1725,7 +1729,11 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
                 constants.SpecularColor = DirectX::XMFLOAT4(0.9f, 0.9f, 0.95f, 1.0f);
                 constants.MaterialParameters = DirectX::XMFLOAT4(24.0f, 0.55f, 0.0f, 0.0f);
 
-                if (shaderResource != nullptr && rootMaterial != nullptr) {
+                if (rootMaterial != nullptr) {
+                    if (shaderResource == nullptr) {
+                        throw new InvalidOperationException("Standard materials require a packaged shader resource.");
+                    }
+
                     visitStage = "apply_material";
                     ApplyMaterial(runtimeMaterial != nullptr ? runtimeMaterial : rootMaterial);
                     ID3D11Buffer* forwardLightBuffer = ForwardLightConstantBuffer.Get();

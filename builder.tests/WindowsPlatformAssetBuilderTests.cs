@@ -99,6 +99,18 @@ public class WindowsPlatformAssetBuilderTests {
                 Assert.False(field.Required);
             },
             field => {
+                Assert.Equal("metallic", field.FieldId);
+                Assert.Equal(PlatformMaterialFieldKind.Text, field.FieldKind);
+                Assert.Equal("0.0", field.DefaultValue);
+                Assert.False(field.Required);
+            },
+            field => {
+                Assert.Equal("specular", field.FieldId);
+                Assert.Equal(PlatformMaterialFieldKind.Text, field.FieldKind);
+                Assert.Equal("0.5", field.DefaultValue);
+                Assert.False(field.Required);
+            },
+            field => {
                 Assert.Equal("casts-shadow", field.FieldId);
                 Assert.Equal(PlatformMaterialFieldKind.Boolean, field.FieldKind);
                 Assert.Equal("true", field.DefaultValue);
@@ -143,9 +155,8 @@ public class WindowsPlatformAssetBuilderTests {
         Assert.Equal("Textures/Checker", materialAsset.DiffuseTextureAssetId);
         Assert.False(materialAsset.CastsShadows);
         Assert.True(materialAsset.ReceivesShadows);
-        Assert.Single(materialAsset.ConstantBuffers);
-        Assert.Equal("BaseColorBuffer", materialAsset.ConstantBuffers[0].Name);
-        Assert.Equal(16, materialAsset.ConstantBuffers[0].Data.Length);
+        MaterialConstantBufferAsset baseColorBuffer = Assert.Single(materialAsset.ConstantBuffers, constantBuffer => constantBuffer.Name == "BaseColorBuffer");
+        Assert.Equal(16, baseColorBuffer.Data.Length);
         Assert.Equal(new[] { "ForwardStandardShader" }, result.ReferencedShaderAssetIds);
     }
 
@@ -257,7 +268,7 @@ public class WindowsPlatformAssetBuilderTests {
             }));
 
         ShaderMaterialAsset materialAsset = Assert.IsType<ShaderMaterialAsset>(global::helengine.files.AssetSerializer.DeserializeFromBytes(result.CookedMaterialBytes));
-        MaterialConstantBufferAsset baseColorBuffer = Assert.Single(materialAsset.ConstantBuffers);
+        MaterialConstantBufferAsset baseColorBuffer = Assert.Single(materialAsset.ConstantBuffers, constantBuffer => constantBuffer.Name == "BaseColorBuffer");
         float[] channels = ReadFloat4(baseColorBuffer.Data);
 
         Assert.Equal(1f, channels[0]);
