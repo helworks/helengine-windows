@@ -21,6 +21,7 @@
 #include "MaterialLayoutBuilder.hpp"
 #include "platform/windows/directx11/directx11_bootstrap.hpp"
 #include "platform/windows/runtime/runtime_render_diagnostics.hpp"
+#include "platform/windows/runtime/windows_tracy_profiler.hpp"
 
 #if __has_include("CameraRenderSettings.hpp")
 #include "BuiltInMaterialIds.hpp"
@@ -1480,6 +1481,9 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
             return;
         }
 
+        HELENGINE_TRACY_ZONE_N("D3D11.MainDraw");
+        HELENGINE_TRACY_GPU_ZONE_N("D3D11.MainDraw");
+
         if (drawable == nullptr || drawable->get_Parent() == nullptr || !drawable->get_Parent()->get_IsHierarchyEnabled()) {
             return;
         }
@@ -2154,6 +2158,7 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
 
     /// Clears and renders one camera directly into the main back buffer.
     void Win32RenderManager3D::RenderCamera(ICamera* camera, bool clearColorBuffer) {
+        HELENGINE_TRACY_ZONE_N("D3D11.RenderCamera");
         ID3D11DeviceContext* context = Bootstrap.GetDeviceContext();
         ID3D11RenderTargetView* renderTargetView = Bootstrap.GetRenderTargetView();
         ID3D11DepthStencilView* depthStencilView = Bootstrap.GetDepthStencilView();
@@ -2244,6 +2249,7 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
 
         IRenderQueue3D* renderQueue = camera->get_RenderQueue3D();
         if (renderQueue != nullptr) {
+            HELENGINE_TRACY_ZONE_N("Render.ExtractAndBuild");
             renderQueue->VisitOrdered(this);
         }
 
@@ -2521,6 +2527,8 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
 
     /// Draws one shadow-casting mesh into the active directional shadow map.
     void Win32RenderManager3D::DrawDirectionalShadowCaster(IDrawable3D* drawable, ::float4x4& lightViewProjection) {
+        HELENGINE_TRACY_ZONE_N("D3D11.ShadowDraw");
+        HELENGINE_TRACY_GPU_ZONE_N("D3D11.ShadowDraw");
         if (drawable == nullptr || drawable->get_Parent() == nullptr || !drawable->get_Parent()->get_IsHierarchyEnabled()) {
             return;
         }
@@ -3786,6 +3794,8 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
 
     /// Draws every queued 2D drawable for one camera.
     void Win32RenderManager2D::RenderCamera(ICamera* camera) {
+        HELENGINE_TRACY_ZONE_N("D3D11.Draw2D");
+        HELENGINE_TRACY_GPU_ZONE_N("D3D11.Draw2D");
         if (camera == nullptr) {
             throw new ArgumentNullException("camera");
         }

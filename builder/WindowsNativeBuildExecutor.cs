@@ -15,9 +15,10 @@ internal interface IWindowsNativeBuildExecutor {
     /// <param name="buildRoot">Absolute path to the native build directory.</param>
     /// <param name="generatedCoreCppRootPath">Absolute path to the generated core C++ root.</param>
     /// <param name="stagedCodeRootPath">Absolute path to the staged generated code-module root.</param>
+    /// <param name="profile">Validated native Windows player profile.</param>
     /// <param name="cancellationToken">Cancellation token that can stop the native build.</param>
-    /// <returns>Absolute path to the produced native executable.</returns>
-    string Build(string repositoryRoot, string buildRoot, string generatedCoreCppRootPath, string stagedCodeRootPath, CancellationToken cancellationToken);
+    /// <returns>Paths to the produced native player artifacts.</returns>
+    WindowsNativeBuildResult Build(string repositoryRoot, string buildRoot, string generatedCoreCppRootPath, string stagedCodeRootPath, WindowsNativeBuildProfile profile, CancellationToken cancellationToken);
 }
 
 /// <summary>
@@ -46,9 +47,10 @@ internal sealed class WindowsNativeBuildExecutor : IWindowsNativeBuildExecutor {
     /// <param name="buildRoot">Absolute path to the native build directory.</param>
     /// <param name="generatedCoreCppRootPath">Absolute path to the generated core C++ root.</param>
     /// <param name="stagedCodeRootPath">Absolute path to the staged generated code-module root.</param>
+    /// <param name="profile">Validated native Windows player profile.</param>
     /// <param name="cancellationToken">Cancellation token that can stop the native build.</param>
-    /// <returns>Absolute path to the produced native executable.</returns>
-    public string Build(string repositoryRoot, string buildRoot, string generatedCoreCppRootPath, string stagedCodeRootPath, CancellationToken cancellationToken) {
+    /// <returns>Paths to the produced native player artifacts.</returns>
+    public WindowsNativeBuildResult Build(string repositoryRoot, string buildRoot, string generatedCoreCppRootPath, string stagedCodeRootPath, WindowsNativeBuildProfile profile, CancellationToken cancellationToken) {
         if (string.IsNullOrWhiteSpace(repositoryRoot)) {
             throw new ArgumentException("Repository root must be provided.", nameof(repositoryRoot));
         }
@@ -62,13 +64,14 @@ internal sealed class WindowsNativeBuildExecutor : IWindowsNativeBuildExecutor {
             throw new ArgumentException("Staged code root must be provided.", nameof(stagedCodeRootPath));
         }
 
+        WindowsNativeBuildProfileResolution profileResolution = WindowsNativeBuildProfileResolver.Resolve(profile);
         Directory.CreateDirectory(buildRoot);
 
         string vsDevCmdPath = ResolveVsDevCmdPath();
 
         RunProcess(
             "cmd.exe",
-            BuildConfigureArguments(repositoryRoot, buildRoot, generatedCoreCppRootPath, stagedCodeRootPath, vsDevCmdPath),
+            BuildConfigureArguments(repositoryRoot, buildRoot, generatedCoreCppRootPath, stagedCodeRootPath, vsDevCmdPath, profile),
             repositoryRoot,
             Path.Combine(buildRoot, "native-configure.log"),
             cancellationToken);
@@ -85,7 +88,13 @@ internal sealed class WindowsNativeBuildExecutor : IWindowsNativeBuildExecutor {
             throw new InvalidOperationException($"Native Windows build completed, but no helengine_windows.exe was produced under '{buildRoot}'.");
         }
 
-        return executableCandidates[0];
+        string executablePath = executableCandidates[0];
+        string pdbPath = Path.ChangeExtension(executablePath, ".pdb");
+        if (profileResolution.PdbRequired && !File.Exists(pdbPath)) {
+            throw new InvalidOperationException($"Native Windows profiler build completed, but no PDB was produced for '{executablePath}'.");
+        }
+
+        return new WindowsNativeBuildResult(executablePath, File.Exists(pdbPath) ? pdbPath : string.Empty);
     }
 
     /// <summary>
@@ -96,11 +105,13 @@ internal sealed class WindowsNativeBuildExecutor : IWindowsNativeBuildExecutor {
     /// <param name="generatedCoreCppRootPath">Absolute path to the generated core C++ root.</param>
     /// <param name="stagedCodeRootPath">Absolute path to the staged generated code-module root.</param>
     /// <param name="vsDevCmdPath">Absolute path to the Visual Studio developer command prompt.</param>
+    /// <param name="profile">Validated native Windows player profile.</param>
     /// <returns>Windows command-line arguments for the configure step.</returns>
-    static string BuildConfigureArguments(string repositoryRoot, string buildRoot, string generatedCoreCppRootPath, string stagedCodeRootPath, string vsDevCmdPath) {
+    static string BuildConfigureArguments(string repositoryRoot, string buildRoot, string generatedCoreCppRootPath, string stagedCodeRootPath, string vsDevCmdPath, WindowsNativeBuildProfile profile) {
+        WindowsNativeBuildProfileResolution profileResolution = WindowsNativeBuildProfileResolver.Resolve(profile);
         return string.Join(" ", [
             "/c",
-            $"call \"{vsDevCmdPath}\" -arch=amd64 -host_arch=amd64 && cmake -S \"{repositoryRoot}\" -B \"{buildRoot}\" -G Ninja -DHELENGINE_WINDOWS_INCLUDE_GENERATED_CORE=ON -DHELENGINE_CORE_CPP_ROOT=\"{generatedCoreCppRootPath}\" -DHELENGINE_CODE_ROOT=\"{stagedCodeRootPath}\" -DHELENGINE_WINDOWS_RENDER_BACKEND=DirectX11"
+            $"call \"{vsDevCmdPath}\" -arch=amd64 -host_arch=amd64 && cmake -S \"{repositoryRoot}\" -B \"{buildRoot}\" -G Ninja -DCMAKE_BUILD_TYPE={profileResolution.CmakeBuildType} -DHELENGINE_WINDOWS_NATIVE_PROFILE={profile} -DHELENGINE_WINDOWS_INCLUDE_GENERATED_CORE=ON -DHELENGINE_CORE_CPP_ROOT=\"{generatedCoreCppRootPath}\" -DHELENGINE_CODE_ROOT=\"{stagedCodeRootPath}\" -DHELENGINE_WINDOWS_RENDER_BACKEND=DirectX11"
         ]);
     }
 
@@ -110,7 +121,7 @@ internal sealed class WindowsNativeBuildExecutor : IWindowsNativeBuildExecutor {
     static string BuildNativeBuildArguments(string buildRoot, string vsDevCmdPath) {
         return string.Join(" ", [
             "/c",
-            $"call \"{vsDevCmdPath}\" -arch=amd64 -host_arch=amd64 && cmake --build \"{buildRoot}\" --config Release"
+            $"call \"{vsDevCmdPath}\" -arch=amd64 -host_arch=amd64 && cmake --build \"{buildRoot}\""
         ]);
     }
 

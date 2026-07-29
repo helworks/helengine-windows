@@ -18,7 +18,8 @@ public sealed class WindowsNativeBuildExecutorTests {
             @"C:\build",
             @"C:\generated",
             @"C:\staged-code",
-            @"C:\vs\VsDevCmd.bat");
+            @"C:\vs\VsDevCmd.bat",
+            WindowsNativeBuildProfile.Debug);
 
         Assert.Contains("call \"C:\\vs\\VsDevCmd.bat\" -arch=amd64 -host_arch=amd64", arguments, StringComparison.Ordinal);
     }
@@ -34,7 +35,8 @@ public sealed class WindowsNativeBuildExecutorTests {
             @"C:\build",
             @"C:\generated",
             @"C:\staged-code",
-            @"C:\vs\VsDevCmd.bat");
+            @"C:\vs\VsDevCmd.bat",
+            WindowsNativeBuildProfile.Debug);
 
         Assert.Contains("-DHELENGINE_CODE_ROOT=\"C:\\staged-code\"", arguments, StringComparison.Ordinal);
     }
@@ -50,6 +52,61 @@ public sealed class WindowsNativeBuildExecutorTests {
             @"C:\vs\VsDevCmd.bat");
 
         Assert.Contains("call \"C:\\vs\\VsDevCmd.bat\" -arch=amd64 -host_arch=amd64", arguments, StringComparison.Ordinal);
+        Assert.DoesNotContain("--config", arguments, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// Verifies the profiler build configures Ninja with the optimized profiling configuration and explicit native profile.
+    /// </summary>
+    [Fact]
+    public void BuildConfigureArguments_for_profiler_uses_rel_with_deb_info_and_forwards_profile() {
+        string arguments = InvokePrivateCommandBuilder(
+            "BuildConfigureArguments",
+            @"C:\repo",
+            @"C:\build",
+            @"C:\generated",
+            @"C:\staged-code",
+            @"C:\vs\VsDevCmd.bat",
+            WindowsNativeBuildProfile.Profiler);
+
+        Assert.Contains("-DCMAKE_BUILD_TYPE=RelWithDebInfo", arguments, StringComparison.Ordinal);
+        Assert.Contains("-DHELENGINE_WINDOWS_NATIVE_PROFILE=Profiler", arguments, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// Verifies the release build configures Ninja with release optimization and explicit native profile.
+    /// </summary>
+    [Fact]
+    public void BuildConfigureArguments_for_release_uses_release_and_forwards_profile() {
+        string arguments = InvokePrivateCommandBuilder(
+            "BuildConfigureArguments",
+            @"C:\repo",
+            @"C:\build",
+            @"C:\generated",
+            @"C:\staged-code",
+            @"C:\vs\VsDevCmd.bat",
+            WindowsNativeBuildProfile.Release);
+
+        Assert.Contains("-DCMAKE_BUILD_TYPE=Release", arguments, StringComparison.Ordinal);
+        Assert.Contains("-DHELENGINE_WINDOWS_NATIVE_PROFILE=Release", arguments, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// Verifies the debug build configures Ninja with debug symbols and explicit native profile.
+    /// </summary>
+    [Fact]
+    public void BuildConfigureArguments_for_debug_uses_debug_and_forwards_profile() {
+        string arguments = InvokePrivateCommandBuilder(
+            "BuildConfigureArguments",
+            @"C:\repo",
+            @"C:\build",
+            @"C:\generated",
+            @"C:\staged-code",
+            @"C:\vs\VsDevCmd.bat",
+            WindowsNativeBuildProfile.Debug);
+
+        Assert.Contains("-DCMAKE_BUILD_TYPE=Debug", arguments, StringComparison.Ordinal);
+        Assert.Contains("-DHELENGINE_WINDOWS_NATIVE_PROFILE=Debug", arguments, StringComparison.Ordinal);
     }
 
     /// <summary>

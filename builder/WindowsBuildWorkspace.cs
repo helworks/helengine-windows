@@ -37,6 +37,8 @@ public static class WindowsBuildWorkspace {
 
         string stagingRoot = Directory.GetCurrentDirectory();
         string builderWorkingRoot = ResolveBuilderWorkingRoot(request.WorkingRoot, stagingRoot);
+        WindowsNativeBuildProfileResolution profileResolution = WindowsNativeBuildProfileResolver.Resolve(request.SelectedBuildProfileId);
+        ValidateGeneratedFunctionProfilingConfiguration(profileResolution, request.SelectedCodegenOptionValues);
 
         ResetDirectoryIfPresent(request.OutputRoot);
         ResetDirectoryIfPresent(builderWorkingRoot);
@@ -48,6 +50,7 @@ public static class WindowsBuildWorkspace {
         List<PlatformBuildItemOutcome> looseAssetOutcomes = [];
         List<WindowsBuildManifestEntry> sceneEntries = [];
         List<WindowsBuildManifestEntry> looseAssetEntries = [];
+        List<WindowsBuildManifestEntry> profilerArtifactEntries = [];
 
         int totalItems = request.Manifest.Scenes.Length + request.Manifest.LooseAssets.Length + request.Manifest.PlatformCookWorkItems.Length + 1;
         int completedItems = 0;
@@ -141,7 +144,6 @@ public static class WindowsBuildWorkspace {
                     : $"Failed to stage builder-owned asset '{workItemLabel}'."));
         }
 
-        WriteBuildManifest(request, builderWorkingRoot, sceneEntries, looseAssetEntries);
         CopyStagedPayloadTreeToOutputRoot(request.OutputRoot);
 
         cancellationToken.ThrowIfCancellationRequested();
@@ -155,20 +157,40 @@ public static class WindowsBuildWorkspace {
         string nativeBuildRoot = Path.Combine(builderWorkingRoot, "native");
 
         try {
-            string nativeExecutablePath = nativeBuildExecutor.Build(
+            WindowsNativeBuildResult nativeBuildResult = nativeBuildExecutor.Build(
                 repositoryRoot,
                 nativeBuildRoot,
                 generatedCoreRoot,
                 Path.Combine(stagingRoot, "code"),
+                profileResolution.Profile,
                 cancellationToken);
+            string nativeExecutablePath = nativeBuildResult.ExecutablePath;
             string destinationExecutablePath = Path.Combine(request.OutputRoot, Path.GetFileName(nativeExecutablePath));
             Directory.CreateDirectory(request.OutputRoot);
-            File.Copy(nativeExecutablePath, destinationExecutablePath, true);
 
-            string sourcePdbPath = Path.ChangeExtension(nativeExecutablePath, ".pdb");
-            if (File.Exists(sourcePdbPath)) {
+            if (profileResolution.ProfilerEnabled) {
+                string profilerManifestPath = Path.Combine(generatedCoreRoot, "runtime", "generated_profiler_manifest.json");
+                if (!File.Exists(profilerManifestPath)) {
+                    throw new InvalidOperationException($"Windows profiler build requires generated profiler manifest '{profilerManifestPath}', but generated C++ did not produce it.");
+                } else if (string.IsNullOrWhiteSpace(nativeBuildResult.PdbPath) || !File.Exists(nativeBuildResult.PdbPath)) {
+                    throw new InvalidOperationException($"Native Windows profiler build completed without a required PDB beside '{nativeBuildResult.ExecutablePath}'.");
+                }
+
+                File.Copy(nativeExecutablePath, destinationExecutablePath, true);
+                string destinationProfilerManifestPath = Path.Combine(request.OutputRoot, "runtime", "generated_profiler_manifest.json");
+                string destinationProfilerManifestDirectory = Path.GetDirectoryName(destinationProfilerManifestPath);
+                if (!string.IsNullOrWhiteSpace(destinationProfilerManifestDirectory)) {
+                    Directory.CreateDirectory(destinationProfilerManifestDirectory);
+                }
+
+                File.Copy(profilerManifestPath, destinationProfilerManifestPath, true);
+                profilerArtifactEntries.Add(new WindowsBuildManifestEntry("generated-profiler-manifest", profilerManifestPath, destinationProfilerManifestPath));
+
                 string destinationPdbPath = Path.ChangeExtension(destinationExecutablePath, ".pdb");
-                File.Copy(sourcePdbPath, destinationPdbPath, true);
+                File.Copy(nativeBuildResult.PdbPath, destinationPdbPath, true);
+                profilerArtifactEntries.Add(new WindowsBuildManifestEntry("native-pdb", nativeBuildResult.PdbPath, destinationPdbPath));
+            } else {
+                File.Copy(nativeExecutablePath, destinationExecutablePath, true);
             }
 
             nativeBuildSucceeded = true;
@@ -199,6 +221,8 @@ public static class WindowsBuildWorkspace {
                 "Native Windows build failed."));
         }
 
+        WriteBuildManifest(request, builderWorkingRoot, sceneEntries, looseAssetEntries, profilerArtifactEntries);
+
         bool succeeded = diagnostics.Count == 0
             && sceneOutcomes.TrueForAll(outcome => outcome.OutcomeKind == PlatformBuildItemOutcomeKind.Succeeded)
             && looseAssetOutcomes.TrueForAll(outcome => outcome.OutcomeKind == PlatformBuildItemOutcomeKind.Succeeded)
@@ -209,6 +233,32 @@ public static class WindowsBuildWorkspace {
             [.. diagnostics],
             [.. sceneOutcomes],
             [.. looseAssetOutcomes]));
+    }
+
+    /// <summary>
+    /// Ensures the selected code-generation instrumentation setting matches the requested native Windows player profile.
+    /// </summary>
+    /// <param name="profileResolution">Validated native Windows player profile settings.</param>
+    /// <param name="codegenOptionValues">Resolved code-generation option values from the build request.</param>
+    internal static void ValidateGeneratedFunctionProfilingConfiguration(
+        WindowsNativeBuildProfileResolution profileResolution,
+        IReadOnlyDictionary<string, string> codegenOptionValues) {
+        if (profileResolution == null) {
+            throw new ArgumentNullException(nameof(profileResolution));
+        } else if (codegenOptionValues == null) {
+            throw new ArgumentNullException(nameof(codegenOptionValues));
+        }
+
+        const string profilingSettingId = "codegen-generated-function-profiling";
+        bool profilingEnabled = codegenOptionValues.TryGetValue(profilingSettingId, out string profilingValue)
+            && bool.TryParse(profilingValue, out bool parsedProfilingEnabled)
+            && parsedProfilingEnabled;
+
+        if (profileResolution.ProfilerEnabled && !profilingEnabled) {
+            throw new InvalidOperationException($"Windows profiler builds require '{profilingSettingId}' to be true.");
+        } else if (!profileResolution.ProfilerEnabled && profilingEnabled) {
+            throw new InvalidOperationException($"Windows {profileResolution.Profile.ToString().ToLowerInvariant()} builds require '{profilingSettingId}' to be false.");
+        }
     }
 
     /// <summary>
@@ -356,11 +406,13 @@ public static class WindowsBuildWorkspace {
     /// <param name="request">Resolved build request.</param>
     /// <param name="sceneEntries">Resolved scene entries.</param>
     /// <param name="looseAssetEntries">Resolved loose asset entries.</param>
+    /// <param name="profilerArtifactEntries">Profiler-only native artifacts included in the packaged player.</param>
     static void WriteBuildManifest(
         PlatformBuildRequest request,
         string builderWorkingRoot,
         IReadOnlyList<WindowsBuildManifestEntry> sceneEntries,
-        IReadOnlyList<WindowsBuildManifestEntry> looseAssetEntries) {
+        IReadOnlyList<WindowsBuildManifestEntry> looseAssetEntries,
+        IReadOnlyList<WindowsBuildManifestEntry> profilerArtifactEntries) {
         string workingManifestPath = Path.Combine(builderWorkingRoot, "windows-build-manifest.json");
         object manifest = new {
             request.Manifest.ProjectId,
@@ -369,7 +421,8 @@ public static class WindowsBuildWorkspace {
             request.Manifest.StartupSceneId,
             request.OutputRoot,
             Scenes = sceneEntries,
-            LooseAssets = looseAssetEntries
+            LooseAssets = looseAssetEntries,
+            ProfilerArtifacts = profilerArtifactEntries
         };
 
         string manifestJson = JsonSerializer.Serialize(manifest, JsonOptions);

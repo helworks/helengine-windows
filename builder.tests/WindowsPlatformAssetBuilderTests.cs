@@ -28,6 +28,19 @@ public class WindowsPlatformAssetBuilderTests {
         Assert.Equal("windows", builder.Definition.PlatformId);
         Assert.Contains(builder.Definition.BuildProfiles, profile => profile.ProfileId == "debug");
         Assert.Contains(builder.Definition.BuildProfiles, profile => profile.ProfileId == "release");
+        PlatformBuildProfileDefinition profilerProfile = Assert.Single(builder.Definition.BuildProfiles, profile => profile.ProfileId == "profiler");
+        Assert.Equal("Profiler", profilerProfile.DisplayName);
+        Assert.Equal("Optimized Windows player with generated C++ profiling", profilerProfile.Description);
+        Assert.Equal("directx11", profilerProfile.GraphicsProfileId);
+        Assert.Equal("default", profilerProfile.CodegenProfileId);
+        Assert.Equal("true", profilerProfile.CodegenSettingDefaultValues["codegen-generated-function-profiling"]);
+        Assert.All(builder.Definition.BuildProfiles.Where(profile => profile.ProfileId != "profiler"), profile =>
+            Assert.Equal("false", profile.CodegenSettingDefaultValues["codegen-generated-function-profiling"]));
+        PlatformCodegenProfileDefinition codegenProfile = Assert.Single(builder.Definition.CodegenProfiles, profile => profile.ProfileId == "default");
+        PlatformSettingDefinition profilingSetting = Assert.Single(codegenProfile.Settings, setting => setting.SettingId == "codegen-generated-function-profiling");
+        Assert.Equal(PlatformSettingKind.Boolean, profilingSetting.SettingKind);
+        Assert.Equal("false", profilingSetting.DefaultValue);
+        Assert.Contains("profiler", builder.Descriptor.SupportedCookProfileFamilies);
         Assert.Contains(builder.Definition.GraphicsProfiles, profile => profile.ProfileId == "directx11");
         Assert.Contains(builder.Definition.StorageProfiles, profile =>
             profile.ProfileId == "loose-files" &&
@@ -731,25 +744,32 @@ public class WindowsPlatformAssetBuilderTests {
         public string StagedCodeRootPath { get; private set; }
 
         /// <summary>
+        /// Gets the typed native profile selected by the builder.
+        /// </summary>
+        public WindowsNativeBuildProfile Profile { get; private set; }
+
+        /// <summary>
         /// Runs the fake native build step and returns a synthetic executable path.
         /// </summary>
         /// <param name="repositoryRoot">Repository root provided by the builder.</param>
         /// <param name="buildRoot">Native build root provided by the builder.</param>
         /// <param name="generatedCoreCppRootPath">Generated core root provided by the builder.</param>
         /// <param name="stagedCodeRootPath">Staged generated code-module root provided by the builder.</param>
+        /// <param name="profile">Typed native profile provided by the builder.</param>
         /// <param name="cancellationToken">Cancellation token.</param>
-        /// <returns>Absolute path to the fake native executable.</returns>
-        public string Build(string repositoryRoot, string buildRoot, string generatedCoreCppRootPath, string stagedCodeRootPath, CancellationToken cancellationToken) {
+        /// <returns>Paths to the synthetic native player artifacts.</returns>
+        public WindowsNativeBuildResult Build(string repositoryRoot, string buildRoot, string generatedCoreCppRootPath, string stagedCodeRootPath, WindowsNativeBuildProfile profile, CancellationToken cancellationToken) {
             WasCalled = true;
             RepositoryRoot = repositoryRoot;
             BuildRoot = buildRoot;
             GeneratedCoreCppRootPath = generatedCoreCppRootPath;
             StagedCodeRootPath = stagedCodeRootPath;
+            Profile = profile;
 
             Directory.CreateDirectory(buildRoot);
             string executablePath = Path.Combine(buildRoot, "helengine_windows.exe");
             File.WriteAllText(executablePath, "fake executable");
-            return executablePath;
+            return new WindowsNativeBuildResult(executablePath, string.Empty);
         }
     }
 }

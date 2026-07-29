@@ -27,3 +27,4 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\launch_in_emulator
 
 - [Docker Build Notes](docs/Docker.md)
 - [Platform Notes](docs/PlatformNotes.md)
+- [Windows Profiler Capture](docs/WindowsProfilerCapture.md)

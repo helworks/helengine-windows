@@ -6,6 +6,7 @@
 #include <sstream>
 
 #include "runtime/native_list.hpp"
+#include "platform/windows/runtime/windows_tracy_profiler.hpp"
 
 namespace helengine::windows {
     namespace {
@@ -130,6 +131,7 @@ namespace helengine::windows {
 
     /// Captures one input frame from the current Windows host state.
     InputFrameState Win32InputBackend::CaptureFrame() {
+        HELENGINE_TRACY_ZONE_N("Input.Capture");
         InputFrameState frame;
         frame.set_Keyboard(CaptureKeyboardState());
         frame.set_Mouse(CaptureMouseState());
