@@ -507,6 +507,8 @@ namespace helengine::windows {
     Win32Application::Win32Application()
         : ExitCode(0),
           EngineCore(nullptr),
+          EngineHelPhysicsSettings(nullptr),
+          HelPhysicsRuntimeRegistered(false),
           EngineRenderManager3D(nullptr),
           EngineRenderManager2D(nullptr),
           EngineAudioBackend(nullptr),
@@ -542,6 +544,14 @@ namespace helengine::windows {
         }
 #endif
 #if __has_include("Core.hpp")
+#if defined(HELENGINE_RUNTIME_PHYSICS_BACKEND_HELPHYSICS)
+        if (EngineCore != nullptr && HelPhysicsRuntimeRegistered) {
+            HelPhysicsRuntimeComponentRegistration::UnregisterConfigured(EngineCore);
+            HelPhysicsRuntimeRegistered = false;
+        }
+        delete EngineHelPhysicsSettings;
+        EngineHelPhysicsSettings = nullptr;
+#endif
         if (EngineCore != nullptr) {
             EngineCore->Dispose();
         }
@@ -706,7 +716,7 @@ namespace helengine::windows {
         EngineCore->Initialize(EngineRenderManager3D, EngineRenderManager2D, EngineInputBackend, platformInfo, options);
         EngineCore->SetAudioBackend(EngineAudioBackend);
 #if defined(HELENGINE_RUNTIME_PHYSICS_BACKEND_HELPHYSICS)
-        HelPhysicsWorldSettings3D* helPhysicsSettings = new HelPhysicsWorldSettings3D(
+        EngineHelPhysicsSettings = new HelPhysicsWorldSettings3D(
             32,
             32,
             128,
@@ -718,7 +728,8 @@ namespace helengine::windows {
             HELENGINE_RUNTIME_PHYSICS_PENETRATION_CORRECTION_PASSES,
             physicsFixedStepSeconds,
             PhysicsVector3(0.0f, -9.81f, 0.0f));
-        HelPhysicsRuntimeComponentRegistration::RegisterConfigured(EngineCore, helPhysicsSettings);
+        HelPhysicsRuntimeComponentRegistration::RegisterConfigured(EngineCore, EngineHelPhysicsSettings);
+        HelPhysicsRuntimeRegistered = true;
         WriteLifecycleLog("HelPhysics 3D runtime registered.");
 #elif defined(HELENGINE_RUNTIME_PHYSICS_BACKEND_BEPU)
         Physics3DRuntimeComponentRegistration::Register(EngineCore);

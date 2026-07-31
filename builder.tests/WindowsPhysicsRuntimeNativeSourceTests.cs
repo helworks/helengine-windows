@@ -27,7 +27,9 @@ public sealed class WindowsPhysicsRuntimeNativeSourceTests {
         Assert.Contains("HELENGINE_RUNTIME_PHYSICS_PENETRATION_CORRECTION_PASSES", source, StringComparison.Ordinal);
         Assert.Contains("1.0 / static_cast<double>(HELENGINE_RUNTIME_PHYSICS_FIXED_STEP_HERTZ)", source, StringComparison.Ordinal);
         Assert.Contains("options->PhysicsFixedStepSeconds = physicsFixedStepSeconds;", source, StringComparison.Ordinal);
-        Assert.Contains("HelPhysicsRuntimeComponentRegistration::RegisterConfigured(EngineCore, helPhysicsSettings);", source, StringComparison.Ordinal);
+        Assert.Contains("HelPhysicsRuntimeComponentRegistration::RegisterConfigured(EngineCore, EngineHelPhysicsSettings);", source, StringComparison.Ordinal);
+        Assert.Contains("HelPhysicsRuntimeComponentRegistration::UnregisterConfigured(EngineCore);", source, StringComparison.Ordinal);
+        Assert.Contains("delete EngineHelPhysicsSettings;", source, StringComparison.Ordinal);
         Assert.Contains("Physics3DRuntimeComponentRegistration::Register(EngineCore);", source, StringComparison.Ordinal);
 
         int helPhysicsBranchIndex = source.LastIndexOf("#if defined(HELENGINE_RUNTIME_PHYSICS_BACKEND_HELPHYSICS)", StringComparison.Ordinal);

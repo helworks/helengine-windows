@@ -20,6 +20,7 @@ class CameraComponent;
 class Asset;
 class Core;
 class FontAsset;
+class HelPhysicsWorldSettings3D;
 class MeshComponent;
 class PlatformInfo;
 class RenderManager2D;
@@ -281,6 +282,12 @@ namespace helengine::windows {
 
         /// Stores the generated engine core instance when the host is built with generated core support.
         Core* EngineCore;
+
+        /// Owns the explicit HelPhysics world settings for the complete selected-backend application lifetime.
+        HelPhysicsWorldSettings3D* EngineHelPhysicsSettings;
+
+        /// Tracks whether the selected HelPhysics registration owns callbacks on the current engine core.
+        bool HelPhysicsRuntimeRegistered;
 
         /// Stores the generated 3D render manager used by the engine core.
         Win32RenderManager3D* EngineRenderManager3D;
