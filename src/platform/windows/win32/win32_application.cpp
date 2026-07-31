@@ -44,6 +44,13 @@
 #include "runtime/runtime_player_settings_manifest.hpp"
 #endif
 
+#if __has_include("runtime/runtime_physics_backend_manifest.hpp")
+#include "runtime/runtime_physics_backend_manifest.hpp"
+#else
+#define HELENGINE_RUNTIME_PHYSICS_BACKEND_BEPU 1
+#define HELENGINE_RUNTIME_PHYSICS_BACKEND_ID "bepu"
+#endif
+
 #if __has_include("Core.hpp")
 #include "Asset.hpp"
 #include "AssetSerializer.hpp"
@@ -99,9 +106,20 @@
 #if __has_include("RuntimeSceneAssetReferenceResolver.hpp")
 #include "RuntimeSceneAssetReferenceResolver.hpp"
 #endif
-#if __has_include("Physics3DRuntimeComponentRegistration.hpp")
+#if defined(HELENGINE_RUNTIME_PHYSICS_BACKEND_HELPHYSICS)
+#if !__has_include("HelPhysicsRuntimeComponentRegistration.hpp") || !__has_include("HelPhysicsWorldSettings3D.hpp") || !__has_include("PhysicsVector3.hpp")
+#error "The selected HelPhysics runtime was not generated."
+#endif
+#include "HelPhysicsRuntimeComponentRegistration.hpp"
+#include "HelPhysicsWorldSettings3D.hpp"
+#include "PhysicsVector3.hpp"
+#elif defined(HELENGINE_RUNTIME_PHYSICS_BACKEND_BEPU)
+#if !__has_include("Physics3DRuntimeComponentRegistration.hpp")
+#error "The selected BEPU runtime was not generated."
+#endif
 #include "Physics3DRuntimeComponentRegistration.hpp"
-#define HELENGINE_WINDOWS_HAS_PHYSICS3D_RUNTIME 1
+#else
+#error "The generated Windows physics backend manifest did not select a supported runtime."
 #endif
 #endif
 
@@ -664,6 +682,10 @@ namespace helengine::windows {
         options->RenderList2DInitialCapacity = 64;
         options->RenderList3DInitialCapacity = 64;
         options->SceneCatalog = BuildRuntimeSceneCatalog();
+#if defined(HELENGINE_RUNTIME_PHYSICS_BACKEND_HELPHYSICS)
+        double physicsFixedStepSeconds = 1.0 / static_cast<double>(HELENGINE_RUNTIME_PHYSICS_FIXED_STEP_HERTZ);
+        options->PhysicsFixedStepSeconds = physicsFixedStepSeconds;
+#endif
 #if defined(HELENGINE_WINDOWS_DEBUG_RUNTIME_DIAGNOSTICS) && __has_include("IRuntimeDiagnosticsProvider.hpp") && __has_include("RuntimeMemoryDiagnosticsSnapshot.hpp")
         RuntimeDiagnosticsProvider = std::make_unique<RuntimeMemoryDiagnosticsProvider>();
         options->set_RuntimeDiagnosticsProvider(RuntimeDiagnosticsProvider.get());
@@ -683,9 +705,24 @@ namespace helengine::windows {
         PlatformInfo* platformInfo = BuildRuntimePlatformInfo();
         EngineCore->Initialize(EngineRenderManager3D, EngineRenderManager2D, EngineInputBackend, platformInfo, options);
         EngineCore->SetAudioBackend(EngineAudioBackend);
-#if defined(HELENGINE_WINDOWS_HAS_PHYSICS3D_RUNTIME)
+#if defined(HELENGINE_RUNTIME_PHYSICS_BACKEND_HELPHYSICS)
+        HelPhysicsWorldSettings3D* helPhysicsSettings = new HelPhysicsWorldSettings3D(
+            32,
+            32,
+            128,
+            64,
+            256,
+            32,
+            128,
+            HELENGINE_RUNTIME_PHYSICS_VELOCITY_ITERATIONS,
+            HELENGINE_RUNTIME_PHYSICS_PENETRATION_CORRECTION_PASSES,
+            physicsFixedStepSeconds,
+            PhysicsVector3(0.0f, -9.81f, 0.0f));
+        HelPhysicsRuntimeComponentRegistration::RegisterConfigured(EngineCore, helPhysicsSettings);
+        WriteLifecycleLog("HelPhysics 3D runtime registered.");
+#elif defined(HELENGINE_RUNTIME_PHYSICS_BACKEND_BEPU)
         Physics3DRuntimeComponentRegistration::Register(EngineCore);
-        WriteLifecycleLog("3D physics runtime registered.");
+        WriteLifecycleLog("BEPU 3D physics runtime registered.");
 #endif
 #if defined(HELENGINE_WINDOWS_DEBUG_RUNTIME_DIAGNOSTICS)
         EnsureDebugAllocationCallsiteTrackerInitialized();

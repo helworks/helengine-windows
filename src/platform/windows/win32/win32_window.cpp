@@ -2,6 +2,10 @@
 
 #include <stdexcept>
 
+#if __has_include("runtime/runtime_physics_backend_manifest.hpp")
+#include "runtime/runtime_physics_backend_manifest.hpp"
+#endif
+
 namespace helengine::windows {
     /// Creates a window wrapper with a title and requested client size.
     Win32Window::Win32Window(const wchar_t* title, int width, int height)
@@ -90,6 +94,15 @@ namespace helengine::windows {
             case WM_MOUSEWHEEL:
                 MouseWheelDelta += GET_WHEEL_DELTA_WPARAM(wParam);
                 return 0;
+
+#if defined(HELENGINE_RUNTIME_PHYSICS_BACKEND_HELPHYSICS)
+            case WM_KEYDOWN:
+                if (wParam == VK_ESCAPE) {
+                    DestroyWindow(Handle);
+                    return 0;
+                }
+                break;
+#endif
 
             case WM_DESTROY:
                 Handle = nullptr;
