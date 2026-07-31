@@ -59,6 +59,42 @@ public sealed class WindowsPhysicsRuntimeConfigurationTests {
     }
 
     /// <summary>
+    /// Ensures backend values use the same surrounding-whitespace normalization as generated-core selection.
+    /// </summary>
+    [Fact]
+    public void Resolve_WhenBackendHasSurroundingWhitespace_NormalizesSelection() {
+        Dictionary<string, string> values = new Dictionary<string, string>(StringComparer.Ordinal) {
+            ["physics-runtime-backend"] = " helphysics ",
+            ["physics-fixed-step-hertz"] = "20",
+            ["physics-velocity-iterations"] = "4",
+            ["physics-penetration-correction-passes"] = "1"
+        };
+
+        WindowsPhysicsRuntimeConfiguration configuration = WindowsPhysicsRuntimeConfiguration.Resolve(values);
+
+        Assert.Equal("helphysics", configuration.BackendId);
+    }
+
+    /// <summary>
+    /// Ensures case-variant duplicate setting identifiers are rejected instead of allowing dictionary order to select a value.
+    /// </summary>
+    /// <param name="duplicateSettingId">Case-variant setting identifier duplicated in the dictionary.</param>
+    [Theory]
+    [InlineData("PHYSICS-RUNTIME-BACKEND")]
+    [InlineData("PHYSICS-FIXED-STEP-HERTZ")]
+    public void Resolve_WhenSettingIdIsDuplicatedWithDifferentCasing_Throws(string duplicateSettingId) {
+        Dictionary<string, string> values = new Dictionary<string, string>(StringComparer.Ordinal) {
+            ["physics-runtime-backend"] = "helphysics",
+            ["physics-fixed-step-hertz"] = "20",
+            ["physics-velocity-iterations"] = "4",
+            ["physics-penetration-correction-passes"] = "1",
+            [duplicateSettingId] = "20"
+        };
+
+        Assert.Throws<InvalidOperationException>(() => WindowsPhysicsRuntimeConfiguration.Resolve(values));
+    }
+
+    /// <summary>
     /// Ensures unknown and explicitly blank backend values cannot silently fall back to BEPU.
     /// </summary>
     /// <param name="backendValue">Invalid explicit backend selection.</param>

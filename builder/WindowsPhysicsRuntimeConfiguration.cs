@@ -113,11 +113,16 @@ public sealed class WindowsPhysicsRuntimeConfiguration {
         if (!TryGetOptionValue(selectedCodegenOptionValues, BackendSettingId, out string backendId)) {
             return new WindowsPhysicsRuntimeConfiguration(BepuBackendId, 0, 0, 0);
         }
+        if (string.IsNullOrWhiteSpace(backendId)) {
+            throw new InvalidOperationException(
+                $"Windows physics setting '{BackendSettingId}' must select a runtime backend.");
+        }
 
-        if (string.Equals(backendId, BepuBackendId, StringComparison.OrdinalIgnoreCase)) {
+        string normalizedBackendId = backendId.Trim();
+        if (string.Equals(normalizedBackendId, BepuBackendId, StringComparison.OrdinalIgnoreCase)) {
             return new WindowsPhysicsRuntimeConfiguration(BepuBackendId, 0, 0, 0);
         }
-        if (!string.Equals(backendId, HelPhysicsBackendId, StringComparison.OrdinalIgnoreCase)) {
+        if (!string.Equals(normalizedBackendId, HelPhysicsBackendId, StringComparison.OrdinalIgnoreCase)) {
             throw new InvalidOperationException(
                 $"Windows physics runtime backend '{backendId}' is not supported. Expected '{BepuBackendId}' or '{HelPhysicsBackendId}'.");
         }
@@ -201,18 +206,20 @@ public sealed class WindowsPhysicsRuntimeConfiguration {
         IReadOnlyDictionary<string, string> selectedCodegenOptionValues,
         string settingId,
         out string value) {
-        if (selectedCodegenOptionValues.TryGetValue(settingId, out value)) {
-            return true;
-        }
-
+        bool foundValue = false;
+        value = string.Empty;
         foreach (KeyValuePair<string, string> entry in selectedCodegenOptionValues) {
             if (string.Equals(entry.Key, settingId, StringComparison.OrdinalIgnoreCase)) {
+                if (foundValue) {
+                    throw new InvalidOperationException(
+                        $"Windows physics setting '{settingId}' was provided more than once with different key casing.");
+                }
+
+                foundValue = true;
                 value = entry.Value;
-                return true;
             }
         }
 
-        value = string.Empty;
-        return false;
+        return foundValue;
     }
 }
