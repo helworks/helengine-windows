@@ -13,6 +13,7 @@ namespace helengine.windows.builder.tests;
 /// <summary>
 /// Verifies profiler-only native artifacts are packaged with the Windows player and recorded for build traceability.
 /// </summary>
+[Collection(ProcessCurrentDirectoryCollection.Name)]
 public sealed class WindowsProfilerArtifactPackagingTests {
     /// <summary>
     /// Verifies profiler packages include the generated scope manifest and native symbols and record both artifacts.
