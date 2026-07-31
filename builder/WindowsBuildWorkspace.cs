@@ -197,8 +197,8 @@ public static class WindowsBuildWorkspace {
 
             }
 
-            File.Copy(nativeExecutablePath, destinationExecutablePath, true);
             publishedNativeArtifactPaths.Add(destinationExecutablePath);
+            File.Copy(nativeExecutablePath, destinationExecutablePath, true);
             PackageRuntimePhysicsBackendManifest(
                 runtimePhysicsManifestPath,
                 request.OutputRoot,
@@ -209,13 +209,13 @@ public static class WindowsBuildWorkspace {
                 string destinationProfilerManifestPath = Path.Combine(request.OutputRoot, "runtime", "generated_profiler_manifest.json");
                 Directory.CreateDirectory(Path.Combine(request.OutputRoot, "runtime"));
 
-                File.Copy(profilerManifestPath, destinationProfilerManifestPath, true);
                 publishedNativeArtifactPaths.Add(destinationProfilerManifestPath);
+                File.Copy(profilerManifestPath, destinationProfilerManifestPath, true);
                 profilerArtifactEntries.Add(new WindowsBuildManifestEntry("generated-profiler-manifest", profilerManifestPath, destinationProfilerManifestPath));
 
                 string destinationPdbPath = Path.ChangeExtension(destinationExecutablePath, ".pdb");
-                File.Copy(nativeBuildResult.PdbPath, destinationPdbPath, true);
                 publishedNativeArtifactPaths.Add(destinationPdbPath);
+                File.Copy(nativeBuildResult.PdbPath, destinationPdbPath, true);
                 profilerArtifactEntries.Add(new WindowsBuildManifestEntry("native-pdb", nativeBuildResult.PdbPath, destinationPdbPath));
             }
 
@@ -592,8 +592,8 @@ public static class WindowsBuildWorkspace {
         string destinationDirectoryPath = Path.GetDirectoryName(destinationPath)
             ?? throw new InvalidOperationException($"Runtime physics manifest destination directory could not be resolved from '{destinationPath}'.");
         Directory.CreateDirectory(destinationDirectoryPath);
-        File.Copy(sourcePath, destinationPath, true);
         publishedNativeArtifactPaths.Add(destinationPath);
+        File.Copy(sourcePath, destinationPath, true);
         runtimeArtifactEntries.Add(new WindowsBuildManifestEntry(
             "runtime-physics-backend-manifest",
             sourcePath,
@@ -603,16 +603,24 @@ public static class WindowsBuildWorkspace {
     /// <summary>
     /// Removes exact native artifact files published by the current failed build attempt.
     /// </summary>
-    /// <param name="publishedNativeArtifactPaths">Exact output files recorded after successful copies.</param>
+    /// <param name="publishedNativeArtifactPaths">Exact output files recorded before each attempted copy.</param>
     static void RollbackPublishedNativeArtifacts(List<string> publishedNativeArtifactPaths) {
+        List<Exception> rollbackExceptions = [];
         for (int pathIndex = publishedNativeArtifactPaths.Count - 1; pathIndex >= 0; pathIndex--) {
             string path = publishedNativeArtifactPaths[pathIndex];
-            if (File.Exists(path)) {
-                File.Delete(path);
+            try {
+                if (File.Exists(path)) {
+                    File.Delete(path);
+                }
+            } catch (Exception exception) {
+                rollbackExceptions.Add(new IOException($"Could not remove partial Windows build artifact '{path}'.", exception));
             }
         }
 
         publishedNativeArtifactPaths.Clear();
+        if (rollbackExceptions.Count > 0) {
+            throw new AggregateException("One or more partial Windows build artifacts could not be removed.", rollbackExceptions);
+        }
     }
 
     /// <summary>
