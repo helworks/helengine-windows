@@ -160,6 +160,7 @@ public static class WindowsBuildWorkspace {
             "Running native Windows build."));
 
         string nativeBuildRoot = Path.Combine(builderWorkingRoot, "native");
+        List<string> publishedNativeArtifactPaths = [];
 
         try {
             WindowsNativeBuildResult nativeBuildResult = nativeBuildExecutor.Build(
@@ -172,35 +173,50 @@ public static class WindowsBuildWorkspace {
             string nativeExecutablePath = nativeBuildResult.ExecutablePath;
             string destinationExecutablePath = Path.Combine(request.OutputRoot, Path.GetFileName(nativeExecutablePath));
             Directory.CreateDirectory(request.OutputRoot);
-            PackageRuntimePhysicsBackendManifest(
-                generatedCoreRoot,
-                request.OutputRoot,
-                physicsConfiguration,
-                runtimeArtifactEntries);
+            if (!File.Exists(nativeExecutablePath)) {
+                throw new InvalidOperationException(
+                    $"Native Windows build completed without required executable '{nativeExecutablePath}'.");
+            }
 
+            string runtimePhysicsManifestPath = Path.Combine(
+                generatedCoreRoot,
+                "runtime",
+                "runtime-physics-backend.json");
+            WindowsRuntimeNativeManifestWriter.ValidatePhysicsBackendJson(
+                runtimePhysicsManifestPath,
+                physicsConfiguration);
+
+            string profilerManifestPath = string.Empty;
             if (profileResolution.ProfilerEnabled) {
-                string profilerManifestPath = Path.Combine(generatedCoreRoot, "runtime", "generated_profiler_manifest.json");
+                profilerManifestPath = Path.Combine(generatedCoreRoot, "runtime", "generated_profiler_manifest.json");
                 if (!File.Exists(profilerManifestPath)) {
                     throw new InvalidOperationException($"Windows profiler build requires generated profiler manifest '{profilerManifestPath}', but generated C++ did not produce it.");
                 } else if (string.IsNullOrWhiteSpace(nativeBuildResult.PdbPath) || !File.Exists(nativeBuildResult.PdbPath)) {
                     throw new InvalidOperationException($"Native Windows profiler build completed without a required PDB beside '{nativeBuildResult.ExecutablePath}'.");
                 }
 
-                File.Copy(nativeExecutablePath, destinationExecutablePath, true);
+            }
+
+            File.Copy(nativeExecutablePath, destinationExecutablePath, true);
+            publishedNativeArtifactPaths.Add(destinationExecutablePath);
+            PackageRuntimePhysicsBackendManifest(
+                runtimePhysicsManifestPath,
+                request.OutputRoot,
+                runtimeArtifactEntries,
+                publishedNativeArtifactPaths);
+
+            if (profileResolution.ProfilerEnabled) {
                 string destinationProfilerManifestPath = Path.Combine(request.OutputRoot, "runtime", "generated_profiler_manifest.json");
-                string destinationProfilerManifestDirectory = Path.GetDirectoryName(destinationProfilerManifestPath);
-                if (!string.IsNullOrWhiteSpace(destinationProfilerManifestDirectory)) {
-                    Directory.CreateDirectory(destinationProfilerManifestDirectory);
-                }
+                Directory.CreateDirectory(Path.Combine(request.OutputRoot, "runtime"));
 
                 File.Copy(profilerManifestPath, destinationProfilerManifestPath, true);
+                publishedNativeArtifactPaths.Add(destinationProfilerManifestPath);
                 profilerArtifactEntries.Add(new WindowsBuildManifestEntry("generated-profiler-manifest", profilerManifestPath, destinationProfilerManifestPath));
 
                 string destinationPdbPath = Path.ChangeExtension(destinationExecutablePath, ".pdb");
                 File.Copy(nativeBuildResult.PdbPath, destinationPdbPath, true);
+                publishedNativeArtifactPaths.Add(destinationPdbPath);
                 profilerArtifactEntries.Add(new WindowsBuildManifestEntry("native-pdb", nativeBuildResult.PdbPath, destinationPdbPath));
-            } else {
-                File.Copy(nativeExecutablePath, destinationExecutablePath, true);
             }
 
             nativeBuildSucceeded = true;
@@ -212,12 +228,24 @@ public static class WindowsBuildWorkspace {
                 totalItems,
                 $"Built native Windows player at '{destinationExecutablePath}'."));
         } catch (Exception ex) {
+            Exception buildException = ex;
+            try {
+                RollbackPublishedNativeArtifacts(publishedNativeArtifactPaths);
+            } catch (Exception rollbackException) {
+                buildException = new AggregateException(
+                    "Native Windows artifact publication failed and rollback could not remove every partial artifact.",
+                    ex,
+                    rollbackException);
+            }
+            runtimeArtifactEntries.Clear();
+            profilerArtifactEntries.Clear();
+
             AddDiagnostic(
                 diagnostics,
                 diagnosticReporter,
                 PlatformBuildDiagnosticSeverity.Error,
                 "WINBUILD003",
-                $"Native Windows build failed: {ex.Message}",
+                $"Native Windows build failed: {buildException.Message}",
                 string.Empty,
                 string.Empty,
                 request.OutputRoot);
@@ -551,27 +579,40 @@ public static class WindowsBuildWorkspace {
     /// <summary>
     /// Validates and packages the required runtime physics backend JSON after native compilation succeeds.
     /// </summary>
-    /// <param name="generatedCoreRoot">Generated core root containing the authoritative emitted JSON.</param>
+    /// <param name="sourcePath">Validated generated runtime physics backend JSON path.</param>
     /// <param name="outputRoot">Final Windows package output root.</param>
-    /// <param name="configuration">Configuration used to compile the native backend selection.</param>
     /// <param name="runtimeArtifactEntries">Manifest entries receiving the packaged runtime artifact.</param>
+    /// <param name="publishedNativeArtifactPaths">Published paths tracked for transactional rollback.</param>
     static void PackageRuntimePhysicsBackendManifest(
-        string generatedCoreRoot,
+        string sourcePath,
         string outputRoot,
-        WindowsPhysicsRuntimeConfiguration configuration,
-        List<WindowsBuildManifestEntry> runtimeArtifactEntries) {
-        string sourcePath = Path.Combine(generatedCoreRoot, "runtime", "runtime-physics-backend.json");
-        WindowsRuntimeNativeManifestWriter.ValidatePhysicsBackendJson(sourcePath, configuration);
-
+        List<WindowsBuildManifestEntry> runtimeArtifactEntries,
+        List<string> publishedNativeArtifactPaths) {
         string destinationPath = Path.Combine(outputRoot, "runtime", "runtime-physics-backend.json");
         string destinationDirectoryPath = Path.GetDirectoryName(destinationPath)
             ?? throw new InvalidOperationException($"Runtime physics manifest destination directory could not be resolved from '{destinationPath}'.");
         Directory.CreateDirectory(destinationDirectoryPath);
         File.Copy(sourcePath, destinationPath, true);
+        publishedNativeArtifactPaths.Add(destinationPath);
         runtimeArtifactEntries.Add(new WindowsBuildManifestEntry(
             "runtime-physics-backend-manifest",
             sourcePath,
             destinationPath));
+    }
+
+    /// <summary>
+    /// Removes exact native artifact files published by the current failed build attempt.
+    /// </summary>
+    /// <param name="publishedNativeArtifactPaths">Exact output files recorded after successful copies.</param>
+    static void RollbackPublishedNativeArtifacts(List<string> publishedNativeArtifactPaths) {
+        for (int pathIndex = publishedNativeArtifactPaths.Count - 1; pathIndex >= 0; pathIndex--) {
+            string path = publishedNativeArtifactPaths[pathIndex];
+            if (File.Exists(path)) {
+                File.Delete(path);
+            }
+        }
+
+        publishedNativeArtifactPaths.Clear();
     }
 
     /// <summary>

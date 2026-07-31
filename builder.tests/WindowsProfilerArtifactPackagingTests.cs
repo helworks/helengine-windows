@@ -139,6 +139,10 @@ public sealed class WindowsProfilerArtifactPackagingTests {
         Assert.Equal("WINBUILD003", diagnostic.Code);
         Assert.Contains("generated_profiler_manifest.json", diagnostic.Message, StringComparison.Ordinal);
         Assert.Contains("profiler", diagnostic.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.False(File.Exists(Path.Combine(fixture.OutputRoot, "runtime", "runtime-physics-backend.json")));
+        string buildManifestPath = Path.Combine(fixture.WorkingRoot, "windows-build-manifest.json");
+        using JsonDocument buildManifest = JsonDocument.Parse(File.ReadAllText(buildManifestPath));
+        Assert.Empty(buildManifest.RootElement.GetProperty("RuntimeArtifacts").EnumerateArray());
     }
 
     /// <summary>

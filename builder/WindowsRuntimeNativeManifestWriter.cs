@@ -204,6 +204,7 @@ public sealed class WindowsRuntimeNativeManifestWriter {
                 throw new InvalidOperationException("Windows runtime physics backend manifest contains unexpected state.");
             }
             if (!root.TryGetProperty("backend", out JsonElement backendElement) ||
+                backendElement.ValueKind != JsonValueKind.String ||
                 !string.Equals(backendElement.GetString(), configuration.BackendId, StringComparison.Ordinal)) {
                 throw new InvalidOperationException("Windows runtime physics backend manifest contradicts the selected backend.");
             }

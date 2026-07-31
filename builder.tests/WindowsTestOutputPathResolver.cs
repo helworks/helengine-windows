@@ -13,6 +13,13 @@ static class WindowsTestOutputPathResolver {
         if (string.IsNullOrWhiteSpace(category)) {
             throw new ArgumentException("Windows test output category must be provided.", nameof(category));
         }
+        if (Path.IsPathRooted(category) ||
+            category == "." ||
+            category == ".." ||
+            category.IndexOf(Path.DirectorySeparatorChar) >= 0 ||
+            category.IndexOf(Path.AltDirectorySeparatorChar) >= 0) {
+            throw new ArgumentException("Windows test output category must be one safe path segment.", nameof(category));
+        }
 
         DirectoryInfo currentDirectory = new DirectoryInfo(AppContext.BaseDirectory);
         while (currentDirectory != null) {
@@ -33,13 +40,23 @@ static class WindowsTestOutputPathResolver {
 
                 DirectoryInfo workspaceRoot = sharedRepositoryRoot.Parent
                     ?? throw new InvalidOperationException("Shared Windows workspace root could not be resolved for test output.");
-                return Path.Combine(
+                string testOutputRootPath = Path.GetFullPath(Path.Combine(
                     workspaceRoot.FullName,
                     "builds",
                     "helphysics-demodisc-stack-test",
-                    "tests",
+                    "tests"));
+                string uniqueRootPath = Path.GetFullPath(Path.Combine(
+                    testOutputRootPath,
                     category,
-                    Guid.NewGuid().ToString("N"));
+                    Guid.NewGuid().ToString("N")));
+                string requiredPrefix = testOutputRootPath.TrimEnd(
+                    Path.DirectorySeparatorChar,
+                    Path.AltDirectorySeparatorChar) + Path.DirectorySeparatorChar;
+                if (!uniqueRootPath.StartsWith(requiredPrefix, StringComparison.OrdinalIgnoreCase)) {
+                    throw new InvalidOperationException("Resolved Windows test output escaped the intended visible test root.");
+                }
+
+                return uniqueRootPath;
             }
 
             currentDirectory = currentDirectory.Parent;
