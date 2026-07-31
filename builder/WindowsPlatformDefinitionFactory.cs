@@ -304,6 +304,37 @@ public static class WindowsPlatformDefinitionFactory {
                             PlatformSettingKind.Boolean,
                             "false",
                             true,
+                            []),
+                        new PlatformSettingDefinition(
+                            WindowsPhysicsRuntimeConfiguration.BackendSettingId,
+                            "Physics Runtime Backend",
+                            PlatformSettingKind.Choice,
+                            WindowsPhysicsRuntimeConfiguration.BepuBackendId,
+                            true,
+                            [
+                                WindowsPhysicsRuntimeConfiguration.BepuBackendId,
+                                WindowsPhysicsRuntimeConfiguration.HelPhysicsBackendId
+                            ]),
+                        new PlatformSettingDefinition(
+                            WindowsPhysicsRuntimeConfiguration.FixedStepHertzSettingId,
+                            "Physics Fixed Step Hertz",
+                            PlatformSettingKind.Text,
+                            "20",
+                            true,
+                            []),
+                        new PlatformSettingDefinition(
+                            WindowsPhysicsRuntimeConfiguration.VelocityIterationsSettingId,
+                            "Physics Velocity Iterations",
+                            PlatformSettingKind.Text,
+                            "4",
+                            true,
+                            []),
+                        new PlatformSettingDefinition(
+                            WindowsPhysicsRuntimeConfiguration.PenetrationCorrectionPassesSettingId,
+                            "Physics Penetration Correction Passes",
+                            PlatformSettingKind.Text,
+                            "1",
+                            true,
                             [])
                     ])
             ],

@@ -40,6 +40,24 @@ public class WindowsPlatformAssetBuilderTests {
         PlatformSettingDefinition profilingSetting = Assert.Single(codegenProfile.Settings, setting => setting.SettingId == "codegen-generated-function-profiling");
         Assert.Equal(PlatformSettingKind.Boolean, profilingSetting.SettingKind);
         Assert.Equal("false", profilingSetting.DefaultValue);
+        PlatformSettingDefinition physicsBackendSetting = Assert.Single(codegenProfile.Settings, setting => setting.SettingId == "physics-runtime-backend");
+        Assert.Equal(PlatformSettingKind.Choice, physicsBackendSetting.SettingKind);
+        Assert.Equal("bepu", physicsBackendSetting.DefaultValue);
+        Assert.Equal(new[] { "bepu", "helphysics" }, physicsBackendSetting.AllowedValues);
+        Assert.Contains(codegenProfile.Settings, setting =>
+            setting.SettingId == "physics-fixed-step-hertz" &&
+            setting.SettingKind == PlatformSettingKind.Text &&
+            setting.DefaultValue == "20");
+        Assert.Contains(codegenProfile.Settings, setting =>
+            setting.SettingId == "physics-velocity-iterations" &&
+            setting.SettingKind == PlatformSettingKind.Text &&
+            setting.DefaultValue == "4");
+        Assert.Contains(codegenProfile.Settings, setting =>
+            setting.SettingId == "physics-penetration-correction-passes" &&
+            setting.SettingKind == PlatformSettingKind.Text &&
+            setting.DefaultValue == "1");
+        Assert.All(builder.Definition.BuildProfiles, profile =>
+            Assert.False(profile.CodegenSettingDefaultValues.ContainsKey("physics-runtime-backend")));
         Assert.Contains("profiler", builder.Descriptor.SupportedCookProfileFamilies);
         Assert.Contains(builder.Definition.GraphicsProfiles, profile => profile.ProfileId == "directx11");
         Assert.Contains(builder.Definition.StorageProfiles, profile =>
