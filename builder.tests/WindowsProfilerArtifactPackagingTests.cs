@@ -55,6 +55,77 @@ public sealed class WindowsProfilerArtifactPackagingTests {
     }
 
     /// <summary>
+    /// Verifies an ordinary release package includes and records the exact HelPhysics runtime backend manifest.
+    /// </summary>
+    [Fact]
+    public async Task BuildAsync_release_helphysics_packages_and_records_runtime_manifest() {
+        using ProfilerArtifactPackagingFixture fixture = new(
+            "release",
+            true,
+            true,
+            "helphysics",
+            "valid");
+
+        PlatformBuildReport report = await fixture.BuildAsync();
+
+        string packagedManifestPath = Path.Combine(fixture.OutputRoot, "runtime", "runtime-physics-backend.json");
+        Assert.True(report.Succeeded);
+        using JsonDocument runtimeManifest = JsonDocument.Parse(File.ReadAllText(packagedManifestPath));
+        Assert.Equal("helphysics", runtimeManifest.RootElement.GetProperty("backend").GetString());
+        Assert.Equal(20, runtimeManifest.RootElement.GetProperty("fixedStepHertz").GetInt32());
+        Assert.Equal(4, runtimeManifest.RootElement.GetProperty("velocityIterations").GetInt32());
+        Assert.Equal(1, runtimeManifest.RootElement.GetProperty("penetrationCorrectionPasses").GetInt32());
+
+        string buildManifestPath = Path.Combine(fixture.WorkingRoot, "windows-build-manifest.json");
+        using JsonDocument buildManifest = JsonDocument.Parse(File.ReadAllText(buildManifestPath));
+        JsonElement runtimeArtifacts = buildManifest.RootElement.GetProperty("RuntimeArtifacts");
+        JsonElement runtimeArtifact = Assert.Single(runtimeArtifacts.EnumerateArray());
+        Assert.Equal("runtime-physics-backend-manifest", runtimeArtifact.GetProperty("ItemId").GetString());
+        Assert.Equal(packagedManifestPath, runtimeArtifact.GetProperty("OutputPath").GetString());
+    }
+
+    /// <summary>
+    /// Verifies packaging fails when native compilation does not leave the required runtime physics manifest available.
+    /// </summary>
+    [Fact]
+    public async Task BuildAsync_reports_missing_runtime_physics_manifest() {
+        using ProfilerArtifactPackagingFixture fixture = new(
+            "release",
+            true,
+            true,
+            "bepu",
+            "missing");
+
+        PlatformBuildReport report = await fixture.BuildAsync();
+
+        PlatformBuildDiagnostic diagnostic = Assert.Single(report.Diagnostics);
+        Assert.False(report.Succeeded);
+        Assert.Equal("WINBUILD003", diagnostic.Code);
+        Assert.Contains("runtime-physics-backend.json", diagnostic.Message, StringComparison.Ordinal);
+        Assert.Contains("missing", diagnostic.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// Verifies packaging fails when generated runtime metadata contradicts the backend compiled into the native player.
+    /// </summary>
+    [Fact]
+    public async Task BuildAsync_reports_conflicting_runtime_physics_manifest() {
+        using ProfilerArtifactPackagingFixture fixture = new(
+            "release",
+            true,
+            true,
+            "helphysics",
+            "conflicting");
+
+        PlatformBuildReport report = await fixture.BuildAsync();
+
+        PlatformBuildDiagnostic diagnostic = Assert.Single(report.Diagnostics);
+        Assert.False(report.Succeeded);
+        Assert.Equal("WINBUILD003", diagnostic.Code);
+        Assert.Contains("runtime physics backend manifest", diagnostic.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
     /// Verifies profiler packages report a clear failure when generated C++ did not produce its scope manifest.
     /// </summary>
     [Fact]
@@ -96,8 +167,25 @@ public sealed class WindowsProfilerArtifactPackagingTests {
         /// <param name="profileId">Windows player profile selected for the package.</param>
         /// <param name="createGeneratedManifest">Whether generated C++ output contains the profiling manifest.</param>
         /// <param name="createNativePdb">Whether the synthetic native build contains symbols.</param>
-        public ProfilerArtifactPackagingFixture(string profileId, bool createGeneratedManifest, bool createNativePdb) {
-            RootPath = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+        public ProfilerArtifactPackagingFixture(string profileId, bool createGeneratedManifest, bool createNativePdb)
+            : this(profileId, createGeneratedManifest, createNativePdb, "bepu", "valid") {
+        }
+
+        /// <summary>
+        /// Initializes a build package with explicit physics backend and post-native manifest state.
+        /// </summary>
+        /// <param name="profileId">Windows player profile selected for the package.</param>
+        /// <param name="createGeneratedManifest">Whether generated C++ output contains the profiling manifest.</param>
+        /// <param name="createNativePdb">Whether the synthetic native build contains symbols.</param>
+        /// <param name="physicsBackendId">Physics backend selected by code-generation settings.</param>
+        /// <param name="runtimePhysicsManifestState">Synthetic post-native manifest state: valid, missing, or conflicting.</param>
+        public ProfilerArtifactPackagingFixture(
+            string profileId,
+            bool createGeneratedManifest,
+            bool createNativePdb,
+            string physicsBackendId,
+            string runtimePhysicsManifestState) {
+            RootPath = WindowsTestOutputPathResolver.CreateUniqueRoot("runtime-artifact-packaging");
             OutputRoot = Path.Combine(RootPath, "out");
             WorkingRoot = Path.Combine(RootPath, "builder");
             ProjectRoot = Path.Combine(RootPath, "project");
@@ -113,7 +201,8 @@ public sealed class WindowsProfilerArtifactPackagingTests {
                 File.WriteAllText(generatedManifestPath, "{ \"scopes\": [] }");
             }
 
-            NativeBuildExecutor = new PackagingNativeBuildExecutor(createNativePdb);
+            PhysicsBackendId = physicsBackendId;
+            NativeBuildExecutor = new PackagingNativeBuildExecutor(createNativePdb, runtimePhysicsManifestState);
             Request = CreateRequest(profileId);
         }
 
@@ -141,6 +230,11 @@ public sealed class WindowsProfilerArtifactPackagingTests {
         /// Gets the synthetic native builder used by the package flow.
         /// </summary>
         PackagingNativeBuildExecutor NativeBuildExecutor { get; }
+
+        /// <summary>
+        /// Gets the physics backend serialized into this fixture's code-generation settings.
+        /// </summary>
+        string PhysicsBackendId { get; }
 
         /// <summary>
         /// Gets the resolved platform request used by this fixture.
@@ -171,12 +265,8 @@ public sealed class WindowsProfilerArtifactPackagingTests {
         /// Deletes the temporary package fixture after its test completes.
         /// </summary>
         public void Dispose() {
-            try {
-                if (Directory.Exists(RootPath)) {
-                    Directory.Delete(RootPath, true);
-                }
-            } catch (IOException) {
-                // Other legacy builder tests share the process current directory and can briefly retain this fixture root.
+            if (Directory.Exists(RootPath)) {
+                Directory.Delete(RootPath, true);
             }
         }
 
@@ -194,8 +284,14 @@ public sealed class WindowsProfilerArtifactPackagingTests {
                 [new PlatformBuildScene("startup", "Startup", "scenes/main-menu.hasset", [], [new KeyValuePair<string, string>("cooked-relative-path", "scenes/main-menu.hasset")])],
                 []);
             Dictionary<string, string> codegenOptions = new(StringComparer.Ordinal) {
-                ["codegen-generated-function-profiling"] = profileId == "profiler" ? "true" : "false"
+                ["codegen-generated-function-profiling"] = profileId == "profiler" ? "true" : "false",
+                ["physics-runtime-backend"] = PhysicsBackendId
             };
+            if (string.Equals(PhysicsBackendId, "helphysics", StringComparison.OrdinalIgnoreCase)) {
+                codegenOptions["physics-fixed-step-hertz"] = "20";
+                codegenOptions["physics-velocity-iterations"] = "4";
+                codegenOptions["physics-penetration-correction-passes"] = "1";
+            }
 
             return new PlatformBuildRequest(
                 manifest,
@@ -224,14 +320,30 @@ public sealed class WindowsProfilerArtifactPackagingTests {
         /// Initializes a synthetic native build with optional symbols.
         /// </summary>
         /// <param name="createPdb">Whether the build should produce a PDB beside its executable.</param>
-        public PackagingNativeBuildExecutor(bool createPdb) {
+        /// <param name="runtimePhysicsManifestState">Post-native runtime physics manifest state to synthesize.</param>
+        public PackagingNativeBuildExecutor(bool createPdb, string runtimePhysicsManifestState) {
+            if (runtimePhysicsManifestState != "valid" &&
+                runtimePhysicsManifestState != "missing" &&
+                runtimePhysicsManifestState != "conflicting") {
+                throw new ArgumentOutOfRangeException(
+                    nameof(runtimePhysicsManifestState),
+                    runtimePhysicsManifestState,
+                    "Unknown synthetic runtime physics manifest state.");
+            }
+
             CreatePdb = createPdb;
+            RuntimePhysicsManifestState = runtimePhysicsManifestState;
         }
 
         /// <summary>
         /// Gets whether synthetic builds emit a PDB.
         /// </summary>
         bool CreatePdb { get; }
+
+        /// <summary>
+        /// Gets the post-native runtime physics manifest mutation applied by this executor.
+        /// </summary>
+        string RuntimePhysicsManifestState { get; }
 
         /// <summary>
         /// Creates the requested synthetic native player artifacts.
@@ -250,6 +362,16 @@ public sealed class WindowsProfilerArtifactPackagingTests {
             File.WriteAllText(executablePath, "synthetic executable");
             if (CreatePdb) {
                 File.WriteAllText(pdbPath, "synthetic symbols");
+            }
+
+            string runtimePhysicsManifestPath = Path.Combine(
+                generatedCoreCppRootPath,
+                "runtime",
+                "runtime-physics-backend.json");
+            if (RuntimePhysicsManifestState == "missing") {
+                File.Delete(runtimePhysicsManifestPath);
+            } else if (RuntimePhysicsManifestState == "conflicting") {
+                File.WriteAllText(runtimePhysicsManifestPath, "{ \"backend\": \"bepu\" }");
             }
 
             return new WindowsNativeBuildResult(executablePath, CreatePdb ? pdbPath : string.Empty);

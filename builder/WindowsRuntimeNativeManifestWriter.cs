@@ -1,6 +1,7 @@
 #nullable enable
 using System.Globalization;
 using System.Text;
+using System.Text.Json;
 using helengine.baseplatform.Manifest;
 
 namespace helengine.windows.builder;
@@ -15,10 +16,13 @@ public sealed class WindowsRuntimeNativeManifestWriter {
     /// <param name="generatedCoreRootPath">Absolute path to the generated core output root.</param>
     /// <param name="manifest">Final build manifest whose runtime data should be embedded into native source.</param>
     /// <param name="selectedGraphicsOptionValues">Resolved graphics-profile options selected for the build.</param>
-    public void Write(
+    /// <param name="selectedCodegenOptionValues">Resolved code-generation options selecting the physics runtime.</param>
+    /// <returns>The exact physics configuration used for both native and JSON manifest output.</returns>
+    public WindowsPhysicsRuntimeConfiguration Write(
         string generatedCoreRootPath,
         PlatformBuildManifest manifest,
-        IReadOnlyDictionary<string, string> selectedGraphicsOptionValues) {
+        IReadOnlyDictionary<string, string> selectedGraphicsOptionValues,
+        IReadOnlyDictionary<string, string> selectedCodegenOptionValues) {
         if (string.IsNullOrWhiteSpace(generatedCoreRootPath)) {
             throw new ArgumentException("Generated core root path must be provided.", nameof(generatedCoreRootPath));
         }
@@ -28,7 +32,12 @@ public sealed class WindowsRuntimeNativeManifestWriter {
         if (selectedGraphicsOptionValues == null) {
             throw new ArgumentNullException(nameof(selectedGraphicsOptionValues));
         }
+        if (selectedCodegenOptionValues == null) {
+            throw new ArgumentNullException(nameof(selectedCodegenOptionValues));
+        }
 
+        WindowsPhysicsRuntimeConfiguration physicsConfiguration = WindowsPhysicsRuntimeConfiguration.Resolve(
+            selectedCodegenOptionValues);
         string runtimeRootPath = Path.Combine(generatedCoreRootPath, "runtime");
         Directory.CreateDirectory(runtimeRootPath);
 
@@ -36,6 +45,8 @@ public sealed class WindowsRuntimeNativeManifestWriter {
         WriteSceneCatalogManifestSource(runtimeRootPath, manifest);
         WriteCodeModuleManifestSource(runtimeRootPath, manifest);
         WritePlayerSettingsManifestSource(runtimeRootPath, selectedGraphicsOptionValues);
+        WritePhysicsBackendManifest(runtimeRootPath, physicsConfiguration);
+        return physicsConfiguration;
     }
 
     /// <summary>
@@ -91,6 +102,140 @@ public sealed class WindowsRuntimeNativeManifestWriter {
 
         File.WriteAllText(headerPath, BuildPlayerSettingsManifestHeaderContents());
         File.WriteAllText(sourcePath, BuildPlayerSettingsManifestSourceContents(defaultWindowWidth, defaultWindowHeight));
+    }
+
+    /// <summary>
+    /// Writes matching native and packaged physics backend manifests from one resolved configuration object.
+    /// </summary>
+    /// <param name="runtimeRootPath">Runtime source folder inside the generated core tree.</param>
+    /// <param name="configuration">Authoritative resolved physics backend configuration.</param>
+    static void WritePhysicsBackendManifest(
+        string runtimeRootPath,
+        WindowsPhysicsRuntimeConfiguration configuration) {
+        if (configuration == null) {
+            throw new ArgumentNullException(nameof(configuration));
+        }
+
+        string headerPath = Path.Combine(runtimeRootPath, "runtime_physics_backend_manifest.hpp");
+        string jsonPath = Path.Combine(runtimeRootPath, "runtime-physics-backend.json");
+        File.WriteAllText(headerPath, BuildPhysicsBackendHeaderContents(configuration));
+        File.WriteAllText(jsonPath, BuildPhysicsBackendJsonContents(configuration));
+    }
+
+    /// <summary>
+    /// Builds one exclusive native physics backend selection and HelPhysics settings when applicable.
+    /// </summary>
+    /// <param name="configuration">Authoritative resolved physics configuration.</param>
+    /// <returns>Generated C++ preprocessor manifest.</returns>
+    static string BuildPhysicsBackendHeaderContents(WindowsPhysicsRuntimeConfiguration configuration) {
+        StringBuilder builder = new StringBuilder();
+        builder.AppendLine("#pragma once");
+        builder.AppendLine();
+        if (configuration.UsesHelPhysics) {
+            builder.AppendLine("#define HELENGINE_RUNTIME_PHYSICS_BACKEND_HELPHYSICS 1");
+            builder.AppendLine("#define HELENGINE_RUNTIME_PHYSICS_BACKEND_ID \"helphysics\"");
+            builder.Append("#define HELENGINE_RUNTIME_PHYSICS_FIXED_STEP_HERTZ ");
+            builder.AppendLine(configuration.FixedStepHertz.ToString(CultureInfo.InvariantCulture));
+            builder.Append("#define HELENGINE_RUNTIME_PHYSICS_VELOCITY_ITERATIONS ");
+            builder.AppendLine(configuration.VelocityIterationCount.ToString(CultureInfo.InvariantCulture));
+            builder.Append("#define HELENGINE_RUNTIME_PHYSICS_PENETRATION_CORRECTION_PASSES ");
+            builder.AppendLine(configuration.PenetrationCorrectionPassCount.ToString(CultureInfo.InvariantCulture));
+        } else {
+            builder.AppendLine("#define HELENGINE_RUNTIME_PHYSICS_BACKEND_BEPU 1");
+            builder.AppendLine("#define HELENGINE_RUNTIME_PHYSICS_BACKEND_ID \"bepu\"");
+        }
+
+        return builder.ToString();
+    }
+
+    /// <summary>
+    /// Builds the package-facing JSON backend record from the same configuration used by native compilation.
+    /// </summary>
+    /// <param name="configuration">Authoritative resolved physics configuration.</param>
+    /// <returns>Indented JSON with only backend-applicable values.</returns>
+    static string BuildPhysicsBackendJsonContents(WindowsPhysicsRuntimeConfiguration configuration) {
+        JsonSerializerOptions options = new JsonSerializerOptions {
+            WriteIndented = true
+        };
+        if (configuration.UsesHelPhysics) {
+            return JsonSerializer.Serialize(
+                new {
+                    backend = configuration.BackendId,
+                    fixedStepHertz = configuration.FixedStepHertz,
+                    velocityIterations = configuration.VelocityIterationCount,
+                    penetrationCorrectionPasses = configuration.PenetrationCorrectionPassCount
+                },
+                options);
+        }
+
+        return JsonSerializer.Serialize(
+            new {
+                backend = configuration.BackendId
+            },
+            options);
+    }
+
+    /// <summary>
+    /// Verifies a generated package manifest still exactly matches its authoritative resolved configuration.
+    /// </summary>
+    /// <param name="jsonPath">Generated runtime physics JSON path.</param>
+    /// <param name="configuration">Configuration originally used to emit native and JSON manifests.</param>
+    /// <exception cref="ArgumentException">Thrown when the JSON path is blank.</exception>
+    /// <exception cref="ArgumentNullException">Thrown when the configuration is null.</exception>
+    /// <exception cref="InvalidOperationException">Thrown when JSON state is missing, malformed, extra, or contradictory.</exception>
+    internal static void ValidatePhysicsBackendJson(
+        string jsonPath,
+        WindowsPhysicsRuntimeConfiguration configuration) {
+        if (string.IsNullOrWhiteSpace(jsonPath)) {
+            throw new ArgumentException("Runtime physics backend JSON path must be provided.", nameof(jsonPath));
+        }
+        if (configuration == null) {
+            throw new ArgumentNullException(nameof(configuration));
+        }
+        if (!File.Exists(jsonPath)) {
+            throw new InvalidOperationException($"Windows runtime physics backend manifest '{jsonPath}' is missing.");
+        }
+
+        try {
+            using JsonDocument document = JsonDocument.Parse(File.ReadAllText(jsonPath));
+            JsonElement root = document.RootElement;
+            int expectedPropertyCount = configuration.UsesHelPhysics ? 4 : 1;
+            if (root.ValueKind != JsonValueKind.Object || root.EnumerateObject().Count() != expectedPropertyCount) {
+                throw new InvalidOperationException("Windows runtime physics backend manifest contains unexpected state.");
+            }
+            if (!root.TryGetProperty("backend", out JsonElement backendElement) ||
+                !string.Equals(backendElement.GetString(), configuration.BackendId, StringComparison.Ordinal)) {
+                throw new InvalidOperationException("Windows runtime physics backend manifest contradicts the selected backend.");
+            }
+
+            if (configuration.UsesHelPhysics) {
+                ValidateJsonInteger(root, "fixedStepHertz", configuration.FixedStepHertz);
+                ValidateJsonInteger(root, "velocityIterations", configuration.VelocityIterationCount);
+                ValidateJsonInteger(root, "penetrationCorrectionPasses", configuration.PenetrationCorrectionPassCount);
+            }
+        } catch (InvalidOperationException) {
+            throw;
+        } catch (Exception exception) {
+            throw new InvalidOperationException(
+                $"Windows runtime physics backend manifest '{jsonPath}' is malformed.",
+                exception);
+        }
+    }
+
+    /// <summary>
+    /// Validates one required integer JSON property against its authoritative configuration value.
+    /// </summary>
+    /// <param name="root">Runtime physics manifest root object.</param>
+    /// <param name="propertyName">Required JSON property name.</param>
+    /// <param name="expectedValue">Exact expected integer value.</param>
+    static void ValidateJsonInteger(JsonElement root, string propertyName, int expectedValue) {
+        if (!root.TryGetProperty(propertyName, out JsonElement element) ||
+            element.ValueKind != JsonValueKind.Number ||
+            !element.TryGetInt32(out int value) ||
+            value != expectedValue) {
+            throw new InvalidOperationException(
+                $"Windows runtime physics backend manifest property '{propertyName}' contradicts the selected configuration.");
+        }
     }
 
     /// <summary>

@@ -50,6 +50,7 @@ public static class WindowsBuildWorkspace {
         List<PlatformBuildItemOutcome> looseAssetOutcomes = [];
         List<WindowsBuildManifestEntry> sceneEntries = [];
         List<WindowsBuildManifestEntry> looseAssetEntries = [];
+        List<WindowsBuildManifestEntry> runtimeArtifactEntries = [];
         List<WindowsBuildManifestEntry> profilerArtifactEntries = [];
 
         int totalItems = request.Manifest.Scenes.Length + request.Manifest.LooseAssets.Length + request.Manifest.PlatformCookWorkItems.Length + 1;
@@ -57,7 +58,11 @@ public static class WindowsBuildWorkspace {
         bool nativeBuildSucceeded = false;
         string repositoryRoot = ResolveRepositoryRoot();
         string generatedCoreRoot = ResolveGeneratedCoreRoot(request);
-        WriteRuntimeNativeManifest(generatedCoreRoot, request.Manifest, request.SelectedGraphicsOptionValues);
+        WindowsPhysicsRuntimeConfiguration physicsConfiguration = WriteRuntimeNativeManifest(
+            generatedCoreRoot,
+            request.Manifest,
+            request.SelectedGraphicsOptionValues,
+            request.SelectedCodegenOptionValues);
         for (int sceneIndex = 0; sceneIndex < request.Manifest.Scenes.Length; sceneIndex++) {
             cancellationToken.ThrowIfCancellationRequested();
 
@@ -167,6 +172,11 @@ public static class WindowsBuildWorkspace {
             string nativeExecutablePath = nativeBuildResult.ExecutablePath;
             string destinationExecutablePath = Path.Combine(request.OutputRoot, Path.GetFileName(nativeExecutablePath));
             Directory.CreateDirectory(request.OutputRoot);
+            PackageRuntimePhysicsBackendManifest(
+                generatedCoreRoot,
+                request.OutputRoot,
+                physicsConfiguration,
+                runtimeArtifactEntries);
 
             if (profileResolution.ProfilerEnabled) {
                 string profilerManifestPath = Path.Combine(generatedCoreRoot, "runtime", "generated_profiler_manifest.json");
@@ -221,7 +231,13 @@ public static class WindowsBuildWorkspace {
                 "Native Windows build failed."));
         }
 
-        WriteBuildManifest(request, builderWorkingRoot, sceneEntries, looseAssetEntries, profilerArtifactEntries);
+        WriteBuildManifest(
+            request,
+            builderWorkingRoot,
+            sceneEntries,
+            looseAssetEntries,
+            runtimeArtifactEntries,
+            profilerArtifactEntries);
 
         bool succeeded = diagnostics.Count == 0
             && sceneOutcomes.TrueForAll(outcome => outcome.OutcomeKind == PlatformBuildItemOutcomeKind.Succeeded)
@@ -406,12 +422,14 @@ public static class WindowsBuildWorkspace {
     /// <param name="request">Resolved build request.</param>
     /// <param name="sceneEntries">Resolved scene entries.</param>
     /// <param name="looseAssetEntries">Resolved loose asset entries.</param>
+    /// <param name="runtimeArtifactEntries">Required runtime metadata artifacts included in every packaged player.</param>
     /// <param name="profilerArtifactEntries">Profiler-only native artifacts included in the packaged player.</param>
     static void WriteBuildManifest(
         PlatformBuildRequest request,
         string builderWorkingRoot,
         IReadOnlyList<WindowsBuildManifestEntry> sceneEntries,
         IReadOnlyList<WindowsBuildManifestEntry> looseAssetEntries,
+        IReadOnlyList<WindowsBuildManifestEntry> runtimeArtifactEntries,
         IReadOnlyList<WindowsBuildManifestEntry> profilerArtifactEntries) {
         string workingManifestPath = Path.Combine(builderWorkingRoot, "windows-build-manifest.json");
         object manifest = new {
@@ -422,6 +440,7 @@ public static class WindowsBuildWorkspace {
             request.OutputRoot,
             Scenes = sceneEntries,
             LooseAssets = looseAssetEntries,
+            RuntimeArtifacts = runtimeArtifactEntries,
             ProfilerArtifacts = profilerArtifactEntries
         };
 
@@ -513,12 +532,46 @@ public static class WindowsBuildWorkspace {
     /// </summary>
     /// <param name="generatedCoreRoot">Shared generated-core root consumed by CMake.</param>
     /// <param name="manifest">Resolved build manifest that carries runtime startup and code-module metadata.</param>
-    static void WriteRuntimeNativeManifest(
+    /// <param name="selectedGraphicsOptionValues">Resolved graphics settings embedded into native player startup.</param>
+    /// <param name="selectedCodegenOptionValues">Resolved code-generation settings selecting the physics runtime.</param>
+    /// <returns>The physics configuration used to emit both native and package-facing manifests.</returns>
+    static WindowsPhysicsRuntimeConfiguration WriteRuntimeNativeManifest(
         string generatedCoreRoot,
         PlatformBuildManifest manifest,
-        IReadOnlyDictionary<string, string> selectedGraphicsOptionValues) {
+        IReadOnlyDictionary<string, string> selectedGraphicsOptionValues,
+        IReadOnlyDictionary<string, string> selectedCodegenOptionValues) {
         WindowsRuntimeNativeManifestWriter writer = new();
-        writer.Write(generatedCoreRoot, manifest, selectedGraphicsOptionValues);
+        return writer.Write(
+            generatedCoreRoot,
+            manifest,
+            selectedGraphicsOptionValues,
+            selectedCodegenOptionValues);
+    }
+
+    /// <summary>
+    /// Validates and packages the required runtime physics backend JSON after native compilation succeeds.
+    /// </summary>
+    /// <param name="generatedCoreRoot">Generated core root containing the authoritative emitted JSON.</param>
+    /// <param name="outputRoot">Final Windows package output root.</param>
+    /// <param name="configuration">Configuration used to compile the native backend selection.</param>
+    /// <param name="runtimeArtifactEntries">Manifest entries receiving the packaged runtime artifact.</param>
+    static void PackageRuntimePhysicsBackendManifest(
+        string generatedCoreRoot,
+        string outputRoot,
+        WindowsPhysicsRuntimeConfiguration configuration,
+        List<WindowsBuildManifestEntry> runtimeArtifactEntries) {
+        string sourcePath = Path.Combine(generatedCoreRoot, "runtime", "runtime-physics-backend.json");
+        WindowsRuntimeNativeManifestWriter.ValidatePhysicsBackendJson(sourcePath, configuration);
+
+        string destinationPath = Path.Combine(outputRoot, "runtime", "runtime-physics-backend.json");
+        string destinationDirectoryPath = Path.GetDirectoryName(destinationPath)
+            ?? throw new InvalidOperationException($"Runtime physics manifest destination directory could not be resolved from '{destinationPath}'.");
+        Directory.CreateDirectory(destinationDirectoryPath);
+        File.Copy(sourcePath, destinationPath, true);
+        runtimeArtifactEntries.Add(new WindowsBuildManifestEntry(
+            "runtime-physics-backend-manifest",
+            sourcePath,
+            destinationPath));
     }
 
     /// <summary>
