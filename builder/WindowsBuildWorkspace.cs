@@ -249,13 +249,19 @@ public static class WindowsBuildWorkspace {
             throw new ArgumentNullException(nameof(codegenOptionValues));
         }
 
-        const string profilingSettingId = "codegen-generated-function-profiling";
+        const string profilingSettingId = WindowsGeneratedFunctionProfilingPolicy.EnabledSettingId;
         bool profilingEnabled = codegenOptionValues.TryGetValue(profilingSettingId, out string profilingValue)
             && bool.TryParse(profilingValue, out bool parsedProfilingEnabled)
             && parsedProfilingEnabled;
+        bool hasCoarseScopePolicy = codegenOptionValues.TryGetValue(
+            WindowsGeneratedFunctionProfilingPolicy.MaintainedSymbolPrefixesSettingId,
+            out string maintainedSymbolPrefixes)
+            && !string.IsNullOrWhiteSpace(maintainedSymbolPrefixes);
 
         if (profileResolution.ProfilerEnabled && !profilingEnabled) {
             throw new InvalidOperationException($"Windows profiler builds require '{profilingSettingId}' to be true.");
+        } else if (profileResolution.ProfilerEnabled && !hasCoarseScopePolicy) {
+            throw new InvalidOperationException($"Windows profiler builds require '{WindowsGeneratedFunctionProfilingPolicy.MaintainedSymbolPrefixesSettingId}' to select coarse scopes.");
         } else if (!profileResolution.ProfilerEnabled && profilingEnabled) {
             throw new InvalidOperationException($"Windows {profileResolution.Profile.ToString().ToLowerInvariant()} builds require '{profilingSettingId}' to be false.");
         }

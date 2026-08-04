@@ -4052,6 +4052,31 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
                 throw new InvalidOperationException("Texture assets must define a non-zero width and height.");
             }
 
+            if (data->ColorFormat != TextureAssetColorFormat::Rgba32) {
+                throw new InvalidOperationException(
+                    "Windows raw texture uploads require RGBA32 color data for asset '"
+                    + textureId
+                    + "'.");
+            }
+
+            const std::uint64_t expectedColorByteCount = static_cast<std::uint64_t>(data->Width)
+                * static_cast<std::uint64_t>(data->Height)
+                * 4ULL;
+            if (static_cast<std::uint64_t>(data->Colors->Length) != expectedColorByteCount) {
+                throw new InvalidOperationException(
+                    "Windows raw texture upload payload length mismatch for asset '"
+                    + textureId
+                    + "': expected "
+                    + std::to_string(expectedColorByteCount)
+                    + " bytes for "
+                    + std::to_string(data->Width)
+                    + "x"
+                    + std::to_string(data->Height)
+                    + " RGBA32 pixels, received "
+                    + std::to_string(data->Colors->Length)
+                    + ".");
+            }
+
             D3D11_TEXTURE2D_DESC textureDescription {};
             textureDescription.Width = static_cast<UINT>(data->Width);
             textureDescription.Height = static_cast<UINT>(data->Height);

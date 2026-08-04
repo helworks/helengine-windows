@@ -40,6 +40,9 @@ public class WindowsPlatformAssetBuilderTests {
         PlatformSettingDefinition profilingSetting = Assert.Single(codegenProfile.Settings, setting => setting.SettingId == "codegen-generated-function-profiling");
         Assert.Equal(PlatformSettingKind.Boolean, profilingSetting.SettingKind);
         Assert.Equal("false", profilingSetting.DefaultValue);
+        PlatformSettingDefinition enabledFeaturesSetting = Assert.Single(codegenProfile.Settings, setting => setting.SettingId == PlatformCodegenSettingIds.EnabledFeatures);
+        Assert.Equal(PlatformSettingKind.Text, enabledFeaturesSetting.SettingKind);
+        Assert.Equal("host_file_system", enabledFeaturesSetting.DefaultValue);
         Assert.Contains("profiler", builder.Descriptor.SupportedCookProfileFamilies);
         Assert.Contains(builder.Definition.GraphicsProfiles, profile => profile.ProfileId == "directx11");
         Assert.Contains(builder.Definition.StorageProfiles, profile =>

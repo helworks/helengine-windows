@@ -664,6 +664,9 @@ namespace helengine::windows {
         options->RenderList2DInitialCapacity = 64;
         options->RenderList3DInitialCapacity = 64;
         options->SceneCatalog = BuildRuntimeSceneCatalog();
+#if defined(HELENGINE_WINDOWS_PHYSICS_FIXED_STEP_HERTZ)
+        options->PhysicsFixedStepSeconds = 1.0 / static_cast<double>(HELENGINE_WINDOWS_PHYSICS_FIXED_STEP_HERTZ);
+#endif
 #if defined(HELENGINE_WINDOWS_DEBUG_RUNTIME_DIAGNOSTICS) && __has_include("IRuntimeDiagnosticsProvider.hpp") && __has_include("RuntimeMemoryDiagnosticsSnapshot.hpp")
         RuntimeDiagnosticsProvider = std::make_unique<RuntimeMemoryDiagnosticsProvider>();
         options->set_RuntimeDiagnosticsProvider(RuntimeDiagnosticsProvider.get());
@@ -684,7 +687,14 @@ namespace helengine::windows {
         EngineCore->Initialize(EngineRenderManager3D, EngineRenderManager2D, EngineInputBackend, platformInfo, options);
         EngineCore->SetAudioBackend(EngineAudioBackend);
 #if defined(HELENGINE_WINDOWS_HAS_PHYSICS3D_RUNTIME)
+#if defined(HELENGINE_WINDOWS_PHYSICS_VELOCITY_ITERATIONS) && defined(HELENGINE_WINDOWS_PHYSICS_SUBSTEPS)
+        Physics3DRuntimeComponentRegistration::RegisterWithSolveSchedule(
+            EngineCore,
+            HELENGINE_WINDOWS_PHYSICS_VELOCITY_ITERATIONS,
+            HELENGINE_WINDOWS_PHYSICS_SUBSTEPS);
+#else
         Physics3DRuntimeComponentRegistration::Register(EngineCore);
+#endif
         WriteLifecycleLog("3D physics runtime registered.");
 #endif
 #if defined(HELENGINE_WINDOWS_DEBUG_RUNTIME_DIAGNOSTICS)
@@ -1680,6 +1690,15 @@ namespace helengine::windows {
         }
         if (snapshot->get_HasPhysicsConstraintCount()) {
             HELENGINE_TRACY_PLOT("Physics.Constraints", snapshot->get_PhysicsConstraintCount());
+        }
+        if (snapshot->get_FixedUpdateCount() > 0) {
+            BepuPhysicsWorld3D* bepuWorld = dynamic_cast<BepuPhysicsWorld3D*>(EngineCore->get_PhysicsRuntime());
+            if (bepuWorld != nullptr) {
+                HELENGINE_TRACY_PLOT("Physics.Bepu.TimestepMs", bepuWorld->get_LastTimestepMilliseconds());
+                HELENGINE_TRACY_PLOT("Physics.Bepu.SyncMs", bepuWorld->get_LastEntitySynchronizationMilliseconds());
+                HELENGINE_TRACY_PLOT("Physics.Bepu.TriggerMs", bepuWorld->get_LastTriggerCollectionMilliseconds());
+                HELENGINE_TRACY_PLOT("Physics.Bepu.AwakeDynamicBodies", bepuWorld->get_AwakeDynamicBodyCount());
+            }
         }
         if (snapshot->get_HasDrawCallCount()) {
             HELENGINE_TRACY_PLOT("Render.DrawCalls", snapshot->get_DrawCallCount());

@@ -31,6 +31,21 @@ internal sealed class WindowsNativeBuildExecutor : IWindowsNativeBuildExecutor {
     const string VsDevCmdPathEnvironmentVariable = "HELENGINE_VSDEVCMD_PATH";
 
     /// <summary>
+    /// Environment variable that optionally supplies the fixed physics update frequency for one Windows build invocation.
+    /// </summary>
+    const string PhysicsFixedStepHertzEnvironmentVariable = "HELENGINE_WINDOWS_PHYSICS_FIXED_STEP_HERTZ";
+
+    /// <summary>
+    /// Environment variable that optionally supplies the BEPU velocity-iteration count for one Windows build invocation.
+    /// </summary>
+    const string PhysicsVelocityIterationsEnvironmentVariable = "HELENGINE_WINDOWS_PHYSICS_VELOCITY_ITERATIONS";
+
+    /// <summary>
+    /// Environment variable that optionally supplies the BEPU substep count for one Windows build invocation.
+    /// </summary>
+    const string PhysicsSubstepsEnvironmentVariable = "HELENGINE_WINDOWS_PHYSICS_SUBSTEPS";
+
+    /// <summary>
     /// Visual Studio Installer utility used to discover the active installation.
     /// </summary>
     const string VsWhereRelativePath = @"Microsoft Visual Studio\Installer\vswhere.exe";
@@ -109,10 +124,38 @@ internal sealed class WindowsNativeBuildExecutor : IWindowsNativeBuildExecutor {
     /// <returns>Windows command-line arguments for the configure step.</returns>
     static string BuildConfigureArguments(string repositoryRoot, string buildRoot, string generatedCoreCppRootPath, string stagedCodeRootPath, string vsDevCmdPath, WindowsNativeBuildProfile profile) {
         WindowsNativeBuildProfileResolution profileResolution = WindowsNativeBuildProfileResolver.Resolve(profile);
+        string physicsOverrideArguments = BuildPhysicsOverrideArguments();
         return string.Join(" ", [
             "/c",
-            $"call \"{vsDevCmdPath}\" -arch=amd64 -host_arch=amd64 && cmake -S \"{repositoryRoot}\" -B \"{buildRoot}\" -G Ninja -DCMAKE_BUILD_TYPE={profileResolution.CmakeBuildType} -DHELENGINE_WINDOWS_NATIVE_PROFILE={profile} -DHELENGINE_WINDOWS_INCLUDE_GENERATED_CORE=ON -DHELENGINE_CORE_CPP_ROOT=\"{generatedCoreCppRootPath}\" -DHELENGINE_CODE_ROOT=\"{stagedCodeRootPath}\" -DHELENGINE_WINDOWS_RENDER_BACKEND=DirectX11"
+            $"call \"{vsDevCmdPath}\" -arch=amd64 -host_arch=amd64 && cmake -S \"{repositoryRoot}\" -B \"{buildRoot}\" -G Ninja -DCMAKE_BUILD_TYPE={profileResolution.CmakeBuildType} -DHELENGINE_WINDOWS_NATIVE_PROFILE={profile} -DHELENGINE_WINDOWS_INCLUDE_GENERATED_CORE=ON -DHELENGINE_CORE_CPP_ROOT=\"{generatedCoreCppRootPath}\" -DHELENGINE_CODE_ROOT=\"{stagedCodeRootPath}\" -DHELENGINE_WINDOWS_RENDER_BACKEND=DirectX11{physicsOverrideArguments}"
         ]);
+    }
+
+    /// <summary>
+    /// Builds the optional physics CMake arguments requested through the current process environment.
+    /// </summary>
+    /// <returns>An empty string when no override was requested; otherwise the three validated CMake definitions.</returns>
+    static string BuildPhysicsOverrideArguments() {
+        string fixedStepHertz = Environment.GetEnvironmentVariable(PhysicsFixedStepHertzEnvironmentVariable);
+        string velocityIterations = Environment.GetEnvironmentVariable(PhysicsVelocityIterationsEnvironmentVariable);
+        string substeps = Environment.GetEnvironmentVariable(PhysicsSubstepsEnvironmentVariable);
+        bool hasAnyOverride = !string.IsNullOrWhiteSpace(fixedStepHertz)
+            || !string.IsNullOrWhiteSpace(velocityIterations)
+            || !string.IsNullOrWhiteSpace(substeps);
+        if (!hasAnyOverride) {
+            return string.Empty;
+        }
+        if (!int.TryParse(fixedStepHertz, out int parsedFixedStepHertz) || parsedFixedStepHertz <= 0) {
+            throw new InvalidOperationException($"Environment variable '{PhysicsFixedStepHertzEnvironmentVariable}' must be a positive integer when a Windows physics override is requested.");
+        }
+        if (!int.TryParse(velocityIterations, out int parsedVelocityIterations) || parsedVelocityIterations <= 0) {
+            throw new InvalidOperationException($"Environment variable '{PhysicsVelocityIterationsEnvironmentVariable}' must be a positive integer when a Windows physics override is requested.");
+        }
+        if (!int.TryParse(substeps, out int parsedSubsteps) || parsedSubsteps <= 0) {
+            throw new InvalidOperationException($"Environment variable '{PhysicsSubstepsEnvironmentVariable}' must be a positive integer when a Windows physics override is requested.");
+        }
+
+        return $" -DHELENGINE_WINDOWS_PHYSICS_FIXED_STEP_HERTZ={parsedFixedStepHertz} -DHELENGINE_WINDOWS_PHYSICS_VELOCITY_ITERATIONS={parsedVelocityIterations} -DHELENGINE_WINDOWS_PHYSICS_SUBSTEPS={parsedSubsteps}";
     }
 
     /// <summary>

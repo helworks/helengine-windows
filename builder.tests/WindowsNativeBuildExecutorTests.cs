@@ -74,6 +74,42 @@ public sealed class WindowsNativeBuildExecutorTests {
     }
 
     /// <summary>
+    /// Verifies a process-scoped physics override is forwarded to CMake without changing default builds.
+    /// </summary>
+    [Fact]
+    public void BuildConfigureArguments_forwards_process_scoped_physics_overrides() {
+        const string fixedStepHertzVariable = "HELENGINE_WINDOWS_PHYSICS_FIXED_STEP_HERTZ";
+        const string velocityIterationsVariable = "HELENGINE_WINDOWS_PHYSICS_VELOCITY_ITERATIONS";
+        const string substepsVariable = "HELENGINE_WINDOWS_PHYSICS_SUBSTEPS";
+        string previousFixedStepHertz = Environment.GetEnvironmentVariable(fixedStepHertzVariable);
+        string previousVelocityIterations = Environment.GetEnvironmentVariable(velocityIterationsVariable);
+        string previousSubsteps = Environment.GetEnvironmentVariable(substepsVariable);
+
+        try {
+            Environment.SetEnvironmentVariable(fixedStepHertzVariable, "20");
+            Environment.SetEnvironmentVariable(velocityIterationsVariable, "1");
+            Environment.SetEnvironmentVariable(substepsVariable, "1");
+
+            string arguments = InvokePrivateCommandBuilder(
+                "BuildConfigureArguments",
+                @"C:\repo",
+                @"C:\build",
+                @"C:\generated",
+                @"C:\staged-code",
+                @"C:\vs\VsDevCmd.bat",
+                WindowsNativeBuildProfile.Profiler);
+
+            Assert.Contains("-DHELENGINE_WINDOWS_PHYSICS_FIXED_STEP_HERTZ=20", arguments, StringComparison.Ordinal);
+            Assert.Contains("-DHELENGINE_WINDOWS_PHYSICS_VELOCITY_ITERATIONS=1", arguments, StringComparison.Ordinal);
+            Assert.Contains("-DHELENGINE_WINDOWS_PHYSICS_SUBSTEPS=1", arguments, StringComparison.Ordinal);
+        } finally {
+            Environment.SetEnvironmentVariable(fixedStepHertzVariable, previousFixedStepHertz);
+            Environment.SetEnvironmentVariable(velocityIterationsVariable, previousVelocityIterations);
+            Environment.SetEnvironmentVariable(substepsVariable, previousSubsteps);
+        }
+    }
+
+    /// <summary>
     /// Verifies the release build configures Ninja with release optimization and explicit native profile.
     /// </summary>
     [Fact]

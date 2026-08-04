@@ -6,12 +6,24 @@ set(HELENGINE_CORE_CPP_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/generated/helengine.cor
 set(HELENGINE_CODE_ROOT "" CACHE PATH "Path to the staged generated code-module root folder.")
 set(HELENGINE_WINDOWS_RENDER_BACKEND "DirectX11" CACHE STRING "Windows rendering backend to compile.")
 set(HELENGINE_WINDOWS_NATIVE_PROFILE "Debug" CACHE STRING "Native Windows player profile used to select profile-specific dependencies.")
+set(HELENGINE_WINDOWS_PHYSICS_FIXED_STEP_HERTZ "" CACHE STRING "Optional fixed physics update frequency for this Windows player build.")
+set(HELENGINE_WINDOWS_PHYSICS_VELOCITY_ITERATIONS "" CACHE STRING "Optional BEPU velocity-iteration count for this Windows player build.")
+set(HELENGINE_WINDOWS_PHYSICS_SUBSTEPS "" CACHE STRING "Optional BEPU substep count for this Windows player build.")
 option(HELENGINE_WINDOWS_INCLUDE_GENERATED_CORE "Build the Windows host with generated helengine.core sources." ON)
 set_property(CACHE HELENGINE_WINDOWS_RENDER_BACKEND PROPERTY STRINGS DirectX11 Vulkan)
 set_property(CACHE HELENGINE_WINDOWS_NATIVE_PROFILE PROPERTY STRINGS Debug Release Profiler)
 
 if(NOT HELENGINE_WINDOWS_NATIVE_PROFILE STREQUAL "Debug" AND NOT HELENGINE_WINDOWS_NATIVE_PROFILE STREQUAL "Release" AND NOT HELENGINE_WINDOWS_NATIVE_PROFILE STREQUAL "Profiler")
     message(FATAL_ERROR "HELENGINE_WINDOWS_NATIVE_PROFILE must be Debug, Release, or Profiler.")
+endif()
+
+if(NOT "${HELENGINE_WINDOWS_PHYSICS_FIXED_STEP_HERTZ}" STREQUAL "" OR NOT "${HELENGINE_WINDOWS_PHYSICS_VELOCITY_ITERATIONS}" STREQUAL "" OR NOT "${HELENGINE_WINDOWS_PHYSICS_SUBSTEPS}" STREQUAL "")
+    if("${HELENGINE_WINDOWS_PHYSICS_FIXED_STEP_HERTZ}" STREQUAL "" OR "${HELENGINE_WINDOWS_PHYSICS_VELOCITY_ITERATIONS}" STREQUAL "" OR "${HELENGINE_WINDOWS_PHYSICS_SUBSTEPS}" STREQUAL "")
+        message(FATAL_ERROR "Windows physics overrides require fixed-step hertz, velocity iterations, and substeps together.")
+    endif()
+    if(NOT "${HELENGINE_WINDOWS_PHYSICS_FIXED_STEP_HERTZ}" MATCHES "^[1-9][0-9]*$" OR NOT "${HELENGINE_WINDOWS_PHYSICS_VELOCITY_ITERATIONS}" MATCHES "^[1-9][0-9]*$" OR NOT "${HELENGINE_WINDOWS_PHYSICS_SUBSTEPS}" MATCHES "^[1-9][0-9]*$")
+        message(FATAL_ERROR "Windows physics overrides must be positive integer values.")
+    endif()
 endif()
 
 if(HELENGINE_WINDOWS_INCLUDE_GENERATED_CORE)
@@ -98,6 +110,14 @@ target_compile_definitions(helengine_windows PRIVATE
     NOMINMAX
     $<$<CONFIG:Debug>:HELENGINE_WINDOWS_DEBUG_RUNTIME_DIAGNOSTICS>
 )
+
+if(NOT "${HELENGINE_WINDOWS_PHYSICS_FIXED_STEP_HERTZ}" STREQUAL "")
+    target_compile_definitions(helengine_windows PRIVATE
+        HELENGINE_WINDOWS_PHYSICS_FIXED_STEP_HERTZ=${HELENGINE_WINDOWS_PHYSICS_FIXED_STEP_HERTZ}
+        HELENGINE_WINDOWS_PHYSICS_VELOCITY_ITERATIONS=${HELENGINE_WINDOWS_PHYSICS_VELOCITY_ITERATIONS}
+        HELENGINE_WINDOWS_PHYSICS_SUBSTEPS=${HELENGINE_WINDOWS_PHYSICS_SUBSTEPS}
+    )
+endif()
 
 if(MSVC)
     target_compile_options(helengine_windows PRIVATE /bigobj)

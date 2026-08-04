@@ -39,7 +39,7 @@ public static class WindowsPlatformDefinitionFactory {
                             [])
                     ],
                     new Dictionary<string, string>(StringComparer.Ordinal) {
-                        ["codegen-generated-function-profiling"] = "false"
+                        [WindowsGeneratedFunctionProfilingPolicy.EnabledSettingId] = "false"
                     }),
                 new PlatformBuildProfileDefinition(
                     "release",
@@ -64,7 +64,7 @@ public static class WindowsPlatformDefinitionFactory {
                             [])
                     ],
                     new Dictionary<string, string>(StringComparer.Ordinal) {
-                        ["codegen-generated-function-profiling"] = "false"
+                        [WindowsGeneratedFunctionProfilingPolicy.EnabledSettingId] = "false"
                     }),
                 new PlatformBuildProfileDefinition(
                     "profiler",
@@ -89,7 +89,8 @@ public static class WindowsPlatformDefinitionFactory {
                             [])
                     ],
                     new Dictionary<string, string>(StringComparer.Ordinal) {
-                        ["codegen-generated-function-profiling"] = "true"
+                        [WindowsGeneratedFunctionProfilingPolicy.EnabledSettingId] = "true",
+                        [WindowsGeneratedFunctionProfilingPolicy.MaintainedSymbolPrefixesSettingId] = WindowsGeneratedFunctionProfilingPolicy.CoarseMaintainedSymbolPrefixes
                     })
             ],
             [
@@ -299,10 +300,24 @@ public static class WindowsPlatformDefinitionFactory {
                             true,
                             []),
                         new PlatformSettingDefinition(
-                            "codegen-generated-function-profiling",
+                            PlatformCodegenSettingIds.EnabledFeatures,
+                            "Enabled Runtime Features",
+                            PlatformSettingKind.Text,
+                            "host_file_system",
+                            true,
+                            []),
+                        new PlatformSettingDefinition(
+                            WindowsGeneratedFunctionProfilingPolicy.EnabledSettingId,
                             "Generated Function Profiling",
                             PlatformSettingKind.Boolean,
                             "false",
+                            true,
+                            []),
+                        new PlatformSettingDefinition(
+                            WindowsGeneratedFunctionProfilingPolicy.MaintainedSymbolPrefixesSettingId,
+                            "Generated Function Profiling Symbol Prefixes",
+                            PlatformSettingKind.Text,
+                            WindowsGeneratedFunctionProfilingPolicy.CoarseMaintainedSymbolPrefixes,
                             true,
                             [])
                     ])

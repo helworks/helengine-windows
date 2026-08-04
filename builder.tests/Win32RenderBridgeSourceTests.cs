@@ -72,6 +72,32 @@ public sealed class Win32RenderBridgeSourceTests {
     }
 
     /// <summary>
+    /// Verifies raw texture uploads reject incompatible formats and malformed payload lengths before calling the graphics driver.
+    /// </summary>
+    [Fact]
+    public void Win32RenderBridge_validates_rgba32_texture_payload_before_native_upload() {
+        string repositoryRootPath = ResolveWindowsRepositoryRootPath();
+        string sourcePath = Path.Combine(repositoryRootPath, "src", "platform", "windows", "win32", "win32_render_bridge.cpp");
+
+        string implementationSource = File.ReadAllText(sourcePath);
+        int colorFormatValidationIndex = implementationSource.IndexOf(
+            "data->ColorFormat != TextureAssetColorFormat::Rgba32",
+            StringComparison.Ordinal);
+        int payloadLengthValidationIndex = implementationSource.IndexOf(
+            "static_cast<std::uint64_t>(data->Colors->Length) != expectedColorByteCount",
+            StringComparison.Ordinal);
+        int textureUploadIndex = implementationSource.IndexOf(
+            "Bootstrap.GetDevice()->CreateTexture2D(&textureDescription, &textureData, textureResource.Texture.GetAddressOf())",
+            StringComparison.Ordinal);
+
+        Assert.True(colorFormatValidationIndex >= 0);
+        Assert.True(payloadLengthValidationIndex >= 0);
+        Assert.True(textureUploadIndex >= 0);
+        Assert.True(colorFormatValidationIndex < textureUploadIndex);
+        Assert.True(payloadLengthValidationIndex < textureUploadIndex);
+    }
+
+    /// <summary>
     /// Verifies the Windows native player includes the current generated engine header names for shared math and input value types.
     /// </summary>
     [Fact]
