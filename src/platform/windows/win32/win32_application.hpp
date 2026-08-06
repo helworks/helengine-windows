@@ -101,6 +101,11 @@ namespace helengine::windows {
         /// <returns>Top-level filter action returned to Windows.</returns>
         static LONG WINAPI HandleUnhandledStructuredException(struct _EXCEPTION_POINTERS* exceptionPointers);
 
+        /// Receives first-chance C++ exceptions at throw time and logs the throw-site stack before unwinding.
+        /// <param name="exceptionPointers">Structured-exception data captured by Windows.</param>
+        /// <returns>Always continues the normal search so C++ exception handling proceeds untouched.</returns>
+        static LONG WINAPI HandleFirstChanceCxxException(struct _EXCEPTION_POINTERS* exceptionPointers);
+
         /// Receives `std::terminate` callbacks and writes a stack trace before chaining to the previous handler.
         static void HandleTerminate();
 

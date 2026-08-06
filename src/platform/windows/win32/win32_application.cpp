@@ -172,6 +172,18 @@ namespace helengine::windows {
         /// Stores the previously registered top-level structured-exception filter.
         LPTOP_LEVEL_EXCEPTION_FILTER PreviousUnhandledExceptionFilter = nullptr;
 
+        /// Stores the registered first-chance vectored exception handler used to log C++ throw sites.
+        void* FirstChanceCxxExceptionHandlerHandle = nullptr;
+
+        /// Counts first-chance C++ exceptions already logged so the lifecycle log stays bounded.
+        int FirstChanceCxxExceptionLogCount = 0;
+
+        /// Maximum number of first-chance C++ exception stacks recorded per process run.
+        constexpr int FirstChanceCxxExceptionLogCapacity = 8;
+
+        /// Structured-exception code raised by MSVC C++ `throw` statements.
+        constexpr DWORD MsvcCxxExceptionCode = 0xE06D7363u;
+
         /// Tracks one-time DbgHelp initialization for the current process.
         std::once_flag DebugSymbolInitializationFlag;
 
@@ -743,12 +755,19 @@ namespace helengine::windows {
     void Win32Application::InstallDebugCrashHandler() {
         ActiveCrashLoggingApplication = this;
         PreviousUnhandledExceptionFilter = SetUnhandledExceptionFilter(&Win32Application::HandleUnhandledStructuredException);
+        FirstChanceCxxExceptionLogCount = 0;
+        FirstChanceCxxExceptionHandlerHandle = AddVectoredExceptionHandler(0, &Win32Application::HandleFirstChanceCxxException);
     }
 
     /// Restores the previous unhandled-exception hook after the host exits normally.
     void Win32Application::UninstallDebugCrashHandler() {
         if (ActiveCrashLoggingApplication != this) {
             return;
+        }
+
+        if (FirstChanceCxxExceptionHandlerHandle != nullptr) {
+            RemoveVectoredExceptionHandler(FirstChanceCxxExceptionHandlerHandle);
+            FirstChanceCxxExceptionHandlerHandle = nullptr;
         }
 
         SetUnhandledExceptionFilter(PreviousUnhandledExceptionFilter);
@@ -960,6 +979,25 @@ namespace helengine::windows {
         }
 
         return EXCEPTION_EXECUTE_HANDLER;
+    }
+
+    /// Receives first-chance C++ exceptions at throw time and logs the throw-site stack before unwinding.
+    LONG WINAPI Win32Application::HandleFirstChanceCxxException(EXCEPTION_POINTERS* exceptionPointers) {
+        if (exceptionPointers == nullptr ||
+            exceptionPointers->ExceptionRecord == nullptr ||
+            exceptionPointers->ExceptionRecord->ExceptionCode != MsvcCxxExceptionCode) {
+            return EXCEPTION_CONTINUE_SEARCH;
+        }
+
+        if (ActiveCrashLoggingApplication == nullptr || FirstChanceCxxExceptionLogCount >= FirstChanceCxxExceptionLogCapacity) {
+            return EXCEPTION_CONTINUE_SEARCH;
+        }
+
+        FirstChanceCxxExceptionLogCount++;
+        ActiveCrashLoggingApplication->WriteStructuredExceptionStackTrace(
+            "First-chance C++ exception thrown (throw-site stack).",
+            exceptionPointers);
+        return EXCEPTION_CONTINUE_SEARCH;
     }
 
     /// Receives `std::terminate` callbacks and writes a stack trace before chaining to the previous handler.
