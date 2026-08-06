@@ -243,10 +243,6 @@ namespace helengine::windows {
 
             List<RuntimeDiagnosticsMetric*>* detailMetrics = snapshot->get_DetailMetrics();
             if (detailMetrics != nullptr) {
-                for (int32_t index = 0; index < detailMetrics->get_Count(); index++) {
-                    delete (*detailMetrics)[index];
-                }
-
                 delete detailMetrics;
                 snapshot->set_DetailMetrics(nullptr);
             }

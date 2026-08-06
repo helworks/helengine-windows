@@ -12,11 +12,11 @@ namespace helengine::windows {
         snapshot->set_PeakCommittedBytes(nativeSnapshot.PeakPagefileUsageBytes);
         snapshot->set_AvailablePhysicalBytes(nativeSnapshot.AvailablePhysicalBytes);
         snapshot->set_PageFaultCount(nativeSnapshot.PageFaultCount);
-        snapshot->get_DetailMetrics()->Add(new RuntimeDiagnosticsMetric("pagefile_usage_bytes", nativeSnapshot.PagefileUsageBytes));
-        snapshot->get_DetailMetrics()->Add(new RuntimeDiagnosticsMetric("quota_paged_pool_bytes", nativeSnapshot.QuotaPagedPoolBytes));
-        snapshot->get_DetailMetrics()->Add(new RuntimeDiagnosticsMetric("quota_nonpaged_pool_bytes", nativeSnapshot.QuotaNonPagedPoolBytes));
-        snapshot->get_DetailMetrics()->Add(new RuntimeDiagnosticsMetric("system_commit_total_bytes", nativeSnapshot.SystemCommitTotalBytes));
-        snapshot->get_DetailMetrics()->Add(new RuntimeDiagnosticsMetric("system_commit_limit_bytes", nativeSnapshot.SystemCommitLimitBytes));
+        snapshot->get_DetailMetrics()->AddOwned(new RuntimeDiagnosticsMetric("pagefile_usage_bytes", nativeSnapshot.PagefileUsageBytes));
+        snapshot->get_DetailMetrics()->AddOwned(new RuntimeDiagnosticsMetric("quota_paged_pool_bytes", nativeSnapshot.QuotaPagedPoolBytes));
+        snapshot->get_DetailMetrics()->AddOwned(new RuntimeDiagnosticsMetric("quota_nonpaged_pool_bytes", nativeSnapshot.QuotaNonPagedPoolBytes));
+        snapshot->get_DetailMetrics()->AddOwned(new RuntimeDiagnosticsMetric("system_commit_total_bytes", nativeSnapshot.SystemCommitTotalBytes));
+        snapshot->get_DetailMetrics()->AddOwned(new RuntimeDiagnosticsMetric("system_commit_limit_bytes", nativeSnapshot.SystemCommitLimitBytes));
         return snapshot;
     }
 
