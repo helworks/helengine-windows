@@ -981,11 +981,14 @@ namespace helengine::windows {
         return EXCEPTION_EXECUTE_HANDLER;
     }
 
-    /// Receives first-chance C++ exceptions at throw time and logs the throw-site stack before unwinding.
+    /// Receives first-chance C++ exceptions and access violations, logging the faulting stack before unwinding.
     LONG WINAPI Win32Application::HandleFirstChanceCxxException(EXCEPTION_POINTERS* exceptionPointers) {
-        if (exceptionPointers == nullptr ||
-            exceptionPointers->ExceptionRecord == nullptr ||
-            exceptionPointers->ExceptionRecord->ExceptionCode != MsvcCxxExceptionCode) {
+        if (exceptionPointers == nullptr || exceptionPointers->ExceptionRecord == nullptr) {
+            return EXCEPTION_CONTINUE_SEARCH;
+        }
+
+        const DWORD exceptionCode = exceptionPointers->ExceptionRecord->ExceptionCode;
+        if (exceptionCode != MsvcCxxExceptionCode && exceptionCode != EXCEPTION_ACCESS_VIOLATION) {
             return EXCEPTION_CONTINUE_SEARCH;
         }
 
@@ -995,7 +998,9 @@ namespace helengine::windows {
 
         FirstChanceCxxExceptionLogCount++;
         ActiveCrashLoggingApplication->WriteStructuredExceptionStackTrace(
-            "First-chance C++ exception thrown (throw-site stack).",
+            exceptionCode == EXCEPTION_ACCESS_VIOLATION
+                ? "First-chance access violation (faulting stack)."
+                : "First-chance C++ exception thrown (throw-site stack).",
             exceptionPointers);
         return EXCEPTION_CONTINUE_SEARCH;
     }
@@ -2030,10 +2035,10 @@ namespace helengine::windows {
             ownedTextureReferenceCount == 1 &&
             ownedModelReferenceCount == 0 &&
             ownedMaterialReferenceCount == 0 &&
-            entityCount == 59 &&
-            updateableCount == 6 &&
+            entityCount == 227 &&
+            updateableCount == 10 &&
             liveFontAssetCount == 1 &&
-            constructedFontAssetCount >= 3) {
+            constructedFontAssetCount >= 1) {
             _CrtMemCheckpoint(&DebugAllocationBaselineState);
             DebugWin32HeapBaseline = currentHeapSummary;
             if (EnableDebugAllocationCallsiteTracking && DebugTrackedAllocationStacks != nullptr) {
@@ -2110,8 +2115,8 @@ namespace helengine::windows {
         WriteDebugAllocationLog(message);
         if (DebugAllocationMenuBaselineCaptured &&
             DebugAllocationMenuDeltaDumpCount < 2 &&
-            entityCount == 59 &&
-            updateableCount == 6 &&
+            entityCount == 227 &&
+            updateableCount == 10 &&
             deltaState.lCounts[_NORMAL_BLOCK] > 0 &&
             deltaState.lCounts[_NORMAL_BLOCK] != DebugAllocationLastDumpedNormalBlocks) {
             DebugAllocationMenuDeltaDumpCount++;
@@ -2140,8 +2145,8 @@ namespace helengine::windows {
         }
         if (EnableDebugAllocationCallsiteTracking &&
             DebugAllocationMenuBaselineCaptured &&
-            entityCount == 59 &&
-            updateableCount == 6 &&
+            entityCount == 227 &&
+            updateableCount == 10 &&
             deltaState.lCounts[_NORMAL_BLOCK] > 0 &&
             DebugTrackedAllocationStacks != nullptr &&
             EnsureDebugSymbolsInitialized()) {
