@@ -2083,9 +2083,9 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
 
         D3D11_SAMPLER_DESC samplerDescription {};
         samplerDescription.Filter = D3D11_FILTER_MIN_MAG_MIP_LINEAR;
-        samplerDescription.AddressU = D3D11_TEXTURE_ADDRESS_CLAMP;
-        samplerDescription.AddressV = D3D11_TEXTURE_ADDRESS_CLAMP;
-        samplerDescription.AddressW = D3D11_TEXTURE_ADDRESS_CLAMP;
+        samplerDescription.AddressU = D3D11_TEXTURE_ADDRESS_WRAP;
+        samplerDescription.AddressV = D3D11_TEXTURE_ADDRESS_WRAP;
+        samplerDescription.AddressW = D3D11_TEXTURE_ADDRESS_WRAP;
         samplerDescription.ComparisonFunc = D3D11_COMPARISON_NEVER;
         samplerDescription.MinLOD = 0.0f;
         samplerDescription.MaxLOD = D3D11_FLOAT32_MAX;
