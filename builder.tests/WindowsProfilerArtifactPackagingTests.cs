@@ -191,8 +191,17 @@ public sealed class WindowsProfilerArtifactPackagingTests {
                 "project",
                 "1.0.0",
                 "1.0.0",
+                "windows",
+                "1.0.0",
+                "startup",
                 [new PlatformBuildScene("startup", "Startup", "scenes/main-menu.hasset", [], [new KeyValuePair<string, string>("cooked-relative-path", "scenes/main-menu.hasset")])],
-                []);
+                [],
+                [],
+                [],
+                [],
+                new PlatformContainerWritePlan(string.Empty, []),
+                [],
+                PlatformBuildRuntimeFeatureManifest.Empty);
             Dictionary<string, string> codegenOptions = new(StringComparer.Ordinal) {
                 ["codegen-generated-function-profiling"] = profileId == "profiler" ? "true" : "false"
             };

@@ -320,6 +320,9 @@ public class WindowsPlatformAssetBuilderTests {
                 "project",
                 "1.0.0",
                 "1.0.0",
+                "windows",
+                "1.0.0",
+                "startup",
                 [
                     new PlatformBuildScene(
                         "startup",
@@ -335,7 +338,13 @@ public class WindowsPlatformAssetBuilderTests {
                         "assets/textures/checker.png",
                         new PlatformBuildPayloadReference("checker-payload", "assets/textures/checker.png"),
                         [])
-                ]);
+                ],
+                [],
+                [],
+                [],
+                new PlatformContainerWritePlan(string.Empty, []),
+                [],
+                PlatformBuildRuntimeFeatureManifest.Empty);
 
             PlatformBuildRequest request = new(
                 manifest,
@@ -449,7 +458,8 @@ public class WindowsPlatformAssetBuilderTests {
                         "hash-settings",
                         "{}",
                         [])
-                ]);
+                ],
+                PlatformBuildRuntimeFeatureManifest.Empty);
 
             PlatformBuildRequest request = new(
                 manifest,
@@ -526,6 +536,9 @@ public class WindowsPlatformAssetBuilderTests {
                 "project",
                 "1.0.0",
                 "1.0.0",
+                "windows",
+                "1.0.0",
+                "startup",
                 [
                     new PlatformBuildScene(
                         "startup",
@@ -534,7 +547,13 @@ public class WindowsPlatformAssetBuilderTests {
                         [],
                         [new KeyValuePair<string, string>("cooked-relative-path", "scenes/main-menu.hasset")])
                 ],
-                []);
+                [],
+                [],
+                [],
+                [],
+                new PlatformContainerWritePlan(string.Empty, []),
+                [],
+                PlatformBuildRuntimeFeatureManifest.Empty);
 
             PlatformBuildRequest request = new(
                 manifest,
@@ -616,6 +635,9 @@ public class WindowsPlatformAssetBuilderTests {
                 "project",
                 "1.0.0",
                 "1.0.0",
+                "windows",
+                "1.0.0",
+                "startup",
                 [
                     new PlatformBuildScene(
                         "startup",
@@ -624,7 +646,13 @@ public class WindowsPlatformAssetBuilderTests {
                         [],
                         [new KeyValuePair<string, string>("cooked-relative-path", "scenes/main-menu.hasset")])
                 ],
-                []);
+                [],
+                [],
+                [],
+                [],
+                new PlatformContainerWritePlan(string.Empty, []),
+                [],
+                PlatformBuildRuntimeFeatureManifest.Empty);
 
             PlatformBuildRequest request = new(
                 manifest,
