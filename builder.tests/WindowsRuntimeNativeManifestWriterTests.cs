@@ -39,6 +39,8 @@ public sealed class WindowsRuntimeNativeManifestWriterTests : IDisposable {
             "project",
             "1.0.0",
             "1.0.0",
+            "windows",
+            "1.0.0",
             "scenes/DemoDiscMainMenu.helen",
             [
                 new PlatformBuildScene(
@@ -58,7 +60,9 @@ public sealed class WindowsRuntimeNativeManifestWriterTests : IDisposable {
             [],
             [],
             [],
-            new PlatformContainerWritePlan(string.Empty, []));
+            new PlatformContainerWritePlan(string.Empty, []),
+            Array.Empty<PlatformCookWorkItem>(),
+            PlatformBuildRuntimeFeatureManifest.Empty);
         Dictionary<string, string> graphicsOptionValues = new(StringComparer.OrdinalIgnoreCase) {
             ["default-width"] = "1280",
             ["default-height"] = "720"
@@ -90,6 +94,8 @@ public sealed class WindowsRuntimeNativeManifestWriterTests : IDisposable {
             "project",
             "1.0.0",
             "1.0.0",
+            "windows",
+            "1.0.0",
             "DemoDiscMainMenu",
             [
                 new PlatformBuildScene(
@@ -103,7 +109,9 @@ public sealed class WindowsRuntimeNativeManifestWriterTests : IDisposable {
             [],
             [],
             [],
-            new PlatformContainerWritePlan(string.Empty, []));
+            new PlatformContainerWritePlan(string.Empty, []),
+            Array.Empty<PlatformCookWorkItem>(),
+            PlatformBuildRuntimeFeatureManifest.Empty);
         Dictionary<string, string> graphicsOptionValues = new(StringComparer.OrdinalIgnoreCase) {
             ["default-width"] = "640",
             ["default-height"] = "480"
@@ -135,6 +143,8 @@ public sealed class WindowsRuntimeNativeManifestWriterTests : IDisposable {
             "project",
             "1.0.0",
             "1.0.0",
+            "windows",
+            "1.0.0",
             "DemoDiscMainMenu",
             [
                 new PlatformBuildScene(
@@ -148,7 +158,9 @@ public sealed class WindowsRuntimeNativeManifestWriterTests : IDisposable {
             [],
             [],
             [],
-            new PlatformContainerWritePlan(string.Empty, []));
+            new PlatformContainerWritePlan(string.Empty, []),
+            Array.Empty<PlatformCookWorkItem>(),
+            PlatformBuildRuntimeFeatureManifest.Empty);
         Dictionary<string, string> graphicsOptionValues = new(StringComparer.OrdinalIgnoreCase) {
             ["default-width"] = "640",
             ["default-height"] = "480"
