@@ -173,7 +173,7 @@ public class WindowsPlatformAssetBuilderTests {
         Assert.True(materialAsset.ReceivesShadows);
         MaterialConstantBufferAsset baseColorBuffer = Assert.Single(materialAsset.ConstantBuffers, constantBuffer => constantBuffer.Name == "BaseColorBuffer");
         Assert.Equal(16, baseColorBuffer.Data.Length);
-        Assert.Equal(new[] { "ForwardStandardShader" }, result.ReferencedShaderAssetIds);
+        Assert.Equal(new[] { "ForwardStandardShader" }, result.ReferencedShaderDependencies.Select(dependency => dependency.ShaderAssetId));
     }
 
     /// <summary>

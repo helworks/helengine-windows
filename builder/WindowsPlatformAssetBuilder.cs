@@ -135,7 +135,9 @@ public sealed class WindowsPlatformAssetBuilder : IPlatformAssetBuilder {
             ]
         };
 
-        return new PlatformMaterialCookResult(global::helengine.files.AssetSerializer.SerializeToBytes(materialAsset), [shaderAssetId]);
+        return new PlatformMaterialCookResult(
+            global::helengine.files.AssetSerializer.SerializeToBytes(materialAsset),
+            [new PlatformShaderDependency(shaderAssetId, vertexProgram, pixelProgram, variant)]);
     }
 
     /// <summary>
