@@ -4028,107 +4028,135 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
         return EngineOwnedTextureResourceIds.size();
     }
 
-    /// Builds a placeholder runtime texture from raw asset metadata.
+    /// Builds a runtime texture and shares one canonical native resource per texture id.
     RuntimeTexture* Win32RenderManager2D::BuildTextureFromRaw(TextureAsset* data) {
-        RuntimeTexture* runtimeTexture = new RuntimeTexture();
-        if (data != nullptr) {
-            std::string textureId = data->get_Id();
-            if (textureId.empty()) {
-                textureId = BuildGeneratedTextureResourceId();
+        if (data == nullptr) {
+            throw new ArgumentNullException("data");
+        }
+
+        std::string textureId = data->get_Id();
+        if (textureId.empty()) {
+            textureId = BuildGeneratedTextureResourceId();
+        }
+
+        if (data->Colors == nullptr || data->Colors->Length == 0) {
+            throw new InvalidOperationException("Texture assets must include embedded color data.");
+        }
+
+        if (data->Width == 0 || data->Height == 0) {
+            throw new InvalidOperationException("Texture assets must define a non-zero width and height.");
+        }
+
+        if (data->ColorFormat != TextureAssetColorFormat::Rgba32) {
+            throw new InvalidOperationException(
+                "Windows raw texture uploads require RGBA32 color data for asset '"
+                + textureId
+                + "'.");
+        }
+
+        const std::uint64_t expectedColorByteCount = static_cast<std::uint64_t>(data->Width)
+            * static_cast<std::uint64_t>(data->Height)
+            * 4ULL;
+        if (static_cast<std::uint64_t>(data->Colors->Length) != expectedColorByteCount) {
+            throw new InvalidOperationException(
+                "Windows raw texture upload payload length mismatch for asset '"
+                + textureId
+                + "': expected "
+                + std::to_string(expectedColorByteCount)
+                + " bytes for "
+                + std::to_string(data->Width)
+                + "x"
+                + std::to_string(data->Height)
+                + " RGBA32 pixels, received "
+                + std::to_string(data->Colors->Length)
+                + ".");
+        }
+
+        auto existingResource = TextureResources.find(textureId);
+        if (existingResource != TextureResources.end()) {
+            if (existingResource->second == nullptr
+                || existingResource->second->Texture == nullptr
+                || existingResource->second->ShaderResourceView == nullptr) {
+                throw new InvalidOperationException("Windows texture resource cache contains an invalid resource.");
+            }
+            if (existingResource->second->Width != data->Width
+                || existingResource->second->Height != data->Height) {
+                throw new InvalidOperationException(
+                    "Cannot rebuild a live Windows texture id with different dimensions while owners remain.");
             }
 
+            RuntimeTexture* runtimeTexture = new RuntimeTexture();
             runtimeTexture->set_Id(textureId);
             runtimeTexture->set_Width(data->Width);
             runtimeTexture->set_Height(data->Height);
             runtimeTexture->set_IsEngineOwned(data->IsEngineOwned);
 
-            if (data->Colors == nullptr || data->Colors->Length == 0) {
-                throw new InvalidOperationException("Texture assets must include embedded color data.");
-            }
-
-            if (data->Width == 0 || data->Height == 0) {
-                throw new InvalidOperationException("Texture assets must define a non-zero width and height.");
-            }
-
-            if (data->ColorFormat != TextureAssetColorFormat::Rgba32) {
-                throw new InvalidOperationException(
-                    "Windows raw texture uploads require RGBA32 color data for asset '"
-                    + textureId
-                    + "'.");
-            }
-
-            const std::uint64_t expectedColorByteCount = static_cast<std::uint64_t>(data->Width)
-                * static_cast<std::uint64_t>(data->Height)
-                * 4ULL;
-            if (static_cast<std::uint64_t>(data->Colors->Length) != expectedColorByteCount) {
-                throw new InvalidOperationException(
-                    "Windows raw texture upload payload length mismatch for asset '"
-                    + textureId
-                    + "': expected "
-                    + std::to_string(expectedColorByteCount)
-                    + " bytes for "
-                    + std::to_string(data->Width)
-                    + "x"
-                    + std::to_string(data->Height)
-                    + " RGBA32 pixels, received "
-                    + std::to_string(data->Colors->Length)
-                    + ".");
-            }
-
-            D3D11_TEXTURE2D_DESC textureDescription {};
-            textureDescription.Width = static_cast<UINT>(data->Width);
-            textureDescription.Height = static_cast<UINT>(data->Height);
-            textureDescription.MipLevels = 1;
-            textureDescription.ArraySize = 1;
-            textureDescription.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
-            textureDescription.SampleDesc.Count = 1;
-            textureDescription.Usage = D3D11_USAGE_DEFAULT;
-            textureDescription.BindFlags = D3D11_BIND_SHADER_RESOURCE;
-
-            D3D11_SUBRESOURCE_DATA textureData {};
-            textureData.pSysMem = data->Colors->Data;
-            textureData.SysMemPitch = static_cast<UINT>(static_cast<UINT64>(data->Width) * 4ULL);
-
-            Win32TextureResource textureResource;
-            ThrowIfFailed(
-                Bootstrap.GetDevice()->CreateTexture2D(&textureDescription, &textureData, textureResource.Texture.GetAddressOf()),
-                "ID3D11Device::CreateTexture2D failed for a packaged texture asset.");
-
-            D3D11_SHADER_RESOURCE_VIEW_DESC resourceViewDescription {};
-            resourceViewDescription.Format = textureDescription.Format;
-            resourceViewDescription.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
-            resourceViewDescription.Texture2D.MostDetailedMip = 0;
-            resourceViewDescription.Texture2D.MipLevels = 1;
-            ThrowIfFailed(
-                Bootstrap.GetDevice()->CreateShaderResourceView(textureResource.Texture.Get(), &resourceViewDescription, textureResource.ShaderResourceView.GetAddressOf()),
-                "ID3D11Device::CreateShaderResourceView failed for a packaged texture asset.");
-
-            auto existingResource = TextureResources.find(textureId);
-            if (existingResource != TextureResources.end() && existingResource->second != nullptr) {
-                Win32TextureResource* replacedResource = existingResource->second.get();
-                for (auto owner = RuntimeTextureResourceOwners.begin(); owner != RuntimeTextureResourceOwners.end();) {
-                    if (owner->second == replacedResource) {
-                        owner = RuntimeTextureResourceOwners.erase(owner);
-                    } else {
-                        ++owner;
-                    }
-                }
-            }
-
-            TextureResources[textureId] = std::make_unique<Win32TextureResource>(std::move(textureResource));
-            RuntimeTextureResourceOwners[runtimeTexture] = TextureResources[textureId].get();
+            Win32TextureResource* sharedResource = existingResource->second.get();
+            RuntimeTextureResourceOwners.emplace(runtimeTexture, sharedResource);
+            existingResource->second->OwnerCount++;
             if (data->IsEngineOwned) {
+                sharedResource->EngineOwnedOwnerCount++;
                 EngineOwnedTextureResourceIds.insert(textureId);
-            } else {
-                EngineOwnedTextureResourceIds.erase(textureId);
             }
             RuntimeRenderDiagnostics::RecordAssetBuild(
                 "texture",
                 textureId,
                 BuildTextureDiagnosticsDetail(data, textureId),
                 TextureResources.size());
+            return runtimeTexture;
         }
 
+        D3D11_TEXTURE2D_DESC textureDescription {};
+        textureDescription.Width = static_cast<UINT>(data->Width);
+        textureDescription.Height = static_cast<UINT>(data->Height);
+        textureDescription.MipLevels = 1;
+        textureDescription.ArraySize = 1;
+        textureDescription.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+        textureDescription.SampleDesc.Count = 1;
+        textureDescription.Usage = D3D11_USAGE_DEFAULT;
+        textureDescription.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+
+        D3D11_SUBRESOURCE_DATA textureData {};
+        textureData.pSysMem = data->Colors->Data;
+        textureData.SysMemPitch = static_cast<UINT>(static_cast<UINT64>(data->Width) * 4ULL);
+
+        Win32TextureResource textureResource;
+        textureResource.Width = data->Width;
+        textureResource.Height = data->Height;
+        textureResource.OwnerCount = 1;
+        textureResource.EngineOwnedOwnerCount = data->IsEngineOwned ? 1 : 0;
+        ThrowIfFailed(
+            Bootstrap.GetDevice()->CreateTexture2D(&textureDescription, &textureData, textureResource.Texture.GetAddressOf()),
+            "ID3D11Device::CreateTexture2D failed for a packaged texture asset.");
+
+        D3D11_SHADER_RESOURCE_VIEW_DESC resourceViewDescription {};
+        resourceViewDescription.Format = textureDescription.Format;
+        resourceViewDescription.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
+        resourceViewDescription.Texture2D.MostDetailedMip = 0;
+        resourceViewDescription.Texture2D.MipLevels = 1;
+        ThrowIfFailed(
+            Bootstrap.GetDevice()->CreateShaderResourceView(textureResource.Texture.Get(), &resourceViewDescription, textureResource.ShaderResourceView.GetAddressOf()),
+            "ID3D11Device::CreateShaderResourceView failed for a packaged texture asset.");
+
+        RuntimeTexture* runtimeTexture = new RuntimeTexture();
+        runtimeTexture->set_Id(textureId);
+        runtimeTexture->set_Width(data->Width);
+        runtimeTexture->set_Height(data->Height);
+        runtimeTexture->set_IsEngineOwned(data->IsEngineOwned);
+
+        auto insertedResource = TextureResources.emplace(
+            textureId,
+            std::make_unique<Win32TextureResource>(std::move(textureResource)));
+        Win32TextureResource* ownedResource = insertedResource.first->second.get();
+        RuntimeTextureResourceOwners.emplace(runtimeTexture, ownedResource);
+        if (data->IsEngineOwned) {
+            EngineOwnedTextureResourceIds.insert(textureId);
+        }
+        RuntimeRenderDiagnostics::RecordAssetBuild(
+            "texture",
+            textureId,
+            BuildTextureDiagnosticsDetail(data, textureId),
+            TextureResources.size());
         return runtimeTexture;
     }
 
@@ -4144,19 +4172,33 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
         }
 
         Win32TextureResource* ownedResource = owner->second;
+        const std::string textureId = texture->get_Id();
+        const bool isEngineOwned = texture->get_IsEngineOwned();
+        RuntimeRenderDiagnostics::RecordAssetReleaseRequested("texture", textureId, "renderer=windows");
         RuntimeTextureResourceOwners.erase(owner);
 
-        std::string textureId = texture->get_Id();
-        RuntimeRenderDiagnostics::RecordAssetReleaseRequested("texture", textureId, "renderer=windows");
-        for (auto resource = TextureResources.begin(); resource != TextureResources.end();) {
-            if (resource->second.get() == ownedResource) {
-                EngineOwnedTextureResourceIds.erase(resource->first);
-                resource = TextureResources.erase(resource);
-            } else {
-                ++resource;
+        if (ownedResource->OwnerCount > 0) {
+            --ownedResource->OwnerCount;
+        }
+        if (isEngineOwned && ownedResource->EngineOwnedOwnerCount > 0) {
+            --ownedResource->EngineOwnedOwnerCount;
+        }
+        if (ownedResource->EngineOwnedOwnerCount == 0) {
+            EngineOwnedTextureResourceIds.erase(textureId);
+        }
+
+        if (ownedResource->OwnerCount == 0) {
+            for (auto resource = TextureResources.begin(); resource != TextureResources.end();) {
+                if (resource->second.get() == ownedResource) {
+                    EngineOwnedTextureResourceIds.erase(resource->first);
+                    resource = TextureResources.erase(resource);
+                } else {
+                    ++resource;
+                }
             }
         }
 
+        RenderManager2D::ReleaseTexture(texture);
         RuntimeRenderDiagnostics::RecordAssetReleaseCompleted(
             "texture",
             textureId,
@@ -4232,7 +4274,41 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
 
     /// Releases Windows renderer-owned 2D resources.
     void Win32RenderManager2D::Dispose() {
-        RuntimeTextureResourceOwners.clear();
+        RenderManager2D::Dispose();
+
+        while (!RuntimeTextureResourceOwners.empty()) {
+            auto owner = RuntimeTextureResourceOwners.begin();
+            RuntimeTexture* runtimeTexture = owner->first;
+            Win32TextureResource* ownedResource = owner->second;
+            const std::string textureId = runtimeTexture->get_Id();
+            const bool isEngineOwned = runtimeTexture->get_IsEngineOwned();
+            RuntimeTextureResourceOwners.erase(owner);
+
+            if (ownedResource != nullptr) {
+                if (ownedResource->OwnerCount > 0) {
+                    --ownedResource->OwnerCount;
+                }
+                if (isEngineOwned && ownedResource->EngineOwnedOwnerCount > 0) {
+                    --ownedResource->EngineOwnedOwnerCount;
+                }
+                if (ownedResource->EngineOwnedOwnerCount == 0) {
+                    EngineOwnedTextureResourceIds.erase(textureId);
+                }
+                if (ownedResource->OwnerCount == 0) {
+                    for (auto resource = TextureResources.begin(); resource != TextureResources.end();) {
+                        if (resource->second.get() == ownedResource) {
+                            EngineOwnedTextureResourceIds.erase(resource->first);
+                            resource = TextureResources.erase(resource);
+                        } else {
+                            ++resource;
+                        }
+                    }
+                }
+            }
+
+            RenderManager2D::ReleaseTexture(runtimeTexture);
+        }
+
         TextureResources.clear();
         EngineOwnedTextureResourceIds.clear();
         QuadVertexBuffer.Reset();

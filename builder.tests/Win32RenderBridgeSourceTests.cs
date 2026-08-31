@@ -123,13 +123,86 @@ public sealed class Win32RenderBridgeSourceTests {
         string sourcePath = Path.Combine(repositoryRootPath, "src", "platform", "windows", "win32", "win32_render_bridge.cpp");
 
         string implementationSource = File.ReadAllText(sourcePath);
+        string hookSource = ExtractMethodBody(
+            implementationSource,
+            "void Win32RenderManager2D::UpdateTextureRegionCore(");
 
-        Assert.Contains("RuntimeTextureResourceOwners[runtimeTexture]", implementationSource, StringComparison.Ordinal);
-        Assert.Contains("RuntimeTextureResourceOwners.find(texture)", implementationSource, StringComparison.Ordinal);
-        Assert.Contains("RuntimeTextureResourceOwners.end()", implementationSource, StringComparison.Ordinal);
-        Assert.Contains("texture->get_IsDisposed()", implementationSource, StringComparison.Ordinal);
-        Assert.Contains("Win32TextureResource* ownedResource = owner->second;", implementationSource, StringComparison.Ordinal);
-        Assert.Contains("ownedResource->Texture", implementationSource, StringComparison.Ordinal);
+        Assert.Contains("RuntimeTextureResourceOwners.find(texture)", hookSource, StringComparison.Ordinal);
+        Assert.Contains("RuntimeTextureResourceOwners.end()", hookSource, StringComparison.Ordinal);
+        Assert.Contains("texture->get_IsDisposed()", hookSource, StringComparison.Ordinal);
+        Assert.Contains("Win32TextureResource* ownedResource = owner->second;", hookSource, StringComparison.Ordinal);
+        Assert.Contains("ownedResource->Texture", hookSource, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// Verifies repeated builds for one id share one native resource while retaining one owner entry per runtime object.
+    /// </summary>
+    [Fact]
+    public void Win32RenderBridge_duplicate_texture_id_shares_resource_and_increments_owner_count() {
+        string repositoryRootPath = ResolveWindowsRepositoryRootPath();
+        string sourcePath = Path.Combine(repositoryRootPath, "src", "platform", "windows", "win32", "win32_render_bridge.cpp");
+
+        string implementationSource = File.ReadAllText(sourcePath);
+        string buildSource = ExtractMethodBody(
+            implementationSource,
+            "RuntimeTexture* Win32RenderManager2D::BuildTextureFromRaw(");
+
+        Assert.Contains("auto existingResource = TextureResources.find(textureId);", buildSource, StringComparison.Ordinal);
+        Assert.Contains("existingResource->second->OwnerCount++;", buildSource, StringComparison.Ordinal);
+        Assert.Contains("sharedResource->EngineOwnedOwnerCount++;", buildSource, StringComparison.Ordinal);
+        Assert.Contains("RuntimeTextureResourceOwners.emplace(runtimeTexture, sharedResource);", buildSource, StringComparison.Ordinal);
+        Assert.Contains("textureResource.OwnerCount = 1;", buildSource, StringComparison.Ordinal);
+        Assert.Contains("TextureResources.emplace(", buildSource, StringComparison.Ordinal);
+        Assert.DoesNotContain("RuntimeTextureResourceOwners.erase", buildSource, StringComparison.Ordinal);
+        Assert.DoesNotContain("TextureResources[textureId] =", buildSource, StringComparison.Ordinal);
+        Assert.True(
+            buildSource.IndexOf("auto existingResource = TextureResources.find(textureId);", StringComparison.Ordinal)
+                < buildSource.IndexOf("CreateTexture2D", StringComparison.Ordinal));
+    }
+
+    /// <summary>
+    /// Verifies releasing one duplicate-id owner deletes only that runtime object and releases the shared native resource last.
+    /// </summary>
+    [Fact]
+    public void Win32RenderBridge_release_texture_drains_owner_before_last_resource_release() {
+        string repositoryRootPath = ResolveWindowsRepositoryRootPath();
+        string sourcePath = Path.Combine(repositoryRootPath, "src", "platform", "windows", "win32", "win32_render_bridge.cpp");
+
+        string implementationSource = File.ReadAllText(sourcePath);
+        string releaseSource = ExtractMethodBody(
+            implementationSource,
+            "void Win32RenderManager2D::ReleaseTexture(");
+
+        Assert.Contains("RuntimeTextureResourceOwners.erase(owner);", releaseSource, StringComparison.Ordinal);
+        Assert.Contains("--ownedResource->OwnerCount;", releaseSource, StringComparison.Ordinal);
+        Assert.Contains("const bool isEngineOwned = texture->get_IsEngineOwned();", releaseSource, StringComparison.Ordinal);
+        Assert.Contains("--ownedResource->EngineOwnedOwnerCount;", releaseSource, StringComparison.Ordinal);
+        Assert.Contains("if (ownedResource->OwnerCount == 0)", releaseSource, StringComparison.Ordinal);
+        Assert.Contains("TextureResources.erase(resource);", releaseSource, StringComparison.Ordinal);
+        Assert.Contains("RenderManager2D::ReleaseTexture(texture);", releaseSource, StringComparison.Ordinal);
+        Assert.True(
+            releaseSource.IndexOf("TextureResources.erase(resource);", StringComparison.Ordinal)
+                < releaseSource.IndexOf("RenderManager2D::ReleaseTexture(texture);", StringComparison.Ordinal));
+    }
+
+    /// <summary>
+    /// Verifies renderer disposal calls the generated base lifecycle and drains every remaining runtime owner.
+    /// </summary>
+    [Fact]
+    public void Win32RenderBridge_dispose_drains_runtime_texture_owners_and_native_resources() {
+        string repositoryRootPath = ResolveWindowsRepositoryRootPath();
+        string sourcePath = Path.Combine(repositoryRootPath, "src", "platform", "windows", "win32", "win32_render_bridge.cpp");
+
+        string implementationSource = File.ReadAllText(sourcePath);
+        string disposeSource = ExtractMethodBody(
+            implementationSource,
+            "void Win32RenderManager2D::Dispose(");
+
+        Assert.Contains("RenderManager2D::Dispose();", disposeSource, StringComparison.Ordinal);
+        Assert.Contains("while (!RuntimeTextureResourceOwners.empty())", disposeSource, StringComparison.Ordinal);
+        Assert.Contains("RenderManager2D::ReleaseTexture(runtimeTexture);", disposeSource, StringComparison.Ordinal);
+        Assert.Contains("TextureResources.clear();", disposeSource, StringComparison.Ordinal);
+        Assert.DoesNotContain("RuntimeTextureResourceOwners.clear()", disposeSource, StringComparison.Ordinal);
     }
 
     /// <summary>
@@ -141,7 +214,9 @@ public sealed class Win32RenderBridgeSourceTests {
         string sourcePath = Path.Combine(repositoryRootPath, "src", "platform", "windows", "win32", "win32_render_bridge.cpp");
 
         string implementationSource = File.ReadAllText(sourcePath);
-        string hookSource = ExtractTextureRegionHook(implementationSource);
+        string hookSource = ExtractMethodBody(
+            implementationSource,
+            "void Win32RenderManager2D::UpdateTextureRegionCore(");
 
         Assert.Contains("D3D11_BOX region {}", hookSource, StringComparison.Ordinal);
         Assert.Contains("region.left = static_cast<UINT>(x);", hookSource, StringComparison.Ordinal);
@@ -165,7 +240,9 @@ public sealed class Win32RenderBridgeSourceTests {
         string sourcePath = Path.Combine(repositoryRootPath, "src", "platform", "windows", "win32", "win32_render_bridge.cpp");
 
         string implementationSource = File.ReadAllText(sourcePath);
-        string hookSource = ExtractTextureRegionHook(implementationSource);
+        string hookSource = ExtractMethodBody(
+            implementationSource,
+            "void Win32RenderManager2D::UpdateTextureRegionCore(");
 
         Assert.DoesNotContain("CreateTexture2D", hookSource, StringComparison.Ordinal);
         Assert.DoesNotContain("CreateShaderResourceView", hookSource, StringComparison.Ordinal);
@@ -215,22 +292,31 @@ public sealed class Win32RenderBridgeSourceTests {
     }
 
     /// <summary>
-    /// Extracts the packaged bridge's texture-region hook for focused source-contract assertions.
+    /// Extracts one native method body for focused source-contract assertions.
     /// </summary>
     /// <param name="implementationSource">Complete native bridge source.</param>
-    /// <returns>Texture-region hook source through the next native texture release method.</returns>
-    static string ExtractTextureRegionHook(string implementationSource) {
-        int hookIndex = implementationSource.IndexOf(
-            "void Win32RenderManager2D::UpdateTextureRegionCore(",
-            StringComparison.Ordinal);
-        Assert.True(hookIndex >= 0);
+    /// <param name="methodSignature">Unique method signature prefix.</param>
+    /// <returns>Complete native method source through its matching closing brace.</returns>
+    static string ExtractMethodBody(string implementationSource, string methodSignature) {
+        int methodIndex = implementationSource.IndexOf(methodSignature, StringComparison.Ordinal);
+        Assert.True(methodIndex >= 0);
 
-        int nextMethodIndex = implementationSource.IndexOf(
-            "/// Releases Windows renderer-owned 2D resources.",
-            hookIndex,
-            StringComparison.Ordinal);
+        int openingBraceIndex = implementationSource.IndexOf('{', methodIndex);
+        Assert.True(openingBraceIndex > methodIndex);
 
-        Assert.True(nextMethodIndex > hookIndex);
-        return implementationSource.Substring(hookIndex, nextMethodIndex - hookIndex);
+        int braceDepth = 0;
+        for (int index = openingBraceIndex; index < implementationSource.Length; index++) {
+            if (implementationSource[index] == '{') {
+                braceDepth++;
+            } else if (implementationSource[index] == '}') {
+                braceDepth--;
+                if (braceDepth == 0) {
+                    return implementationSource.Substring(methodIndex, index - methodIndex + 1);
+                }
+            }
+        }
+
+        Assert.Fail($"Could not find the closing brace for '{methodSignature}'.");
+        return string.Empty;
     }
 }

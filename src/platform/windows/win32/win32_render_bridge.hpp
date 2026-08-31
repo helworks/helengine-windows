@@ -9,6 +9,7 @@
 
 #include <DirectXMath.h>
 #include <array>
+#include <cstddef>
 #include <memory>
 #include <unordered_map>
 #include <vector>
@@ -100,6 +101,18 @@ namespace helengine::windows {
 
         /// Stores the shader resource view used for sampling.
         Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> ShaderResourceView;
+
+        /// Stores the dimensions of the canonical resource for duplicate-id validation.
+        int32_t Width = 0;
+
+        /// Stores the dimensions of the canonical resource for duplicate-id validation.
+        int32_t Height = 0;
+
+        /// Counts live runtime texture owners that share this native resource.
+        std::size_t OwnerCount = 0;
+
+        /// Counts live engine-owned runtime texture owners that share this native resource.
+        std::size_t EngineOwnedOwnerCount = 0;
     };
 
     /// Provides a minimal native 3D renderer bridge that draws all cameras onto the main back buffer in draw order.
