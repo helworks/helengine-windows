@@ -408,6 +408,16 @@ namespace helengine::windows {
         /// Draws one UI shape directly into the active camera viewport.
         void DrawRoundedRect(IRoundedRectDrawable2D* shape) override;
 
+        /// Uploads one validated RGBA8 rectangle into an existing Direct3D11 texture resource.
+        void UpdateTextureRegionCore(
+            ::RuntimeTexture* texture,
+            int32_t x,
+            int32_t y,
+            int32_t width,
+            int32_t height,
+            Array<uint8_t>* rgba8,
+            int32_t sourceRowPitch) override;
+
     private:
         /// Creates the DirectX11 shaders, buffers, and fixed pipeline state needed for 2D rendering.
         void EnsurePipelineState();

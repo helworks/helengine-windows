@@ -249,6 +249,9 @@ namespace helengine::windows {
         /// Caches uploaded textures so both the texture loader and material binder resolve the same GPU resources.
         std::unordered_map<std::string, std::unique_ptr<Win32TextureResource>> TextureResources;
 
+        /// Associates each runtime texture with its exact uploaded resource so foreign objects cannot reuse an id.
+        std::unordered_map<RuntimeTexture*, Win32TextureResource*> RuntimeTextureResourceOwners;
+
         /// Tracks runtime texture ids owned by engine-wide helper caches rather than by a scene.
         std::unordered_set<std::string> EngineOwnedTextureResourceIds;
 
@@ -3496,17 +3499,12 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
             return nullptr;
         }
 
-        const std::string& textureId = texture->get_Id();
-        if (textureId.empty()) {
+        auto owner = RuntimeTextureResourceOwners.find(texture);
+        if (owner == RuntimeTextureResourceOwners.end() || owner->second == nullptr) {
             return nullptr;
         }
 
-        auto resource = TextureResources.find(textureId);
-        if (resource == TextureResources.end() || resource->second == nullptr) {
-            return nullptr;
-        }
-
-        return resource->second->ShaderResourceView.Get();
+        return owner->second->ShaderResourceView.Get();
     }
 
     /// Configures the DirectX11 state used by one textured quad draw.
@@ -4105,7 +4103,20 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
                 Bootstrap.GetDevice()->CreateShaderResourceView(textureResource.Texture.Get(), &resourceViewDescription, textureResource.ShaderResourceView.GetAddressOf()),
                 "ID3D11Device::CreateShaderResourceView failed for a packaged texture asset.");
 
+            auto existingResource = TextureResources.find(textureId);
+            if (existingResource != TextureResources.end() && existingResource->second != nullptr) {
+                Win32TextureResource* replacedResource = existingResource->second.get();
+                for (auto owner = RuntimeTextureResourceOwners.begin(); owner != RuntimeTextureResourceOwners.end();) {
+                    if (owner->second == replacedResource) {
+                        owner = RuntimeTextureResourceOwners.erase(owner);
+                    } else {
+                        ++owner;
+                    }
+                }
+            }
+
             TextureResources[textureId] = std::make_unique<Win32TextureResource>(std::move(textureResource));
+            RuntimeTextureResourceOwners[runtimeTexture] = TextureResources[textureId].get();
             if (data->IsEngineOwned) {
                 EngineOwnedTextureResourceIds.insert(textureId);
             } else {
@@ -4127,11 +4138,23 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
             throw std::invalid_argument("Runtime texture must be provided for release.");
         }
 
-        const std::string textureId = texture->get_Id();
+        auto owner = RuntimeTextureResourceOwners.find(texture);
+        if (owner == RuntimeTextureResourceOwners.end() || owner->second == nullptr) {
+            throw std::invalid_argument("Runtime texture was not created by the Windows 2D renderer.");
+        }
+
+        Win32TextureResource* ownedResource = owner->second;
+        RuntimeTextureResourceOwners.erase(owner);
+
+        std::string textureId = texture->get_Id();
         RuntimeRenderDiagnostics::RecordAssetReleaseRequested("texture", textureId, "renderer=windows");
-        if (!textureId.empty()) {
-            TextureResources.erase(textureId);
-            EngineOwnedTextureResourceIds.erase(textureId);
+        for (auto resource = TextureResources.begin(); resource != TextureResources.end();) {
+            if (resource->second.get() == ownedResource) {
+                EngineOwnedTextureResourceIds.erase(resource->first);
+                resource = TextureResources.erase(resource);
+            } else {
+                ++resource;
+            }
         }
 
         RuntimeRenderDiagnostics::RecordAssetReleaseCompleted(
@@ -4156,8 +4179,60 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
     void Win32RenderManager2D::FlushReleasedTextures() {
     }
 
+    /// Uploads one validated RGBA8 rectangle into an existing Direct3D11 texture resource.
+    void Win32RenderManager2D::UpdateTextureRegionCore(
+        ::RuntimeTexture* texture,
+        int32_t x,
+        int32_t y,
+        int32_t width,
+        int32_t height,
+        Array<uint8_t>* rgba8,
+        int32_t sourceRowPitch) {
+        if (texture == nullptr) {
+            throw new ArgumentNullException("texture");
+        }
+        if (texture->get_IsDisposed()) {
+            throw new InvalidOperationException("Cannot update a disposed Windows runtime texture.");
+        }
+        if (rgba8 == nullptr || rgba8->Data == nullptr) {
+            throw new ArgumentNullException("rgba8");
+        }
+
+        auto owner = RuntimeTextureResourceOwners.find(texture);
+        if (owner == RuntimeTextureResourceOwners.end() || owner->second == nullptr) {
+            throw new ArgumentException("Runtime texture was not created by the Windows 2D renderer.", "texture");
+        }
+
+        Win32TextureResource* ownedResource = owner->second;
+        if (ownedResource->Texture == nullptr) {
+            throw new InvalidOperationException("Windows runtime texture does not own a texture resource.");
+        }
+
+        ID3D11DeviceContext* context = Bootstrap.GetDeviceContext();
+        if (context == nullptr) {
+            throw new InvalidOperationException("DirectX11 device context must exist before updating a texture region.");
+        }
+
+        D3D11_BOX region {};
+        region.left = static_cast<UINT>(x);
+        region.top = static_cast<UINT>(y);
+        region.front = 0;
+        region.right = static_cast<UINT>(x + width);
+        region.bottom = static_cast<UINT>(y + height);
+        region.back = 1;
+
+        context->UpdateSubresource(
+            ownedResource->Texture.Get(),
+            0,
+            &region,
+            rgba8->Data,
+            static_cast<UINT>(sourceRowPitch),
+            0);
+    }
+
     /// Releases Windows renderer-owned 2D resources.
     void Win32RenderManager2D::Dispose() {
+        RuntimeTextureResourceOwners.clear();
         TextureResources.clear();
         EngineOwnedTextureResourceIds.clear();
         QuadVertexBuffer.Reset();

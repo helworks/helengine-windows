@@ -98,6 +98,83 @@ public sealed class Win32RenderBridgeSourceTests {
     }
 
     /// <summary>
+    /// Verifies the packaged bridge declares the generated native texture-region hook with the generated array ABI.
+    /// </summary>
+    [Fact]
+    public void Win32RenderBridge_declares_generated_texture_region_override_with_native_array_parameter() {
+        string repositoryRootPath = ResolveWindowsRepositoryRootPath();
+        string headerPath = Path.Combine(repositoryRootPath, "src", "platform", "windows", "win32", "win32_render_bridge.hpp");
+
+        string headerSource = File.ReadAllText(headerPath);
+
+        Assert.Contains("void UpdateTextureRegionCore(", headerSource, StringComparison.Ordinal);
+        Assert.Contains("::RuntimeTexture* texture", headerSource, StringComparison.Ordinal);
+        Assert.Contains("Array<uint8_t>* rgba8", headerSource, StringComparison.Ordinal);
+        Assert.Contains("int32_t sourceRowPitch", headerSource, StringComparison.Ordinal);
+        Assert.Contains("override;", headerSource, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// Verifies the native hook resolves an exact runtime-texture owner and rejects disposed or missing resources.
+    /// </summary>
+    [Fact]
+    public void Win32RenderBridge_texture_region_hook_validates_runtime_texture_ownership() {
+        string repositoryRootPath = ResolveWindowsRepositoryRootPath();
+        string sourcePath = Path.Combine(repositoryRootPath, "src", "platform", "windows", "win32", "win32_render_bridge.cpp");
+
+        string implementationSource = File.ReadAllText(sourcePath);
+
+        Assert.Contains("RuntimeTextureResourceOwners[runtimeTexture]", implementationSource, StringComparison.Ordinal);
+        Assert.Contains("RuntimeTextureResourceOwners.find(texture)", implementationSource, StringComparison.Ordinal);
+        Assert.Contains("RuntimeTextureResourceOwners.end()", implementationSource, StringComparison.Ordinal);
+        Assert.Contains("texture->get_IsDisposed()", implementationSource, StringComparison.Ordinal);
+        Assert.Contains("Win32TextureResource* ownedResource = owner->second;", implementationSource, StringComparison.Ordinal);
+        Assert.Contains("ownedResource->Texture", implementationSource, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// Verifies the native hook uploads only the requested box with the generated array's data and source row pitch.
+    /// </summary>
+    [Fact]
+    public void Win32RenderBridge_texture_region_hook_updates_exact_d3d11_box_and_pitches() {
+        string repositoryRootPath = ResolveWindowsRepositoryRootPath();
+        string sourcePath = Path.Combine(repositoryRootPath, "src", "platform", "windows", "win32", "win32_render_bridge.cpp");
+
+        string implementationSource = File.ReadAllText(sourcePath);
+        string hookSource = ExtractTextureRegionHook(implementationSource);
+
+        Assert.Contains("D3D11_BOX region {}", hookSource, StringComparison.Ordinal);
+        Assert.Contains("region.left = static_cast<UINT>(x);", hookSource, StringComparison.Ordinal);
+        Assert.Contains("region.top = static_cast<UINT>(y);", hookSource, StringComparison.Ordinal);
+        Assert.Contains("region.front = 0;", hookSource, StringComparison.Ordinal);
+        Assert.Contains("region.right = static_cast<UINT>(x + width);", hookSource, StringComparison.Ordinal);
+        Assert.Contains("region.bottom = static_cast<UINT>(y + height);", hookSource, StringComparison.Ordinal);
+        Assert.Contains("region.back = 1;", hookSource, StringComparison.Ordinal);
+        Assert.Contains("rgba8->Data", hookSource, StringComparison.Ordinal);
+        Assert.Contains("static_cast<UINT>(sourceRowPitch)", hookSource, StringComparison.Ordinal);
+        Assert.Contains("UpdateSubresource", hookSource, StringComparison.Ordinal);
+        Assert.Contains("            0);", hookSource, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// Verifies a region update reuses the existing texture resource and does not recreate a texture or view.
+    /// </summary>
+    [Fact]
+    public void Win32RenderBridge_texture_region_hook_preserves_existing_texture_and_view_identity() {
+        string repositoryRootPath = ResolveWindowsRepositoryRootPath();
+        string sourcePath = Path.Combine(repositoryRootPath, "src", "platform", "windows", "win32", "win32_render_bridge.cpp");
+
+        string implementationSource = File.ReadAllText(sourcePath);
+        string hookSource = ExtractTextureRegionHook(implementationSource);
+
+        Assert.DoesNotContain("CreateTexture2D", hookSource, StringComparison.Ordinal);
+        Assert.DoesNotContain("CreateShaderResourceView", hookSource, StringComparison.Ordinal);
+        Assert.DoesNotContain("new Array<uint8_t>", hookSource, StringComparison.Ordinal);
+        Assert.Contains("RuntimeTextureResourceOwners", hookSource, StringComparison.Ordinal);
+        Assert.Contains("Texture.Get()", hookSource, StringComparison.Ordinal);
+    }
+
+    /// <summary>
     /// Verifies the Windows native player includes the current generated engine header names for shared math and input value types.
     /// </summary>
     [Fact]
@@ -135,5 +212,25 @@ public sealed class Win32RenderBridgeSourceTests {
         }
 
         return repositoryRootPath;
+    }
+
+    /// <summary>
+    /// Extracts the packaged bridge's texture-region hook for focused source-contract assertions.
+    /// </summary>
+    /// <param name="implementationSource">Complete native bridge source.</param>
+    /// <returns>Texture-region hook source through the next native texture release method.</returns>
+    static string ExtractTextureRegionHook(string implementationSource) {
+        int hookIndex = implementationSource.IndexOf(
+            "void Win32RenderManager2D::UpdateTextureRegionCore(",
+            StringComparison.Ordinal);
+        Assert.True(hookIndex >= 0);
+
+        int nextMethodIndex = implementationSource.IndexOf(
+            "/// Releases Windows renderer-owned 2D resources.",
+            hookIndex,
+            StringComparison.Ordinal);
+
+        Assert.True(nextMethodIndex > hookIndex);
+        return implementationSource.Substring(hookIndex, nextMethodIndex - hookIndex);
     }
 }
