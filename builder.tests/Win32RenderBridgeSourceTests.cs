@@ -57,18 +57,54 @@ public sealed class Win32RenderBridgeSourceTests {
     }
 
     /// <summary>
-    /// Verifies the Windows bridge falls back to the standard white diffuse texture and clears texture slot zero when materials expose no texture bindings.
+    /// Verifies the Windows bridge uses the current two-argument standard-material default API and current renderer-owned fallback texture property.
     /// </summary>
     [Fact]
-    public void Win32RenderBridge_standard_material_texture_binding_path_uses_pixel_texture_fallback_and_clears_empty_slots() {
+    public void Win32RenderBridge_standard_material_defaults_use_current_generated_apis() {
         string repositoryRootPath = ResolveWindowsRepositoryRootPath();
         string sourcePath = Path.Combine(repositoryRootPath, "src", "platform", "windows", "win32", "win32_render_bridge.cpp");
 
         string implementationSource = File.ReadAllText(sourcePath);
 
-        Assert.Contains("texture = TextureUtils::get_PixelTexture();", implementationSource, StringComparison.Ordinal);
-        Assert.Contains("context->PSSetShaderResources(0, 1, &nullResourceView);", implementationSource, StringComparison.Ordinal);
-        Assert.Contains("context->PSSetSamplers(0, 1, &nullSampler);", implementationSource, StringComparison.Ordinal);
+        string materialBuildSource = ExtractMethodBody(
+            implementationSource,
+            "RuntimeMaterial* Win32RenderManager3D::BuildMaterialFromRaw(");
+        string textureBindingSource = ExtractMethodBody(
+            implementationSource,
+            "void Win32RenderManager3D::BindMaterialTextures(");
+
+        Assert.Contains(
+            "StandardMaterialTextureBindingDefaults::Apply(shaderRuntimeMaterial, renderManager2D);",
+            materialBuildSource,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "RenderManager2D* renderManager2D = OwnerCore != nullptr",
+            materialBuildSource,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "StandardMaterialTextureBindingDefaults::Apply(shaderRuntimeMaterial);",
+            materialBuildSource,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain("TextureUtils::get_PixelTexture()", textureBindingSource, StringComparison.Ordinal);
+        Assert.Contains("renderManager2D->get_PixelTexture()", textureBindingSource, StringComparison.Ordinal);
+        Assert.Contains("context->PSSetShaderResources(0, ClearedMaterialTextureSlotCount, clearedShaderResources);", textureBindingSource, StringComparison.Ordinal);
+        Assert.Contains("context->PSSetSamplers(0, ClearedMaterialTextureSlotCount, clearedSamplers);", textureBindingSource, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// Verifies the Windows native build consumes the current generated-core handoff translation unit and optional runtime manifest sources.
+    /// </summary>
+    [Fact]
+    public void Win32NativeBuild_consumes_current_generated_core_handoff_and_runtime_manifest_sources() {
+        string repositoryRootPath = ResolveWindowsRepositoryRootPath();
+        string cmakePath = Path.Combine(repositoryRootPath, "CMakeLists.txt");
+
+        string cmakeSource = File.ReadAllText(cmakePath);
+
+        Assert.Contains("generated_windows_handoff.cmake", cmakeSource, StringComparison.Ordinal);
+        Assert.Contains("CPP_GENERATED_UNITY_SOURCE", cmakeSource, StringComparison.Ordinal);
+        Assert.Contains("runtime/runtime_startup_manifest.cpp", cmakeSource, StringComparison.Ordinal);
+        Assert.Contains("runtime/runtime_scene_catalog_manifest.cpp", cmakeSource, StringComparison.Ordinal);
     }
 
     /// <summary>

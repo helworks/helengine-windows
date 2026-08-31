@@ -1228,7 +1228,10 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
         runtimeMaterial->SetRenderState(materialAsset->RenderState);
         shaderRuntimeMaterial->ApplyConstantBufferDefaults(materialAsset->ConstantBuffers);
 #if __has_include("StandardMaterialTextureBindingDefaults.hpp")
-        StandardMaterialTextureBindingDefaults::Apply(shaderRuntimeMaterial);
+        RenderManager2D* renderManager2D = OwnerCore != nullptr
+            ? OwnerCore->get_RenderManager2D()
+            : nullptr;
+        StandardMaterialTextureBindingDefaults::Apply(shaderRuntimeMaterial, renderManager2D);
 #endif
 
         std::size_t authoredConstantBufferCount = 0;
@@ -3057,6 +3060,14 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
         ID3D11DeviceContext* context = Bootstrap.GetDeviceContext();
         ID3D11ShaderResourceView* clearedShaderResources[ClearedMaterialTextureSlotCount] = {};
         ID3D11SamplerState* clearedSamplers[ClearedMaterialTextureSlotCount] = {};
+#if __has_include("StandardMaterialTextureBindingDefaults.hpp")
+        RenderManager2D* renderManager2D = OwnerCore != nullptr
+            ? OwnerCore->get_RenderManager2D()
+            : nullptr;
+        RuntimeTexture* pixelTexture = renderManager2D != nullptr
+            ? renderManager2D->get_PixelTexture()
+            : nullptr;
+#endif
         context->PSSetShaderResources(0, ClearedMaterialTextureSlotCount, clearedShaderResources);
         context->PSSetSamplers(0, ClearedMaterialTextureSlotCount, clearedSamplers);
 
@@ -3080,14 +3091,16 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
             RuntimeTexture* texture = ResolveMaterialTexture(shaderRuntimeMaterial, bindingName);
 #if __has_include("StandardMaterialTextureBindingDefaults.hpp")
             if (texture == nullptr && String::Equals(bindingName, StandardMaterialTextureBindingDefaults::DiffuseTextureBindingName, StringComparison::Ordinal)) {
-                texture = TextureUtils::get_PixelTexture();
+                texture = pixelTexture;
             }
 #endif
             ID3D11ShaderResourceView* resourceView = ResolveTextureResourceView(texture);
-            if (resourceView == nullptr && texture == TextureUtils::get_PixelTexture()) {
+#if __has_include("StandardMaterialTextureBindingDefaults.hpp")
+            if (resourceView == nullptr && texture == pixelTexture && pixelTexture != nullptr) {
                 EnsureWhiteTextureFallbackResource();
                 resourceView = WhiteTextureFallbackShaderResourceView.Get();
             }
+#endif
 
             const int32_t shaderSlot = ResolveDirectX11TextureBindingSlot(binding->get_Slot());
             if (shaderSlot < 0) {
