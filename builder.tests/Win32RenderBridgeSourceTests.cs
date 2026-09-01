@@ -57,13 +57,15 @@ public sealed class Win32RenderBridgeSourceTests {
     }
 
     /// <summary>
-    /// Verifies the Windows bridge uses the current two-argument standard-material default API and current renderer-owned fallback texture property.
+    /// Verifies the Windows bridge injects the active 2D renderer and uses that exact instance for standard-material defaults and fallback textures.
     /// </summary>
     [Fact]
     public void Win32RenderBridge_standard_material_defaults_use_current_generated_apis() {
         string repositoryRootPath = ResolveWindowsRepositoryRootPath();
+        string headerPath = Path.Combine(repositoryRootPath, "src", "platform", "windows", "win32", "win32_render_bridge.hpp");
         string sourcePath = Path.Combine(repositoryRootPath, "src", "platform", "windows", "win32", "win32_render_bridge.cpp");
 
+        string headerSource = File.ReadAllText(headerPath);
         string implementationSource = File.ReadAllText(sourcePath);
 
         string materialBuildSource = ExtractMethodBody(
@@ -72,23 +74,80 @@ public sealed class Win32RenderBridgeSourceTests {
         string textureBindingSource = ExtractMethodBody(
             implementationSource,
             "void Win32RenderManager3D::BindMaterialTextures(");
+        string cameraRenderSource = ExtractMethodBody(
+            implementationSource,
+            "void Win32RenderManager3D::RenderCamera(");
 
         Assert.Contains(
-            "StandardMaterialTextureBindingDefaults::Apply(shaderRuntimeMaterial, renderManager2D);",
+            "Win32RenderManager3D(DirectX11Bootstrap& bootstrap, Win32RenderManager2D& renderManager2D);",
+            headerSource,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "Win32RenderManager2D* RenderManager2DBridge;",
+            headerSource,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "StandardMaterialTextureBindingDefaults::Apply(shaderRuntimeMaterial, RenderManager2DBridge);",
             materialBuildSource,
             StringComparison.Ordinal);
         Assert.Contains(
-            "RenderManager2D* renderManager2D = OwnerCore != nullptr",
-            materialBuildSource,
+            "RenderManager3D::Win32RenderManager3D(DirectX11Bootstrap& bootstrap, Win32RenderManager2D& renderManager2D)",
+            implementationSource,
             StringComparison.Ordinal);
+        Assert.Contains(
+            ", RenderManager2DBridge(&renderManager2D)",
+            implementationSource,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain("OwnerCore->get_RenderManager2D()", materialBuildSource, StringComparison.Ordinal);
+        Assert.DoesNotContain("OwnerCore->get_RenderManager2D()", textureBindingSource, StringComparison.Ordinal);
+        Assert.Contains("RenderManager2DBridge->RenderCamera(camera);", cameraRenderSource, StringComparison.Ordinal);
+        Assert.DoesNotContain("Core::get_Instance()->get_RenderManager2D()", cameraRenderSource, StringComparison.Ordinal);
         Assert.DoesNotContain(
             "StandardMaterialTextureBindingDefaults::Apply(shaderRuntimeMaterial);",
             materialBuildSource,
             StringComparison.Ordinal);
         Assert.DoesNotContain("TextureUtils::get_PixelTexture()", textureBindingSource, StringComparison.Ordinal);
-        Assert.Contains("renderManager2D->get_PixelTexture()", textureBindingSource, StringComparison.Ordinal);
+        Assert.Contains("RenderManager2DBridge->get_PixelTexture()", textureBindingSource, StringComparison.Ordinal);
         Assert.Contains("context->PSSetShaderResources(0, ClearedMaterialTextureSlotCount, clearedShaderResources);", textureBindingSource, StringComparison.Ordinal);
         Assert.Contains("context->PSSetSamplers(0, ClearedMaterialTextureSlotCount, clearedSamplers);", textureBindingSource, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// Verifies the application constructs the shared 2D bridge before injecting it into the 3D bridge.
+    /// </summary>
+    [Fact]
+    public void Win32Application_constructs_2d_bridge_before_injecting_it_into_3d_bridge() {
+        string repositoryRootPath = ResolveWindowsRepositoryRootPath();
+        string headerPath = Path.Combine(repositoryRootPath, "src", "platform", "windows", "win32", "win32_render_bridge.hpp");
+        string sourcePath = Path.Combine(repositoryRootPath, "src", "platform", "windows", "win32", "win32_application.cpp");
+
+        string headerSource = File.ReadAllText(headerPath);
+        string implementationSource = File.ReadAllText(sourcePath);
+
+        int twoDimensionalConstructionIndex = implementationSource.IndexOf(
+            "EngineRenderManager2D = new Win32RenderManager2D(*Bootstrap);",
+            StringComparison.Ordinal);
+        int threeDimensionalConstructionIndex = implementationSource.IndexOf(
+            "EngineRenderManager3D = new Win32RenderManager3D(*Bootstrap, *EngineRenderManager2D);",
+            StringComparison.Ordinal);
+        int threeDimensionalDeletionIndex = implementationSource.IndexOf(
+            "delete EngineRenderManager3D;",
+            StringComparison.Ordinal);
+        int twoDimensionalDeletionIndex = implementationSource.IndexOf(
+            "delete EngineRenderManager2D;",
+            StringComparison.Ordinal);
+
+        Assert.Contains(
+            "Win32RenderManager3D(DirectX11Bootstrap& bootstrap, Win32RenderManager2D& renderManager2D);",
+            headerSource,
+            StringComparison.Ordinal);
+        Assert.True(twoDimensionalConstructionIndex >= 0);
+        Assert.True(threeDimensionalConstructionIndex >= 0);
+        Assert.True(twoDimensionalConstructionIndex < threeDimensionalConstructionIndex);
+        Assert.True(threeDimensionalDeletionIndex >= 0);
+        Assert.True(twoDimensionalDeletionIndex >= 0);
+        Assert.True(threeDimensionalDeletionIndex < twoDimensionalDeletionIndex);
+        Assert.DoesNotContain("EngineRenderManager3D = new Win32RenderManager3D(*Bootstrap);", implementationSource, StringComparison.Ordinal);
     }
 
     /// <summary>

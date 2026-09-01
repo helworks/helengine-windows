@@ -1005,8 +1005,9 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
     }
 
     /// Creates the native renderer bridge for one DirectX11 bootstrap.
-    Win32RenderManager3D::Win32RenderManager3D(DirectX11Bootstrap& bootstrap)
+    Win32RenderManager3D::Win32RenderManager3D(DirectX11Bootstrap& bootstrap, Win32RenderManager2D& renderManager2D)
         : Bootstrap(bootstrap)
+        , RenderManager2DBridge(&renderManager2D)
         , CurrentViewProjection(::float4x4::get_Identity())
         , CurrentShadowViewProjection(::float4x4::get_Identity())
         , CurrentCameraPosition(0.0f, 0.0f, 0.0f) {
@@ -1228,10 +1229,7 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
         runtimeMaterial->SetRenderState(materialAsset->RenderState);
         shaderRuntimeMaterial->ApplyConstantBufferDefaults(materialAsset->ConstantBuffers);
 #if __has_include("StandardMaterialTextureBindingDefaults.hpp")
-        RenderManager2D* renderManager2D = OwnerCore != nullptr
-            ? OwnerCore->get_RenderManager2D()
-            : nullptr;
-        StandardMaterialTextureBindingDefaults::Apply(shaderRuntimeMaterial, renderManager2D);
+        StandardMaterialTextureBindingDefaults::Apply(shaderRuntimeMaterial, RenderManager2DBridge);
 #endif
 
         std::size_t authoredConstantBufferCount = 0;
@@ -2259,10 +2257,7 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
             renderQueue->VisitOrdered(this);
         }
 
-        Win32RenderManager2D* renderManager2D = static_cast<Win32RenderManager2D*>(Core::get_Instance()->get_RenderManager2D());
-        if (renderManager2D != nullptr) {
-            renderManager2D->RenderCamera(camera);
-        }
+        RenderManager2DBridge->RenderCamera(camera);
     }
 
     /// Copies the currently visible authored lights relevant to one camera into a render-ready list.
@@ -3061,12 +3056,7 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
         ID3D11ShaderResourceView* clearedShaderResources[ClearedMaterialTextureSlotCount] = {};
         ID3D11SamplerState* clearedSamplers[ClearedMaterialTextureSlotCount] = {};
 #if __has_include("StandardMaterialTextureBindingDefaults.hpp")
-        RenderManager2D* renderManager2D = OwnerCore != nullptr
-            ? OwnerCore->get_RenderManager2D()
-            : nullptr;
-        RuntimeTexture* pixelTexture = renderManager2D != nullptr
-            ? renderManager2D->get_PixelTexture()
-            : nullptr;
+        RuntimeTexture* pixelTexture = RenderManager2DBridge->get_PixelTexture();
 #endif
         context->PSSetShaderResources(0, ClearedMaterialTextureSlotCount, clearedShaderResources);
         context->PSSetSamplers(0, ClearedMaterialTextureSlotCount, clearedSamplers);

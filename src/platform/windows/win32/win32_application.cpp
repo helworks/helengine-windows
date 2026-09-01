@@ -538,8 +538,8 @@ namespace helengine::windows {
         delete EngineCore;
         delete EngineAudioBackend;
         delete EngineInputBackend;
-        delete EngineRenderManager2D;
         delete EngineRenderManager3D;
+        delete EngineRenderManager2D;
 #endif
     }
 
@@ -681,8 +681,8 @@ namespace helengine::windows {
 #endif
         EngineCore = new Core(options);
 
-        EngineRenderManager3D = new Win32RenderManager3D(*Bootstrap);
         EngineRenderManager2D = new Win32RenderManager2D(*Bootstrap);
+        EngineRenderManager3D = new Win32RenderManager3D(*Bootstrap, *EngineRenderManager2D);
         EngineAudioBackend = new Win32AudioBackend();
         EngineInputBackend = new Win32InputBackend(MainWindow.get());
 

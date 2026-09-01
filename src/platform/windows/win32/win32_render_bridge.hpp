@@ -47,6 +47,7 @@ class RenderCommandListBuilder2D;
 
 namespace helengine::windows {
     class DirectX11Bootstrap;
+    class Win32RenderManager2D;
 
 #if __has_include("RenderManager2D.hpp")
     /// Stores one uploaded mesh resource that can be drawn by the Windows DirectX11 bridge.
@@ -118,8 +119,8 @@ namespace helengine::windows {
     /// Provides a minimal native 3D renderer bridge that draws all cameras onto the main back buffer in draw order.
     class Win32RenderManager3D : public RenderManager3D, public IRenderVisitor3D, public IShaderRenderManager3D {
     public:
-        /// Creates the native renderer bridge for one DirectX11 bootstrap.
-        explicit Win32RenderManager3D(DirectX11Bootstrap& bootstrap);
+        /// Creates the native renderer bridge for one DirectX11 bootstrap and its shared active 2D renderer.
+        Win32RenderManager3D(DirectX11Bootstrap& bootstrap, Win32RenderManager2D& renderManager2D);
 
         /// Returns the number of uploaded texture resources currently cached by the Windows bridge.
         std::size_t GetTextureResourceCount() const;
@@ -271,6 +272,9 @@ namespace helengine::windows {
 
         /// Stores the DirectX11 bootstrap used for device access and presentation resources.
         DirectX11Bootstrap& Bootstrap;
+
+        /// Stores the application's active 2D renderer without taking ownership of its lifetime.
+        Win32RenderManager2D* RenderManager2DBridge;
 
         /// Stores the simple fixed vertex shader for the first Windows mesh pass.
         Microsoft::WRL::ComPtr<ID3D11VertexShader> VertexShader;
