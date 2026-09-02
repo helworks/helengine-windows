@@ -15,6 +15,7 @@ namespace helengine.windows.builder.tests;
 /// <summary>
 /// Verifies the Windows builder metadata and payload staging behavior.
 /// </summary>
+[Collection(ProcessCurrentDirectoryCollection.Name)]
 public class WindowsPlatformAssetBuilderTests {
     /// <summary>
     /// Verifies the builder exposes the expected Windows metadata.

@@ -13,6 +13,7 @@ namespace helengine.windows.builder.tests;
 /// <summary>
 /// Verifies profiler-only native artifacts are packaged with the Windows player and recorded for build traceability.
 /// </summary>
+[Collection(ProcessCurrentDirectoryCollection.Name)]
 public sealed class WindowsProfilerArtifactPackagingTests {
     /// <summary>
     /// Verifies profiler packages include the generated scope manifest and native symbols and record both artifacts.
@@ -205,6 +206,10 @@ public sealed class WindowsProfilerArtifactPackagingTests {
             Dictionary<string, string> codegenOptions = new(StringComparer.Ordinal) {
                 ["codegen-generated-function-profiling"] = profileId == "profiler" ? "true" : "false"
             };
+            if (string.Equals(profileId, "profiler", StringComparison.Ordinal)) {
+                codegenOptions[WindowsGeneratedFunctionProfilingPolicy.MaintainedSymbolPrefixesSettingId] =
+                    WindowsGeneratedFunctionProfilingPolicy.CoarseMaintainedSymbolPrefixes;
+            }
 
             return new PlatformBuildRequest(
                 manifest,
