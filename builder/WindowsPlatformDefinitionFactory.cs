@@ -319,6 +319,13 @@ public static class WindowsPlatformDefinitionFactory {
                             PlatformSettingKind.Text,
                             WindowsGeneratedFunctionProfilingPolicy.CoarseMaintainedSymbolPrefixes,
                             true,
+                            []),
+                        new PlatformSettingDefinition(
+                            "codegen-use-rtti",
+                            "Use Compiler RTTI",
+                            PlatformSettingKind.Boolean,
+                            "true",
+                            true,
                             [])
                     ])
             ],
