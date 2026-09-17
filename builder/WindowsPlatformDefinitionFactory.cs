@@ -326,6 +326,13 @@ public static class WindowsPlatformDefinitionFactory {
                             PlatformSettingKind.Boolean,
                             "true",
                             true,
+                            []),
+                        new PlatformSettingDefinition(
+                            "codegen-use-exceptions",
+                            "Use C++ Exceptions",
+                            PlatformSettingKind.Boolean,
+                            "true",
+                            true,
                             [])
                     ])
             ],
