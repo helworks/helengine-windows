@@ -19,6 +19,10 @@
   </ItemGroup>
 
   <ItemGroup>
+    <None Include="..\src\platform\windows\win32\win32_application.cpp" Link="TestInputs\win32_application.cpp" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\builder\helengine.windows.builder.csproj" SkipGetTargetFrameworkProperties="true" />
     <ProjectReference Include="$(HelEngineRoot)\engine\helengine.baseplatform\helengine.baseplatform.csproj" SkipGetTargetFrameworkProperties="true" />
   </ItemGroup>

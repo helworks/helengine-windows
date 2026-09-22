@@ -103,6 +103,10 @@
 #include "Physics3DRuntimeComponentRegistration.hpp"
 #define HELENGINE_WINDOWS_HAS_PHYSICS3D_RUNTIME 1
 #endif
+#if __has_include("GeneratedRuntimeModuleRegistration.hpp")
+#include "GeneratedRuntimeModuleRegistration.hpp"
+#define HELENGINE_WINDOWS_HAS_GENERATED_RUNTIME_MODULE_REGISTRATION 1
+#endif
 #endif
 
 namespace helengine::windows {
@@ -694,13 +698,17 @@ namespace helengine::windows {
         PlatformInfo* platformInfo = BuildRuntimePlatformInfo();
         EngineCore->Initialize(EngineRenderManager3D, EngineRenderManager2D, EngineInputBackend, platformInfo, options);
         EngineCore->SetAudioBackend(EngineAudioBackend);
+#if defined(HELENGINE_WINDOWS_HAS_GENERATED_RUNTIME_MODULE_REGISTRATION)
+        RegisterGeneratedRuntimeModules(EngineCore);
+        WriteLifecycleLog("Generated runtime modules registered.");
+#endif
 #if defined(HELENGINE_WINDOWS_HAS_PHYSICS3D_RUNTIME)
 #if defined(HELENGINE_WINDOWS_PHYSICS_VELOCITY_ITERATIONS) && defined(HELENGINE_WINDOWS_PHYSICS_SUBSTEPS)
         Physics3DRuntimeComponentRegistration::RegisterWithSolveSchedule(
             EngineCore,
             HELENGINE_WINDOWS_PHYSICS_VELOCITY_ITERATIONS,
             HELENGINE_WINDOWS_PHYSICS_SUBSTEPS);
-#else
+#elif !defined(HELENGINE_WINDOWS_HAS_GENERATED_RUNTIME_MODULE_REGISTRATION)
         Physics3DRuntimeComponentRegistration::Register(EngineCore);
 #endif
         WriteLifecycleLog("3D physics runtime registered.");
