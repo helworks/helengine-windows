@@ -24,8 +24,8 @@ frame does not depend on wall-clock time.
   image (differing pixels magenta, the rest greyscale) is written to `<WorkRoot>\diffs\<scene>.diff.png`.
 - A frame is **blank** when one color covers at least 99.9% of its pixels.
 
-Goldens are machine-local. They were recorded on Helena's machine and GPU, and other GPUs or drivers are not
-expected to match.
+Goldens are machine-local: they are only valid on the machine, GPU and driver that recorded them, and other GPUs or
+drivers are not expected to match.
 
 ## How to run
 
@@ -72,7 +72,8 @@ helengine moved on purpose). Never re-record just to make a failing `-Verify` pa
 1. Run `-Verify` first and look at the `diffs\*.diff.png` images to confirm that the changes are the intended ones.
 2. Run `-Record`. It runs every scene twice (`captures\a` and `captures\b`). A scene whose two captures do not match
    within the thresholds is marked `unstable` in the manifest and gets no golden; `-Verify` then prints
-   `SKIP golden <scene> unstable` for it. Record lists the unstable scenes at the end and still exits 0 when every
+   `SKIP golden <scene> unstable` for it. Record writes the goldens and `manifest.json` (listing the unstable scenes)
+   before it runs the test suites, then writes each suite's baseline after that suite, and still exits 0 when every
    build and run succeeded.
 3. Run `-Verify` twice to confirm that the new goldens pass with no false failures.
 4. Commit `regression\golden\*.png`, `regression\golden\manifest.json` and `regression\baselines\*.failing.txt`

@@ -563,7 +563,7 @@ if ($Record) {
             $sceneStatus = 'stable'
         }
         elseif ($stableRun.ExitCode -eq 1) {
-            Add-CheckResult -Status SKIP -Kind golden -Name $sceneId -Detail ("unstable " + $stableDetail)
+            Add-CheckResult -Status SKIP -Kind golden -Name $sceneId -Detail $stableDetail
             $unstableSceneIds.Add($sceneId)
             $sceneStatus = 'unstable'
         }
@@ -578,16 +578,9 @@ if ($Record) {
         $manifestScenes.Add([ordered]@{ id = $sceneId; kind = 'golden'; status = $sceneStatus })
     }
 
-    # 12R. Record each test suite's failing-test set as its baseline.
-    foreach ($testSuite in $testSuites) {
-        $failingListPath = Invoke-TestSuite -SuiteName $testSuite.Name -ProjectPath $testSuite.ProjectPath -ExtraArguments $testSuite.ExtraArguments
-        $baselinePath = Join-Path $baselineRootPath "$($testSuite.Name).failing.txt"
-        Copy-Item -LiteralPath $failingListPath -Destination $baselinePath -Force
-        $failingCount = @(Get-Content -LiteralPath $baselinePath | Where-Object { $_.Length -gt 0 }).Count
-        Add-CheckResult -Status PASS -Kind suite -Name $testSuite.Name -Detail "baseline recorded ($failingCount failing): $baselinePath"
-    }
-
-    # 13R. Write the manifest: run settings, each scene's check kind and status, and the provenance of the record.
+    # 12R. Write the manifest right after the goldens and before any test suite runs, so that the goldens and the
+    #      manifest always describe the same record even when a suite step throws: run settings, each scene's check
+    #      kind and status, and the provenance of the record.
     $manifestDocument = [ordered]@{
         frames = 30
         fixedDelta = 0.016666
@@ -603,6 +596,15 @@ if ($Record) {
     Write-Output ("MANIFEST=" + $manifestPath)
     if ($unstableSceneIds.Count -gt 0) {
         Write-Output ("UNSTABLE scenes (no golden recorded): " + ($unstableSceneIds -join ', '))
+    }
+
+    # 13R. Record each test suite's failing-test set as its baseline, each one written right after its suite runs.
+    foreach ($testSuite in $testSuites) {
+        $failingListPath = Invoke-TestSuite -SuiteName $testSuite.Name -ProjectPath $testSuite.ProjectPath -ExtraArguments $testSuite.ExtraArguments
+        $baselinePath = Join-Path $baselineRootPath "$($testSuite.Name).failing.txt"
+        Copy-Item -LiteralPath $failingListPath -Destination $baselinePath -Force
+        $failingCount = @(Get-Content -LiteralPath $baselinePath | Where-Object { $_.Length -gt 0 }).Count
+        Add-CheckResult -Status PASS -Kind suite -Name $testSuite.Name -Detail "baseline recorded ($failingCount failing): $baselinePath"
     }
 }
 else {
