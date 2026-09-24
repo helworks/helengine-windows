@@ -19,6 +19,9 @@ public sealed class WindowsLauncherScriptTests {
         Assert.Contains("[string]$ArtifactPath", scriptSource, StringComparison.Ordinal);
         Assert.Contains(".exe", scriptSource, StringComparison.Ordinal);
         Assert.Contains("Start-Process -FilePath $resolvedArtifactPath", scriptSource, StringComparison.Ordinal);
+        Assert.Contains("[string[]]$ArgumentList", scriptSource, StringComparison.Ordinal);
+        Assert.Contains("[switch]$Wait", scriptSource, StringComparison.Ordinal);
+        Assert.Contains("EXIT_CODE=", scriptSource, StringComparison.Ordinal);
     }
 
     /// <summary>
