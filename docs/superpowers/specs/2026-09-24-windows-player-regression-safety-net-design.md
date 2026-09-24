@@ -110,3 +110,17 @@ Consequences:
 - **Unit tests** for the comparer (identical images, one-pixel difference, threshold edge cases, size mismatch), the blank detector, the BMP reader round-trip against the writer's format, the TRX parser, the failing-set comparison, and the build-config writer.
 - **`builder.tests` source-text tests** for the new C++ classes, in the style of the existing ones: the flag names are present, and the capture is only constructed when the flag is set.
 - **End to end:** `-Record` followed by two `-Verify` runs, all passing, is this subproject's acceptance test.
+
+## Revision 1 (2026-09-24): test project changed to DemoDisc
+
+`helengine\test-project` cannot be built at the current helengine `main`. All of its scenes are asset format 24, while the editor now requires format 25 (`EditorAssetBinarySerializer.CurrentVersion = 25`). Helena chose to use DemoDisc instead. This replaces every `test-project` reference above:
+
+- **Source.** The source project is `C:\dev\helprojs\demodisc` at its **committed HEAD**, not its working tree, which contains Helena's uncommitted work.
+  - The script extracts `git -C <demodisc> archive HEAD` into `<WorkRoot>\project`, then copies the git-ignored `user_settings\` folder (and `user_settings\generated_code`) from the working tree.
+  - Only the copy is ever written. DemoDisc itself is never modified.
+  - If DemoDisc stores assets in Git LFS (it has `filter=lfs` in `.gitattributes`), stop and report, because `git archive` would export pointer files.
+- **Parameters.** The script gets `-ProjectSource` (default `C:\dev\helprojs\demodisc`). `-HelengineRoot` is still used for the editor, `build-platform.ps1`, the platforms manifest and the editor test suites.
+- **Smoke scene.** `DemoDiscMainMenu.helen` replaces Bootstrap and is ordered first.
+- **Golden scenes.** Every scene in `assets\scenes\rendering\*.helen`. Scene ids use DemoDisc's own id format; the script derives it the same way DemoDisc's existing `build_config.json` entries for other platforms spell their ids (project-relative path under `assets\`, forward slashes, original casing).
+- **Engine version.** DemoDisc's `requiredEngineVersion` already matches the main manifest. The script still enforces the equality by copying the windows entry's `engineVersion` into the copy, which is harmless when they are already equal.
+- **Manifest provenance.** `manifest.json` also records `projectSource` and `projectCommit` (the DemoDisc HEAD). `-Verify` prints a WARN line when DemoDisc's HEAD differs from the recorded commit. Goldens are then stale by design, and re-recording is a deliberate act documented in `regression\README.md`.
