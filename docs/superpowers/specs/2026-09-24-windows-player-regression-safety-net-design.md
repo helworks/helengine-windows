@@ -71,14 +71,32 @@ Steps:
    - It prints one line per check (PASS/FAIL, the percentage of differing pixels, and the diff image path) and a final summary.
    - It exits 0 only if every check passes.
 
-## 5. Worktree setup (build isolation)
+## 5. Build isolation (the script always builds its own checkout)
 
-The build finds the Windows platform through `helengine\user_settings\platforms.json`, which is git-ignored and specific to each checkout. Work therefore happens in a **pair** of worktrees:
+Facts found while planning:
+- The editor CLI reads platform installations from the **main** helengine checkout's `user_settings\platforms.json`, even when it runs from a worktree. The only exception is when the env var `HELENGINE_ENGINE_USER_SETTINGS_ROOT` is set (`EditorSourceBuildWorkspaceLocator.cs:198-206`).
+- Relative paths in that file resolve against the file's own folder. Absolute paths are used as-is.
+- The project's `requiredEngineVersion` must equal the entry's `engineVersion` exactly. test-project currently declares a different version from the main manifest.
+- `builder` and `builder.tests` need `-p:HelEngineRoot=<helengine>` when they are built from a worktree. `builderAssemblyPath` points at a prebuilt builder DLL.
 
-- `helengine-windows\.worktrees\regression-safety-net` (branch `feature/regression-safety-net`), where all commits are made;
-- `helengine\.worktrees\regression-safety-net`, a detached worktree at `main` with no commits. Its local `user_settings\platforms.json` points the windows entry (`builderAssemblyPath`, `playerSourceRootPath`) at the helengine-windows worktree by absolute path.
+Therefore the script, and never Helena's files, does the following:
+1. It builds `<this checkout>\builder` with `-p:HelEngineRoot=<HelengineRoot>`.
+2. It writes `<WorkRoot>\engine-user-settings\platforms.json`, a copy of `<HelengineRoot>\user_settings\platforms.json` in which the windows entry's `builderAssemblyPath` and `playerSourceRootPath` are **absolute paths into the checkout the script lives in** (`$PSScriptRoot\..`).
+3. It sets `HELENGINE_ENGINE_USER_SETTINGS_ROOT` to that folder, for the build process only.
+4. It rewrites the **copy's** `project.heproj` `requiredEngineVersion` to the windows entry's `engineVersion`.
 
-The script's `-HelengineRoot` points at the helengine worktree during development. The first plan task proves the build compiles the worktree sources (a deliberate marker log line) before anything else is built on top.
+Consequences:
+- No helengine worktree is needed, and helengine is never modified. `-HelengineRoot` (default `C:\dev\helworks\helengine`) supplies the editor, `build-platform.ps1` and `test-project`.
+- The script has a `-BuildOnly` switch, used while developing the native changes, and it prints the resolved `playerSourceRootPath` so a reader can see which checkout was built.
+- Every `builder`/`builder.tests` build and test run passes `-p:HelEngineRoot`.
+- `launch_in_emulator.ps1` keeps the strings its existing tests assert (`[string]$ArtifactPath`, `.exe`, `Start-Process -FilePath $resolvedArtifactPath`).
+
+**Window size:** the copy's `build_config.json` sets `selectedGraphicsOptionValues` `default-width` 640 and `default-height` 360. The script also writes `<WorkRoot>\player\profile.json` (`{"resolutionWidth":640,"resolutionHeight":360}`) before every run, because a `profile.json` left from an earlier run would otherwise win.
+
+**Other details:**
+- The copy also includes `user_settings\generated_code`.
+- `--frames` counts only frames that actually render, because RenderFrame skips minimized or zero-size frames.
+- Captures ignore the alpha channel: the swap chain uses `ALPHA_MODE_IGNORE`, so alpha is undefined.
 
 ## 6. Order of work and safety
 
