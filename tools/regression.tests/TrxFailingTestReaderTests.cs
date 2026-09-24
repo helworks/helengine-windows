@@ -11,8 +11,7 @@ public sealed class TrxFailingTestReaderTests {
     /// </summary>
     [Fact]
     public void Read_returns_sorted_distinct_failed_test_names() {
-        Directory.CreateDirectory(TestOutputDirectory);
-        string path = Path.Combine(TestOutputDirectory, "results.trx");
+        string path = Path.Combine(RegressionTestFixtures.TestOutputDirectory, "results.trx");
         File.WriteAllText(path, """
             <?xml version="1.0" encoding="UTF-8"?>
             <TestRun xmlns="http://microsoft.com/schemas/VisualStudio/TeamTest/2010">
@@ -29,9 +28,4 @@ public sealed class TrxFailingTestReaderTests {
 
         Assert.Equal(new[] { "Namespace.ClassA.Test_One", "Namespace.ClassC.Test_Three" }, failing);
     }
-
-    /// <summary>
-    /// Gets the directory used for temporary TRX fixtures written by these tests.
-    /// </summary>
-    static string TestOutputDirectory => Path.Combine(AppContext.BaseDirectory, "test-output");
 }

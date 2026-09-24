@@ -13,8 +13,7 @@ public sealed class PngImageStoreTests {
     /// </summary>
     [Fact]
     public void Save_then_load_round_trips_identical_bgra_bytes() {
-        Directory.CreateDirectory(TestOutputDirectory);
-        string path = Path.Combine(TestOutputDirectory, "round-trip.png");
+        string path = Path.Combine(RegressionTestFixtures.TestOutputDirectory, "round-trip.png");
         byte[] bgra = {
             10, 20, 30, 255,
             200, 150, 100, 255,
@@ -30,9 +29,4 @@ public sealed class PngImageStoreTests {
         Assert.Equal(original.Height, loaded.Height);
         Assert.Equal(original.Bgra, loaded.Bgra);
     }
-
-    /// <summary>
-    /// Gets the directory used for temporary PNG fixtures written by these tests.
-    /// </summary>
-    static string TestOutputDirectory => Path.Combine(AppContext.BaseDirectory, "test-output");
 }

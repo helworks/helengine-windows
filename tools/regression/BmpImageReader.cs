@@ -1,18 +1,21 @@
 namespace helengine.windows.regression;
 
 /// <summary>
-/// Reads uncompressed 32-bit BMP capture files produced by the Windows player's screenshot
-/// pipeline into an in-memory, top-down <see cref="RegressionImage"/>.
+/// Reads uncompressed 32-bit BI_RGB BMP capture files produced by the Windows player's screenshot
+/// pipeline into an in-memory, top-down <see cref="RegressionImage"/>. Only BI_RGB is supported:
+/// the player's capture writer never emits BI_BITFIELDS, so accepting it would silently trust an
+/// unvalidated channel layout.
 /// </summary>
 public static class BmpImageReader {
     /// <summary>
-    /// Reads a 32-bit BI_RGB or BI_BITFIELDS BMP file, stored in either bottom-up or top-down row
-    /// order, into a top-down <see cref="RegressionImage"/>.
+    /// Reads a 32-bit BI_RGB BMP file, stored in either bottom-up or top-down row order, into a
+    /// top-down <see cref="RegressionImage"/>.
     /// </summary>
     /// <param name="path">Path to the BMP file to read.</param>
     /// <returns>The decoded image with top-down BGRA pixel data.</returns>
     /// <exception cref="InvalidDataException">
-    /// Thrown when the file is not a well-formed 32-bit BI_RGB or BI_BITFIELDS BMP.
+    /// Thrown when the file is not a well-formed 32-bit BI_RGB BMP, or when the file is too short
+    /// to contain the pixel data its header describes.
     /// </exception>
     public static RegressionImage Read(string path) {
         byte[] file = File.ReadAllBytes(path);
@@ -40,13 +43,18 @@ public static class BmpImageReader {
             throw new InvalidDataException($"'{path}' is not a 32-bit BMP (bit count {bitCount}).");
         }
 
-        if (compression != 0 && compression != 3) {
-            throw new InvalidDataException($"'{path}' has an unsupported BMP compression {compression}.");
+        if (compression != 0) {
+            throw new InvalidDataException($"'{path}' has an unsupported BMP compression {compression}; only BI_RGB (0) is supported.");
         }
 
         bool topDown = height < 0;
         int absoluteHeight = Math.Abs(height);
         int stride = width * 4;
+        long requiredLength = pixelDataOffset + (long)stride * absoluteHeight;
+        if (requiredLength > file.Length) {
+            throw new InvalidDataException($"'{path}' is truncated: expected at least {requiredLength} bytes of pixel data but the file is {file.Length} bytes.");
+        }
+
         byte[] bgra = new byte[stride * absoluteHeight];
 
         for (int y = 0; y < absoluteHeight; y++) {
