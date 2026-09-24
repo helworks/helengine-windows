@@ -22,7 +22,20 @@ if ([System.IO.Path]::GetExtension($resolvedArtifactPath) -ine '.exe') {
 
 if ($ArgumentList -and $ArgumentList.Count -gt 0) {
     $startArguments = @{ FilePath = $resolvedArtifactPath; WorkingDirectory = (Split-Path -Path $resolvedArtifactPath -Parent); PassThru = $true }
-    $startArguments['ArgumentList'] = $ArgumentList
+    # Start-Process joins the elements with plain spaces, so an element that is empty or contains whitespace or a
+    # quote is wrapped in double quotes with the CommandLineToArgvW escaping rules (backslashes before a quote or the
+    # closing quote are doubled, embedded quotes become \"). Simple elements are passed through unchanged.
+    $quotedArgumentList = New-Object System.Collections.Generic.List[string]
+    foreach ($argument in $ArgumentList) {
+        if ($argument.Length -eq 0 -or $argument -match '[\s"]') {
+            $escapedArgument = ($argument -replace '(\\*)"', '$1$1\"') -replace '(\\+)$', '$1$1'
+            $quotedArgumentList.Add('"' + $escapedArgument + '"')
+        }
+        else {
+            $quotedArgumentList.Add($argument)
+        }
+    }
+    $startArguments['ArgumentList'] = $quotedArgumentList.ToArray()
     $process = Start-Process @startArguments
 }
 else {

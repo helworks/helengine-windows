@@ -22,6 +22,7 @@ public sealed class WindowsLauncherScriptTests {
         Assert.Contains("[string[]]$ArgumentList", scriptSource, StringComparison.Ordinal);
         Assert.Contains("[switch]$Wait", scriptSource, StringComparison.Ordinal);
         Assert.Contains("EXIT_CODE=", scriptSource, StringComparison.Ordinal);
+        Assert.Contains("$quotedArgumentList", scriptSource, StringComparison.Ordinal);
     }
 
     /// <summary>
