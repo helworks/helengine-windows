@@ -26,6 +26,7 @@
 #include <sstream>
 #include <stdexcept>
 
+#include "platform/windows/directx11/directx11_back_buffer_capture.hpp"
 #include "platform/windows/directx11/directx11_bootstrap.hpp"
 #include "platform/windows/directx11/directx11_presenter.hpp"
 #include "platform/windows/runtime/runtime_memory_snapshot.hpp"
@@ -678,6 +679,9 @@ namespace helengine::windows {
             MainWindow->GetClientWidth(),
             MainWindow->GetClientHeight());
         Presenter = std::make_unique<DirectX11Presenter>(*Bootstrap);
+        if (CommandLineOptions.HasCapturePath()) {
+            BackBufferCapture = std::make_unique<DirectX11BackBufferCapture>(*Bootstrap);
+        }
         WriteLifecycleLog("DirectX 11 bootstrap initialized.");
     }
 
@@ -1730,6 +1734,15 @@ namespace helengine::windows {
 #endif
             }
 
+            if (BackBufferCapture && CommandLineOptions.HasFrameLimit() && RenderedFrameCount + 1 == CommandLineOptions.GetFrameLimit()) {
+                frameStage = "capture";
+                try {
+                    BackBufferCapture->CaptureToBmp(CommandLineOptions.GetCapturePath());
+                } catch (const std::exception& error) {
+                    throw Win32ExitRequest(3, std::string("Back-buffer capture failed: ") + error.what());
+                }
+            }
+
             if (shouldTraceFirstFrame) {
                 WriteLifecycleLog("First frame entering Presenter->RenderFrame().");
             }
@@ -1738,9 +1751,11 @@ namespace helengine::windows {
                 HELENGINE_TRACY_ZONE_N("Frame.PacingAndIdle");
                 Presenter->RenderFrame();
             }
-            RenderedFrameCount++;
-            if (CommandLineOptions.HasFrameLimit() && RenderedFrameCount >= CommandLineOptions.GetFrameLimit()) {
-                PostQuitMessage(0);
+            if (CommandLineOptions.HasFrameLimit()) {
+                RenderedFrameCount++;
+                if (RenderedFrameCount >= CommandLineOptions.GetFrameLimit()) {
+                    PostQuitMessage(0);
+                }
             }
             if (shouldTraceFirstFrame) {
                 WriteLifecycleLog("First frame completed Presenter->RenderFrame().");

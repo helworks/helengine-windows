@@ -1,3 +1,5 @@
+using System.Text.RegularExpressions;
+
 namespace helengine.windows.builder.tests;
 
 /// <summary>
@@ -50,6 +52,20 @@ public sealed class Win32CommandLineOptionsSourceTests {
         int quitIndex = applicationSource.IndexOf("PostQuitMessage(0)", StringComparison.Ordinal);
         Assert.True(presentIndex >= 0, "Presenter->RenderFrame(); was not found.");
         Assert.True(quitIndex > presentIndex, "PostQuitMessage(0) must follow Presenter->RenderFrame();.");
+    }
+
+    /// <summary>
+    /// Verifies the presented-frame counter is only advanced when <c>--frames</c> was supplied, so a no-argument run never
+    /// touches it (and cannot overflow it after a long uptime).
+    /// </summary>
+    [Fact]
+    public void Win32Application_counts_frames_only_when_frame_limit_supplied() {
+        string applicationSource = ReadRepositoryFile("src", "platform", "windows", "win32", "win32_application.cpp");
+
+        Assert.Single(Regex.Matches(applicationSource, @"RenderedFrameCount\+\+"));
+        Assert.Matches(
+            new Regex(@"if \(CommandLineOptions\.HasFrameLimit\(\)\) \{\s*RenderedFrameCount\+\+;\s*if \(RenderedFrameCount >= CommandLineOptions\.GetFrameLimit\(\)\) \{\s*PostQuitMessage\(0\);\s*\}\s*\}"),
+            applicationSource);
     }
 
     /// <summary>

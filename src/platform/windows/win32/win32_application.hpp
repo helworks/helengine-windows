@@ -30,6 +30,7 @@ class SceneAsset;
 class float4;
 
 namespace helengine::windows {
+    class DirectX11BackBufferCapture;
     class DirectX11Bootstrap;
     class DirectX11Presenter;
     class Win32AudioBackend;
@@ -282,6 +283,9 @@ namespace helengine::windows {
         /// Stores the clear/present helper for the bootstrap resources.
         std::unique_ptr<DirectX11Presenter> Presenter;
 
+        /// Stores the back-buffer capture used by --capture to save the final frame; null when --capture was not supplied.
+        std::unique_ptr<DirectX11BackBufferCapture> BackBufferCapture;
+
         /// Stores the process exit code requested by the Windows message loop.
         int ExitCode;
 
@@ -354,7 +358,7 @@ namespace helengine::windows {
         /// Stores the opt-in regression command-line options parsed once at startup; empty when the player runs without arguments.
         Win32CommandLineOptions CommandLineOptions;
 
-        /// Counts frames that reached Presenter->RenderFrame(), used to honor the --frames limit.
+        /// Counts frames that reached Presenter->RenderFrame() while --frames is active, used to honor the frame limit and pick the capture frame; never advanced without --frames.
         int RenderedFrameCount;
 
 #if defined(HELENGINE_WINDOWS_DEBUG_RUNTIME_DIAGNOSTICS) && __has_include("IRuntimeDiagnosticsProvider.hpp") && __has_include("RuntimeMemoryDiagnosticsSnapshot.hpp")

@@ -64,10 +64,12 @@ set(HELENGINE_WINDOWS_SOURCES
     src/platform/windows/runtime/runtime_player_profile_loader.cpp
     src/platform/windows/runtime/runtime_render_diagnostics.cpp
     src/platform/windows/runtime/windows_tracy_profiler.cpp
+    src/platform/windows/win32/bmp_image_writer.cpp
     src/platform/windows/win32/win32_application.cpp
     src/platform/windows/win32/win32_command_line_options.cpp
     src/platform/windows/win32/win32_exit_request.cpp
     src/platform/windows/win32/win32_window.cpp
+    src/platform/windows/directx11/directx11_back_buffer_capture.cpp
     src/platform/windows/directx11/directx11_bootstrap.cpp
     src/platform/windows/directx11/directx11_presenter.cpp
 )
