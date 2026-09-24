@@ -36,6 +36,7 @@
 #if __has_include("IAudioBackend.hpp")
 #include "platform/windows/win32/win32_audio_backend.hpp"
 #endif
+#include "platform/windows/win32/win32_exit_request.hpp"
 #include "platform/windows/win32/win32_input_bridge.hpp"
 #include "platform/windows/win32/win32_render_bridge.hpp"
 #include "platform/windows/win32/win32_window.hpp"
@@ -514,7 +515,9 @@ namespace helengine::windows {
           LastObservedSceneLoadEntityDepth(-1),
           FramesSinceSceneTraceChange(0),
           PendingSteadyStateCheckpoint(false),
-          BepuDebugSnapshotStatusLogCount(0)
+          BepuDebugSnapshotStatusLogCount(0),
+          CommandLineOptions(),
+          RenderedFrameCount(0)
 #if defined(HELENGINE_WINDOWS_DEBUG_RUNTIME_DIAGNOSTICS)
           , DebugAllocationBaselineCaptured(false),
           DebugAllocationBaselineState(),
@@ -554,6 +557,12 @@ namespace helengine::windows {
             RuntimeRenderDiagnostics::Initialize(ResolveApplicationDirectoryPath());
             RuntimeRenderDiagnostics::Reset();
             InitializeFileLog();
+            try {
+                CommandLineOptions = Win32CommandLineOptions::ParseProcessCommandLine();
+            } catch (const std::invalid_argument& error) {
+                WriteLifecycleLog(error.what());
+                return 2;
+            }
 #if defined(HELENGINE_WINDOWS_DEBUG_RUNTIME_DIAGNOSTICS)
             InstallDebugCrashHandler();
             InstallDebugAbortHandlers();
@@ -581,6 +590,13 @@ namespace helengine::windows {
 #endif
             delete exception;
             return EXIT_FAILURE;
+        } catch (const Win32ExitRequest& request) {
+            WriteLifecycleLog(request.what());
+#if defined(HELENGINE_WINDOWS_DEBUG_RUNTIME_DIAGNOSTICS)
+            UninstallDebugAbortHandlers();
+            UninstallDebugCrashHandler();
+#endif
+            return request.GetExitCode();
         } catch (const std::exception& exception) {
             std::ostringstream messageBuilder;
             messageBuilder << "Fatal host/engine exception: " << exception.what();
@@ -1183,6 +1199,26 @@ namespace helengine::windows {
             throw std::runtime_error("Windows startup requires the first runtime scene catalog entry to define a scene id.");
         }
 
+        if (CommandLineOptions.HasScene()) {
+            const std::string& requestedSceneId = CommandLineOptions.GetSceneId();
+            RuntimeSceneCatalogEntry* requestedEntry = nullptr;
+            for (int32_t entryIndex = 0; entryIndex < catalogEntries->get_Length(); entryIndex++) {
+                RuntimeSceneCatalogEntry* candidateEntry = (*catalogEntries)[entryIndex];
+                if (candidateEntry != nullptr && candidateEntry->get_SceneId() == requestedSceneId) {
+                    requestedEntry = candidateEntry;
+                    break;
+                }
+            }
+
+            if (requestedEntry == nullptr) {
+                std::string message = "Requested scene was not found in the packaged catalog: " + requestedSceneId;
+                WriteLifecycleLog(message.c_str());
+                throw Win32ExitRequest(2, message);
+            }
+
+            startupEntry = requestedEntry;
+        }
+
         {
             std::ostringstream messageBuilder;
             messageBuilder << "Loading startup scene from runtime scene catalog entry '" << startupEntry->get_SceneId() << "'.";
@@ -1659,7 +1695,11 @@ namespace helengine::windows {
                 frameStage = "engine_update";
                 {
                     HELENGINE_TRACY_ZONE_N("Engine.Update");
-                    EngineCore->Update();
+                    if (CommandLineOptions.HasFixedDelta()) {
+                        EngineCore->Update(CommandLineOptions.GetFixedDeltaSeconds());
+                    } else {
+                        EngineCore->Update();
+                    }
                 }
                 if (shouldTraceFirstFrame) {
                     WriteLifecycleLog("First frame completed EngineCore->Update().");
@@ -1697,6 +1737,10 @@ namespace helengine::windows {
             {
                 HELENGINE_TRACY_ZONE_N("Frame.PacingAndIdle");
                 Presenter->RenderFrame();
+            }
+            RenderedFrameCount++;
+            if (CommandLineOptions.HasFrameLimit() && RenderedFrameCount >= CommandLineOptions.GetFrameLimit()) {
+                PostQuitMessage(0);
             }
             if (shouldTraceFirstFrame) {
                 WriteLifecycleLog("First frame completed Presenter->RenderFrame().");

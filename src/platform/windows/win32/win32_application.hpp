@@ -14,6 +14,7 @@
 #include "platform/windows/runtime/runtime_render_diagnostics.hpp"
 #include "platform/windows/runtime/runtime_player_profile.hpp"
 #include "platform/windows/runtime/runtime_memory_diagnostics_provider.hpp"
+#include "platform/windows/win32/win32_command_line_options.hpp"
 
 class CameraClearSettings;
 class CameraComponent;
@@ -349,6 +350,12 @@ namespace helengine::windows {
 
         /// Stores how many bounded BEPU snapshot-hook status lines have already been written for the current run.
         std::uint32_t BepuDebugSnapshotStatusLogCount;
+
+        /// Stores the opt-in regression command-line options parsed once at startup; empty when the player runs without arguments.
+        Win32CommandLineOptions CommandLineOptions;
+
+        /// Counts frames that reached Presenter->RenderFrame(), used to honor the --frames limit.
+        int RenderedFrameCount;
 
 #if defined(HELENGINE_WINDOWS_DEBUG_RUNTIME_DIAGNOSTICS) && __has_include("IRuntimeDiagnosticsProvider.hpp") && __has_include("RuntimeMemoryDiagnosticsSnapshot.hpp")
         /// Stores the debug-build Windows runtime diagnostics provider exposed to the shared core service.
