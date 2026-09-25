@@ -55,6 +55,25 @@ public sealed class BmpImageReaderTests {
     }
 
     /// <summary>
+    /// Verifies the reader keeps each pixel's B, G and R bytes but forces its alpha byte to 255:
+    /// the player's swap chain uses ALPHA_MODE_IGNORE, so the captured alpha is undefined and must
+    /// never influence a comparison or a recorded golden.
+    /// </summary>
+    [Fact]
+    public void Read_forces_every_pixel_opaque_and_keeps_its_color() {
+        string path = Path.Combine(RegressionTestFixtures.TestOutputDirectory, "undefined-alpha.bmp");
+        byte[] storageOrder = {
+            10, 20, 30, 0,
+            40, 50, 60, 224
+        };
+        File.WriteAllBytes(path, RegressionTestFixtures.BuildBmp(2, -1, storageOrder));
+
+        RegressionImage image = BmpImageReader.Read(path);
+
+        Assert.Equal(new byte[] { 10, 20, 30, 255, 40, 50, 60, 255 }, image.Bgra);
+    }
+
+    /// <summary>
     /// Verifies a 24-bit BMP is rejected as an unsupported bit depth.
     /// </summary>
     [Fact]

@@ -54,4 +54,32 @@ public sealed class RegressionCommandRunnerTests {
         Assert.Equal(0, exitCode);
         Assert.StartsWith("PASS", output.ToString());
     }
+
+    /// <summary>
+    /// Verifies a golden recorded from a capture whose alpha bytes are not opaque still matches that
+    /// same capture. The player's back buffer alpha is undefined (the swap chain ignores it), and
+    /// real captures carry alpha 0 where UI text was blended; a golden round trip must not let that
+    /// alpha change the compared colors.
+    /// </summary>
+    [Fact]
+    public void Run_compare_passes_against_a_golden_recorded_from_a_capture_with_transparent_alpha() {
+        string capturePath = Path.Combine(RegressionTestFixtures.TestOutputDirectory, "transparent-capture.bmp");
+        string goldenPath = Path.Combine(RegressionTestFixtures.TestOutputDirectory, "transparent-golden.png");
+        string diffPath = Path.Combine(RegressionTestFixtures.TestOutputDirectory, "transparent-diff.png");
+        byte[] bgra = {
+            200, 180, 160, 0,
+            200, 180, 160, 0,
+            90, 60, 30, 224,
+            10, 20, 30, 255
+        };
+        RegressionTestFixtures.WriteBmp(capturePath, new RegressionImage(2, 2, bgra));
+        RegressionCommandRunner runner = new();
+        Assert.Equal(0, runner.Run(new[] { "record-golden", capturePath, goldenPath }, new StringWriter()));
+        StringWriter output = new();
+
+        int exitCode = runner.Run(new[] { "compare", capturePath, goldenPath, diffPath }, output);
+
+        Assert.Equal(0, exitCode);
+        Assert.StartsWith("PASS 0", output.ToString());
+    }
 }
