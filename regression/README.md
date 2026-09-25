@@ -75,22 +75,34 @@ The window goes idle 1 ms after the last activity (the player requires at least 
 load is pending, the rest are idle. The capture goes to `<WorkRoot>\captures\idle\<scene>.bmp`.
 
 - The run's `HOST_FINGERPRINT` line goes through the regression tool's
-  `check-idle "<fingerprint line>" <minIdleFrames> <minElapsedMs>` command with `25` and `2400`. It prints
+  `check-idle "<fingerprint line>" <minIdleFrames> <minElapsedMs>` command. `-Record` passes the script's
+  minimums, `25` and `2400`, and writes them into the manifest's idle entry; `-Verify` passes the minimums recorded
+  in that entry. It prints
   `PASS idleFrames=<n> elapsedMs=<n>`, or one `FAIL <reason>` line per failed check (`idleThrottle` is not `on`,
   `presentFailures` is not 0, too few idle frames, or too little elapsed time, which means the throttle did not
   sleep), and exits 0, 1, or 2 on a usage or parse error.
-- The capture is compared with the smoke scene's golden using the normal thresholds; on failure the diff is written
-  to `<WorkRoot>\captures\idle\<scene>.diff.png`.
+- The capture is compared with the smoke scene's golden using the normal thresholds; on failure `-Record` writes the
+  diff to `<WorkRoot>\captures\idle\<scene>.diff.png` and `-Verify` writes it to
+  `<WorkRoot>\diffs\<scene>.idle.diff.png`. The scenario deletes a diff left by an earlier run before it runs, so a
+  diff image on disk always belongs to the last run.
 - The fingerprint is **not** compared field by field with a recorded one: its idle and active frame counts and its
   elapsed time differ from a normal run by design and depend on load timing, so only the minimums above are checked.
 - `-Record` adds `{ "id": "<smoke scene>", "kind": "idle", "minIdleFrames": 25, "minElapsedMs": 2400 }` to
   `manifest.json` (the other `-Verify` checks ignore this kind). `-Verify` against a manifest without that entry
-  prints `FAIL idle <scene> idle entry missing from manifest (re-record required)`.
+  prints `FAIL idle <scene> idle entry missing from manifest (re-record required)`, and against an idle entry without
+  `minIdleFrames` or `minElapsedMs` it prints
+  `FAIL idle <scene> idle entry lacks minIdleFrames or minElapsedMs (re-record required)`.
 - Check lines are `PASS|FAIL|SKIP idle <scene> <detail>`.
 
 **Physics caveat.** A scene whose physics steps every update never goes idle: the throttle keeps the window awake
 while `PredictedPhysicsStepSeconds` is above 0 or while a scene transition or pending scene operation is reported. The
-idle scenario therefore needs a scene without physics. The smoke scene `axis_test` qualifies: its scene file
+idle scenario therefore needs a scene without physics.
+
+**Audio keep-awake.** The throttle also keeps the window awake while a looping audio voice plays (the Windows audio
+backend reports a looping voice that is not paused, including one waiting for its restart), because the backend
+restarts a looping voice from its per-frame update and an idle interval between frames would be heard as a gap. A
+scene with looping music or ambience therefore stays at full rate while it plays, and the idle scenario also needs a
+scene without looping audio. `axis_test` has no audio component. The smoke scene `axis_test` qualifies: its scene file
 (`assets\scenes\rendering\axis_test.helen`) holds only camera, light, mesh, text, sprite, viewport, FPS and DemoDisc
 rendering and menu components, with no rigid body, collider or other physics component, and its startup log has no
 physics-runtime line. Two manual idle-scenario runs on 2026-09-25 reported `idleFrames=29 activeFrames=1` with
@@ -124,7 +136,7 @@ manifest gained the idle entry. DemoDisc was at `5cc124eec06b8db729b2f9b15d99d26
   and no scene is marked `unstable`. The re-recorded golden PNGs are byte-identical to the first record.
 - Every scene's fingerprint: `format=87 alpha=3 swapEffect=4 buffers=2 scaling=0 style=0x14CF0000
   exStyle=0x00000100 client=640x360 presentCount=30 presentFailures=0 frames=30 idleThrottle=off idleFrames=0
-  activeFrames=30`, `elapsedMs` 119 to 128.
+  activeFrames=30`, `elapsedMs` 118 to 128.
 - The idle scenario on `axis_test` passed with `idleFrames=29 elapsedMs=3058`, and its capture matched the golden
   with 0 differing pixels.
 - Baselines: `helengine.editor.tests` 49 failing of 3134 executed, `helengine.render.validation.tests` 1 failing of
@@ -161,6 +173,8 @@ exits with a non-zero code or times out, the script prints the last 20 lines of 
 While the net runs:
 
 - Do not use the keyboard or mouse on the player window; input changes what the scenes render.
+- Do not interact with the player window (mouse or keyboard) during Record/Verify; the idle scenario counts activity,
+  and input during its run keeps the window awake and can fail its idle-frame and elapsed-time minimums.
 - If you run it from the main checkout (not a worktree), close the editor first: the script rebuilds
   `builder\bin\Debug\net9.0\helengine.windows.builder.dll`, which the real `platforms.json` also points at.
 - The net builds and runs the **Debug** player only.
