@@ -32,6 +32,7 @@
 #include "platform/windows/directx11/directx11_presenter.hpp"
 #include "platform/windows/runtime/runtime_memory_snapshot.hpp"
 #include "platform/windows/runtime/runtime_memory_diagnostics_provider.hpp"
+#include "platform/windows/runtime/runtime_player_profile_configuration_error.hpp"
 #include "platform/windows/runtime/runtime_player_profile_loader.hpp"
 #include "platform/windows/runtime/runtime_render_diagnostics.hpp"
 #include "platform/windows/runtime/windows_tracy_profiler.hpp"
@@ -1259,16 +1260,21 @@ namespace helengine::windows {
 
         RuntimePlayerProfileLoader loader;
         std::string lifecycleMessage;
-        RuntimePlayerProfile profile = loader.LoadOrCreateProfile(
-            ResolveApplicationDirectoryPath(),
-            defaultWindowWidth,
-            defaultWindowHeight,
-            lifecycleMessage);
-        if (!lifecycleMessage.empty()) {
-            WriteLifecycleLog(lifecycleMessage.c_str());
-        }
+        try {
+            RuntimePlayerProfile profile = loader.LoadOrCreateProfile(
+                ResolveApplicationDirectoryPath(),
+                defaultWindowWidth,
+                defaultWindowHeight,
+                lifecycleMessage);
+            if (!lifecycleMessage.empty()) {
+                WriteLifecycleLog(lifecycleMessage.c_str());
+            }
 
-        return profile;
+            return profile;
+        } catch (const RuntimePlayerProfileConfigurationError& configurationError) {
+            WriteLifecycleLog(configurationError.what());
+            throw Win32ExitRequest(2, configurationError.what());
+        }
     }
 
     /// Builds the runtime scene catalog consumed by packaged menu scene transitions.

@@ -23,17 +23,32 @@ namespace helengine::windows {
         /// Creates one validated runtime profile from the generated deployment defaults.
         RuntimePlayerProfile CreateDefaultProfile(int defaultResolutionWidth, int defaultResolutionHeight) const;
 
-        /// Reads one persisted runtime profile from the supplied profile path.
-        RuntimePlayerProfile ReadProfile(const std::filesystem::path& profilePath) const;
+        /// Reads the raw JSON text content of the profile file at the supplied path.
+        std::string ReadProfileFileContents(const std::filesystem::path& profilePath) const;
 
         /// Writes one runtime profile to the supplied profile path.
         void WriteProfile(const std::filesystem::path& profilePath, const RuntimePlayerProfile& profile) const;
 
-        /// Parses one runtime profile from its JSON text payload.
+        /// Parses one runtime profile's resolution fields from its JSON text payload.
         RuntimePlayerProfile ParseProfileJson(const std::string& json) const;
 
         /// Parses one required integer property value from the JSON profile payload.
         int ParseRequiredInteger(const std::string& json, const char* propertyName) const;
+
+        /// Parses one optional integer property from the JSON profile payload, if present. Returns whether the
+        /// property was found; throws RuntimePlayerProfileConfigurationError when it is present but its value
+        /// cannot be parsed as an integer.
+        bool TryParseOptionalInteger(const std::string& json, const char* propertyName, int& value) const;
+
+        /// Parses one optional boolean property from the JSON profile payload, if present. Returns whether the
+        /// property was found; throws RuntimePlayerProfileConfigurationError when it is present with any value
+        /// other than exactly `true` or `false`.
+        bool TryParseOptionalBoolean(const std::string& json, const char* propertyName, bool& value) const;
+
+        /// Validates the idle-throttle fields resolved onto the supplied profile, throwing
+        /// RuntimePlayerProfileConfigurationError when IdleAfterMilliseconds is not positive or
+        /// IdleFramesPerSecond falls outside the supported 1..30 range.
+        void ValidateIdleFields(const RuntimePlayerProfile& profile) const;
 
         /// Builds the persisted JSON payload for one runtime player profile.
         std::string BuildProfileJson(const RuntimePlayerProfile& profile) const;

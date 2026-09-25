@@ -61,6 +61,7 @@ set(HELENGINE_WINDOWS_SOURCES
     src/platform/windows/runtime/runtime_memory_diagnostics_provider.cpp
     src/platform/windows/runtime/runtime_memory_snapshot.cpp
     src/platform/windows/runtime/runtime_player_profile.cpp
+    src/platform/windows/runtime/runtime_player_profile_configuration_error.cpp
     src/platform/windows/runtime/runtime_player_profile_loader.cpp
     src/platform/windows/runtime/runtime_render_diagnostics.cpp
     src/platform/windows/runtime/windows_tracy_profiler.cpp
