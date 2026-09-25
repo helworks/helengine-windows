@@ -1013,6 +1013,20 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
         , CurrentCameraPosition(0.0f, 0.0f, 0.0f) {
     }
 
+    /// Applies the back-buffer alpha mode and the overlay background once at startup, before the first Draw.
+    /// Straight keeps today's clears and the inherited 3D blend state byte for byte; Premultiplied premultiplies the
+    /// clears (or clears to fully transparent for the transparent background) and binds the overlay-opaque blend state
+    /// at the start of each camera's 3D pass.
+    void Win32RenderManager3D::ConfigureAlphaMode(Win32RenderAlphaMode alphaMode, Win32OverlayBackground overlayBackground) {
+        if (IsAlphaModeConfigured) {
+            throw std::logic_error("The Windows 3D render bridge alpha mode is applied once at startup and cannot be changed.");
+        }
+
+        AlphaMode = alphaMode;
+        OverlayBackground = overlayBackground;
+        IsAlphaModeConfigured = true;
+    }
+
     /// Returns the number of uploaded texture resources currently cached by the Windows bridge.
     std::size_t Win32RenderManager3D::GetTextureResourceCount() const {
         return TextureResources.size();
@@ -1403,6 +1417,7 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
         ShadowTransformBuffer.Reset();
         DebugTriangleBuffer.Reset();
         RasterizerState.Reset();
+        OverlayOpaqueBlendState.Reset();
         DepthStencilState.Reset();
         ShadowRasterizerState.Reset();
         ShadowDepthStencilState.Reset();
@@ -1415,6 +1430,10 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
 
     /// Draws every registered camera to the Windows back buffer in camera order.
     void Win32RenderManager3D::Draw() {
+        if (!IsAlphaModeConfigured) {
+            throw std::logic_error("The Windows 3D render bridge alpha mode must be configured before the first Draw.");
+        }
+
         RenderManager3D::Draw();
         EnsurePipelineState();
         if (!HasWrittenRenderSnapshot) {
@@ -1799,7 +1818,7 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
 
     /// Creates the shaders, input layout, and fixed pipeline state on first use.
     void Win32RenderManager3D::EnsurePipelineState() {
-        if (VertexShader && PixelShader && InputLayout && TransformBuffer && RasterizerState && DepthStencilState) {
+        if (VertexShader && PixelShader && InputLayout && TransformBuffer && RasterizerState && OverlayOpaqueBlendState && DepthStencilState) {
             EnsureShadowPipelineState();
             EnsureTextureSamplerState();
             EnsureWhiteTextureFallbackResource();
@@ -1888,6 +1907,20 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
         ThrowIfFailed(
             Bootstrap.GetDevice()->CreateRasterizerState(&rasterizerDescription, RasterizerState.GetAddressOf()),
             "ID3D11Device::CreateRasterizerState failed for the Windows bridge.");
+
+        D3D11_BLEND_DESC overlayOpaqueBlendDescription {};
+        overlayOpaqueBlendDescription.RenderTarget[0].BlendEnable = TRUE;
+        overlayOpaqueBlendDescription.RenderTarget[0].SrcBlend = D3D11_BLEND_ONE;
+        overlayOpaqueBlendDescription.RenderTarget[0].DestBlend = D3D11_BLEND_ZERO;
+        overlayOpaqueBlendDescription.RenderTarget[0].BlendOp = D3D11_BLEND_OP_ADD;
+        overlayOpaqueBlendDescription.RenderTarget[0].SrcBlendAlpha = D3D11_BLEND_BLEND_FACTOR;
+        overlayOpaqueBlendDescription.RenderTarget[0].DestBlendAlpha = D3D11_BLEND_ZERO;
+        overlayOpaqueBlendDescription.RenderTarget[0].BlendOpAlpha = D3D11_BLEND_OP_ADD;
+        overlayOpaqueBlendDescription.RenderTarget[0].RenderTargetWriteMask = D3D11_COLOR_WRITE_ENABLE_ALL;
+
+        ThrowIfFailed(
+            Bootstrap.GetDevice()->CreateBlendState(&overlayOpaqueBlendDescription, OverlayOpaqueBlendState.GetAddressOf()),
+            "ID3D11Device::CreateBlendState failed for the Windows bridge overlay-opaque blend state.");
 
         D3D11_DEPTH_STENCIL_DESC depthStencilDescription {};
         depthStencilDescription.DepthEnable = TRUE;
@@ -2173,7 +2206,13 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
         if (clearColorBuffer) {
             float4 clearColor = clearSettings.get_ClearColorEnabled() ? clearSettings.get_ClearColor() : float4(0.0f, 0.0f, 0.0f, 1.0f);
             const float clearColorValues[] = { clearColor.X, clearColor.Y, clearColor.Z, clearColor.W };
-            context->ClearRenderTargetView(renderTargetView, clearColorValues);
+            if (AlphaMode == Win32RenderAlphaMode::Premultiplied) {
+                float4 premultipliedClearColor = ResolvePremultipliedClearColor(clearColor);
+                const float premultipliedClearColorValues[] = { premultipliedClearColor.X, premultipliedClearColor.Y, premultipliedClearColor.Z, premultipliedClearColor.W };
+                context->ClearRenderTargetView(renderTargetView, premultipliedClearColorValues);
+            } else {
+                context->ClearRenderTargetView(renderTargetView, clearColorValues);
+            }
         }
 
         UINT clearFlags = 0;
@@ -2235,6 +2274,10 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
         context->RSSetState(RasterizerState.Get());
         context->OMSetDepthStencilState(DepthStencilState.Get(), 0);
         context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+        if (AlphaMode == Win32RenderAlphaMode::Premultiplied) {
+            const float overlayOpaqueBlendFactor[] = { 1.0f, 1.0f, 1.0f, 1.0f };
+            context->OMSetBlendState(OverlayOpaqueBlendState.Get(), overlayOpaqueBlendFactor, 0xFFFFFFFFu);
+        }
 
         if (!HasWrittenRenderSnapshot) {
             AppendRenderSnapshotLine(
@@ -3202,7 +3245,13 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
 
         const float clearColor[] = { red, green, blue, alpha };
         context->OMSetRenderTargets(1, &renderTargetView, depthStencilView);
-        context->ClearRenderTargetView(renderTargetView, clearColor);
+        if (AlphaMode == Win32RenderAlphaMode::Premultiplied) {
+            float4 premultipliedClearColor = ResolvePremultipliedClearColor(float4(red, green, blue, alpha));
+            const float premultipliedClearColorValues[] = { premultipliedClearColor.X, premultipliedClearColor.Y, premultipliedClearColor.Z, premultipliedClearColor.W };
+            context->ClearRenderTargetView(renderTargetView, premultipliedClearColorValues);
+        } else {
+            context->ClearRenderTargetView(renderTargetView, clearColor);
+        }
         if (depthStencilView != nullptr) {
             context->ClearDepthStencilView(depthStencilView, D3D11_CLEAR_DEPTH | D3D11_CLEAR_STENCIL, 1.0f, 0);
         }
@@ -3217,12 +3266,38 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
         context->RSSetViewports(1, &viewport);
     }
 
+    /// Resolves the color a Premultiplied-mode clear writes: fully transparent (0,0,0,0) for the transparent overlay
+    /// background, otherwise the requested straight color premultiplied as (r*a, g*a, b*a, a).
+    float4 Win32RenderManager3D::ResolvePremultipliedClearColor(float4 color) const {
+        if (OverlayBackground == Win32OverlayBackground::Transparent) {
+            return float4(0.0f, 0.0f, 0.0f, 0.0f);
+        }
+
+        double alpha = static_cast<double>(color.W);
+        return float4(
+            static_cast<float>(static_cast<double>(color.X) * alpha),
+            static_cast<float>(static_cast<double>(color.Y) * alpha),
+            static_cast<float>(static_cast<double>(color.Z) * alpha),
+            color.W);
+    }
+
     /// Creates the native 2D bridge for one DirectX11 bootstrap.
     Win32RenderManager2D::Win32RenderManager2D(DirectX11Bootstrap& bootstrap)
         : Bootstrap(bootstrap) {
 #if __has_include("RenderCommandListBuilder2D.hpp")
         CommandListBuilder = std::make_unique<RenderCommandListBuilder2D>();
 #endif
+    }
+
+    /// Applies the back-buffer alpha mode once at startup, before the first 2D pass. Straight keeps today's
+    /// AlphaBlendState binds; Premultiplied binds PremultipliedDestinationBlendState at the same sites.
+    void Win32RenderManager2D::ConfigureAlphaMode(Win32RenderAlphaMode alphaMode) {
+        if (IsAlphaModeConfigured) {
+            throw std::logic_error("The Windows 2D render bridge alpha mode is applied once at startup and cannot be changed.");
+        }
+
+        AlphaMode = alphaMode;
+        IsAlphaModeConfigured = true;
     }
 
     /// Creates the DirectX11 shaders, buffers, and fixed pipeline state needed for 2D rendering.
@@ -3236,6 +3311,7 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
             && RoundedRectConstantBuffer
             && TextureSamplerState
             && AlphaBlendState
+            && PremultipliedDestinationBlendState
             && RasterizerState
             && DepthStencilState
             && WhiteShaderResourceView) {
@@ -3411,6 +3487,20 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
             device->CreateBlendState(&blendDescription, AlphaBlendState.GetAddressOf()),
             "ID3D11Device::CreateBlendState failed for the Windows 2D alpha blend state.");
 
+        D3D11_BLEND_DESC premultipliedDestinationBlendDescription {};
+        premultipliedDestinationBlendDescription.RenderTarget[0].BlendEnable = TRUE;
+        premultipliedDestinationBlendDescription.RenderTarget[0].SrcBlend = D3D11_BLEND_SRC_ALPHA;
+        premultipliedDestinationBlendDescription.RenderTarget[0].DestBlend = D3D11_BLEND_INV_SRC_ALPHA;
+        premultipliedDestinationBlendDescription.RenderTarget[0].BlendOp = D3D11_BLEND_OP_ADD;
+        premultipliedDestinationBlendDescription.RenderTarget[0].SrcBlendAlpha = D3D11_BLEND_ONE;
+        premultipliedDestinationBlendDescription.RenderTarget[0].DestBlendAlpha = D3D11_BLEND_INV_SRC_ALPHA;
+        premultipliedDestinationBlendDescription.RenderTarget[0].BlendOpAlpha = D3D11_BLEND_OP_ADD;
+        premultipliedDestinationBlendDescription.RenderTarget[0].RenderTargetWriteMask = D3D11_COLOR_WRITE_ENABLE_ALL;
+
+        ThrowIfFailed(
+            device->CreateBlendState(&premultipliedDestinationBlendDescription, PremultipliedDestinationBlendState.GetAddressOf()),
+            "ID3D11Device::CreateBlendState failed for the Windows 2D premultiplied-destination blend state.");
+
         D3D11_RASTERIZER_DESC rasterizerDescription {};
         rasterizerDescription.FillMode = D3D11_FILL_SOLID;
         rasterizerDescription.CullMode = D3D11_CULL_NONE;
@@ -3524,7 +3614,11 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
         context->OMSetDepthStencilState(DepthStencilState.Get(), 0);
 
         const float blendFactor[] = { 0.0f, 0.0f, 0.0f, 0.0f };
-        context->OMSetBlendState(AlphaBlendState.Get(), blendFactor, 0xFFFFFFFFu);
+        if (AlphaMode == Win32RenderAlphaMode::Premultiplied) {
+            context->OMSetBlendState(PremultipliedDestinationBlendState.Get(), blendFactor, 0xFFFFFFFFu);
+        } else {
+            context->OMSetBlendState(AlphaBlendState.Get(), blendFactor, 0xFFFFFFFFu);
+        }
         context->IASetInputLayout(QuadInputLayout.Get());
         context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP);
         const UINT stride = sizeof(Win32QuadVertex);
@@ -3552,7 +3646,11 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
         context->OMSetDepthStencilState(DepthStencilState.Get(), 0);
 
         const float blendFactor[] = { 0.0f, 0.0f, 0.0f, 0.0f };
-        context->OMSetBlendState(AlphaBlendState.Get(), blendFactor, 0xFFFFFFFFu);
+        if (AlphaMode == Win32RenderAlphaMode::Premultiplied) {
+            context->OMSetBlendState(PremultipliedDestinationBlendState.Get(), blendFactor, 0xFFFFFFFFu);
+        } else {
+            context->OMSetBlendState(AlphaBlendState.Get(), blendFactor, 0xFFFFFFFFu);
+        }
         context->IASetInputLayout(QuadInputLayout.Get());
         context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP);
         const UINT stride = sizeof(Win32QuadVertex);
@@ -3799,6 +3897,10 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
         HELENGINE_TRACY_GPU_ZONE_N("D3D11.Draw2D");
         if (camera == nullptr) {
             throw new ArgumentNullException("camera");
+        }
+
+        if (!IsAlphaModeConfigured) {
+            throw std::logic_error("The Windows 2D render bridge alpha mode must be configured before the first 2D pass.");
         }
 
         Entity* cameraParent = camera->get_Parent();
@@ -4324,6 +4426,7 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
         RoundedRectPixelShader.Reset();
         TextureSamplerState.Reset();
         AlphaBlendState.Reset();
+        PremultipliedDestinationBlendState.Reset();
         RasterizerState.Reset();
         DepthStencilState.Reset();
         WhiteTexture.Reset();

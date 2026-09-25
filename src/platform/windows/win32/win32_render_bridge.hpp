@@ -14,6 +14,9 @@
 #include <unordered_map>
 #include <vector>
 
+#include "platform/windows/win32/win32_overlay_background.hpp"
+#include "platform/windows/win32/win32_render_alpha_mode.hpp"
+
 #if __has_include("RenderManager2D.hpp")
 class LightComponent;
 class DirectionalLightComponent;
@@ -121,6 +124,15 @@ namespace helengine::windows {
     public:
         /// Creates the native renderer bridge for one DirectX11 bootstrap and its shared active 2D renderer.
         Win32RenderManager3D(DirectX11Bootstrap& bootstrap, Win32RenderManager2D& renderManager2D);
+
+        /// Applies the back-buffer alpha mode and the overlay background once at startup, before the first Draw.
+        /// Straight keeps today's clears and the inherited 3D blend state byte for byte; Premultiplied premultiplies
+        /// the clears (or clears to fully transparent for the transparent background) and binds the overlay-opaque
+        /// blend state at the start of each camera's 3D pass.
+        /// <param name="alphaMode">How the back buffer's alpha channel is treated.</param>
+        /// <param name="overlayBackground">How premultiplied clears resolve their color; ignored in Straight mode.</param>
+        /// <exception cref="std::logic_error">Thrown when the alpha mode was already configured.</exception>
+        void ConfigureAlphaMode(Win32RenderAlphaMode alphaMode, Win32OverlayBackground overlayBackground);
 
         /// Returns the number of uploaded texture resources currently cached by the Windows bridge.
         std::size_t GetTextureResourceCount() const;
@@ -267,11 +279,26 @@ namespace helengine::windows {
         /// Clears the back buffer to a solid fallback color when nothing else renders.
         void ClearBackBuffer(float red, float green, float blue, float alpha);
 
+        /// Resolves the color a Premultiplied-mode clear writes: fully transparent (0,0,0,0) for the transparent
+        /// overlay background, otherwise the requested straight color premultiplied as (r*a, g*a, b*a, a).
+        /// <param name="color">The straight-alpha clear color requested by the camera or the fallback clear.</param>
+        /// <returns>The premultiplied clear color.</returns>
+        float4 ResolvePremultipliedClearColor(float4 color) const;
+
         /// Resolves a camera viewport against the current swap-chain size.
         D3D11_VIEWPORT ResolveViewport(ICamera* camera) const;
 
         /// Stores the DirectX11 bootstrap used for device access and presentation resources.
         DirectX11Bootstrap& Bootstrap;
+
+        /// Stores how the back buffer's alpha channel is treated; applied once at startup through ConfigureAlphaMode.
+        Win32RenderAlphaMode AlphaMode = Win32RenderAlphaMode::Straight;
+
+        /// Stores how Premultiplied-mode clears resolve their color; applied once at startup through ConfigureAlphaMode.
+        Win32OverlayBackground OverlayBackground = Win32OverlayBackground::Camera;
+
+        /// Tracks whether ConfigureAlphaMode already ran, so rendering never starts unconfigured and the mode is never toggled.
+        bool IsAlphaModeConfigured = false;
 
         /// Stores the application's active 2D renderer without taking ownership of its lifetime.
         Win32RenderManager2D* RenderManager2DBridge;
@@ -326,6 +353,10 @@ namespace helengine::windows {
 
         /// Stores the rasterizer state for solid back-face-culled drawing.
         Microsoft::WRL::ComPtr<ID3D11RasterizerState> RasterizerState;
+
+        /// Stores the Premultiplied-mode 3D blend state: color is written unchanged (ONE/ZERO) and alpha is taken from
+        /// the blend factor (BLEND_FACTOR/ZERO), bound at the start of each camera's 3D pass only in Premultiplied mode.
+        Microsoft::WRL::ComPtr<ID3D11BlendState> OverlayOpaqueBlendState;
 
         /// Stores the depth-stencil state for normal opaque 3D drawing.
         Microsoft::WRL::ComPtr<ID3D11DepthStencilState> DepthStencilState;
@@ -388,6 +419,12 @@ namespace helengine::windows {
     public:
         /// Creates the native 2D bridge for one DirectX11 bootstrap.
         explicit Win32RenderManager2D(DirectX11Bootstrap& bootstrap);
+
+        /// Applies the back-buffer alpha mode once at startup, before the first 2D pass. Straight keeps today's
+        /// AlphaBlendState binds; Premultiplied binds PremultipliedDestinationBlendState at the same sites.
+        /// <param name="alphaMode">How the back buffer's alpha channel is treated.</param>
+        /// <exception cref="std::logic_error">Thrown when the alpha mode was already configured.</exception>
+        void ConfigureAlphaMode(Win32RenderAlphaMode alphaMode);
 
         /// Returns the number of uploaded texture resources currently cached by the Windows bridge.
         std::size_t GetTextureResourceCount() const;
@@ -525,6 +562,16 @@ namespace helengine::windows {
 
         /// Stores the alpha-blend state used by 2D UI draws.
         Microsoft::WRL::ComPtr<ID3D11BlendState> AlphaBlendState;
+
+        /// Stores the Premultiplied-mode 2D blend state: straight-alpha source colors (SRC_ALPHA/INV_SRC_ALPHA) blended
+        /// over a premultiplied destination whose alpha accumulates as ONE/INV_SRC_ALPHA.
+        Microsoft::WRL::ComPtr<ID3D11BlendState> PremultipliedDestinationBlendState;
+
+        /// Stores how the back buffer's alpha channel is treated; applied once at startup through ConfigureAlphaMode.
+        Win32RenderAlphaMode AlphaMode = Win32RenderAlphaMode::Straight;
+
+        /// Tracks whether ConfigureAlphaMode already ran, so rendering never starts unconfigured and the mode is never toggled.
+        bool IsAlphaModeConfigured = false;
 
         /// Stores the rasterizer state used by 2D draws.
         Microsoft::WRL::ComPtr<ID3D11RasterizerState> RasterizerState;

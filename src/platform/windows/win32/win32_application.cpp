@@ -768,6 +768,9 @@ namespace helengine::windows {
 
         EngineRenderManager2D = new Win32RenderManager2D(*Bootstrap);
         EngineRenderManager3D = new Win32RenderManager3D(*Bootstrap, *EngineRenderManager2D);
+        Win32RenderAlphaMode renderAlphaMode = WindowModeSettings->GetWindowMode() == Win32WindowMode::Overlay ? Win32RenderAlphaMode::Premultiplied : Win32RenderAlphaMode::Straight;
+        EngineRenderManager2D->ConfigureAlphaMode(renderAlphaMode);
+        EngineRenderManager3D->ConfigureAlphaMode(renderAlphaMode, WindowModeSettings->GetOverlayBackground());
         EngineAudioBackend = new Win32AudioBackend();
         EngineInputBackend = new Win32InputBackend(MainWindow.get());
 
