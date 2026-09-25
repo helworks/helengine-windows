@@ -81,6 +81,13 @@ namespace helengine::windows {
         /// Converts a UTF-16 command-line value to UTF-8 so it can be compared with engine scene ids and logged.
         static std::string ConvertToUtf8(const std::wstring& value);
 
+        /// Parses a whole-number command-line value, rejecting empty or leading-whitespace text, partial parses and
+        /// overflow, and enforcing it falls within [minimumValue, maximumValue] inclusive. On any failure throws
+        /// std::invalid_argument whose message is invalidValueMessagePrefix followed by the offending value converted
+        /// to UTF-8, so every bounded-integer flag (--frames, --idle-after-ms, --idle-fps) reports failures the same
+        /// way while keeping its own wording and bounds.
+        static int ParseBoundedInteger(const std::wstring& value, int minimumValue, int maximumValue, const std::string& invalidValueMessagePrefix);
+
         /// Parses a --frames value that must be a whole int of at least one, throwing std::invalid_argument otherwise.
         static int ParseFrameLimit(const std::wstring& value);
 

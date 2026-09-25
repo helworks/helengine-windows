@@ -268,9 +268,13 @@ namespace helengine::windows {
         return converted;
     }
 
-    /// Parses a --frames value that must be a whole int of at least one, throwing std::invalid_argument otherwise.
-    int Win32CommandLineOptions::ParseFrameLimit(const std::wstring& value) {
-        std::string invalidMessage = "Command-line flag --frames requires a whole number of at least 1, got: " + ConvertToUtf8(value);
+    /// Parses a whole-number command-line value, rejecting empty or leading-whitespace text, partial parses and
+    /// overflow, and enforcing it falls within [minimumValue, maximumValue] inclusive. On any failure throws
+    /// std::invalid_argument whose message is invalidValueMessagePrefix followed by the offending value converted
+    /// to UTF-8, so every bounded-integer flag (--frames, --idle-after-ms, --idle-fps) reports failures the same
+    /// way while keeping its own wording and bounds.
+    int Win32CommandLineOptions::ParseBoundedInteger(const std::wstring& value, int minimumValue, int maximumValue, const std::string& invalidValueMessagePrefix) {
+        std::string invalidMessage = invalidValueMessagePrefix + ConvertToUtf8(value);
         if (value.empty() || std::iswspace(value[0])) {
             throw std::invalid_argument(invalidMessage);
         }
@@ -278,11 +282,16 @@ namespace helengine::windows {
         wchar_t* end = nullptr;
         errno = 0;
         long parsed = std::wcstol(value.c_str(), &end, 10);
-        if (end != value.c_str() + value.size() || errno == ERANGE || parsed < 1 || parsed > INT_MAX) {
+        if (end != value.c_str() + value.size() || errno == ERANGE || parsed < minimumValue || parsed > maximumValue) {
             throw std::invalid_argument(invalidMessage);
         }
 
         return static_cast<int>(parsed);
+    }
+
+    /// Parses a --frames value that must be a whole int of at least one, throwing std::invalid_argument otherwise.
+    int Win32CommandLineOptions::ParseFrameLimit(const std::wstring& value) {
+        return ParseBoundedInteger(value, 1, INT_MAX, "Command-line flag --frames requires a whole number of at least 1, got: ");
     }
 
     /// Parses a --fixed-delta value that must be a finite double greater than zero, throwing std::invalid_argument otherwise.
@@ -317,35 +326,11 @@ namespace helengine::windows {
 
     /// Parses an --idle-after-ms value that must be a whole number of at least one, throwing std::invalid_argument otherwise.
     int Win32CommandLineOptions::ParseIdleAfterMilliseconds(const std::wstring& value) {
-        std::string invalidMessage = "Command-line flag --idle-after-ms requires a whole number of at least 1, got: " + ConvertToUtf8(value);
-        if (value.empty() || std::iswspace(value[0])) {
-            throw std::invalid_argument(invalidMessage);
-        }
-
-        wchar_t* end = nullptr;
-        errno = 0;
-        long parsed = std::wcstol(value.c_str(), &end, 10);
-        if (end != value.c_str() + value.size() || errno == ERANGE || parsed < 1 || parsed > INT_MAX) {
-            throw std::invalid_argument(invalidMessage);
-        }
-
-        return static_cast<int>(parsed);
+        return ParseBoundedInteger(value, 1, INT_MAX, "Command-line flag --idle-after-ms requires a whole number of at least 1, got: ");
     }
 
     /// Parses an --idle-fps value that must be a whole number from 1 to 30, throwing std::invalid_argument otherwise.
     int Win32CommandLineOptions::ParseIdleFramesPerSecond(const std::wstring& value) {
-        std::string invalidMessage = "Command-line flag --idle-fps requires a whole number from 1 to 30, got: " + ConvertToUtf8(value);
-        if (value.empty() || std::iswspace(value[0])) {
-            throw std::invalid_argument(invalidMessage);
-        }
-
-        wchar_t* end = nullptr;
-        errno = 0;
-        long parsed = std::wcstol(value.c_str(), &end, 10);
-        if (end != value.c_str() + value.size() || errno == ERANGE || parsed < 1 || parsed > 30) {
-            throw std::invalid_argument(invalidMessage);
-        }
-
-        return static_cast<int>(parsed);
+        return ParseBoundedInteger(value, 1, 30, "Command-line flag --idle-fps requires a whole number from 1 to 30, got: ");
     }
 }
