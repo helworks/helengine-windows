@@ -45,6 +45,7 @@ This is the foundation for Gevo's "glass over everything" shell layer.
   - **Overlay mode:** `WS_POPUP`; `WS_EX_NOREDIRECTIONBITMAP | WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_LAYERED`. The window is shown with `SW_SHOWNOACTIVATE` and positioned to the resolved bounds with `SetWindowPos(HWND_TOPMOST, …, SWP_NOACTIVATE)`.
 - The window mode is resolved **before** the window is created, because `WS_EX_NOREDIRECTIONBITMAP` can only be set at creation. `CreateMainWindow` already resolves the profile first.
 - `WS_EX_LAYERED` is required so the click-through toggle takes effect. Plan task 1 is a **spike** that proves DirectComposition content with `NOREDIRECTIONBITMAP + LAYERED` is visible and that toggling `WS_EX_TRANSPARENT` passes clicks through. If `LAYERED` breaks composition, the spike finds the working combination (for example, not using `LAYERED` and relying on `WS_EX_TRANSPARENT` alone), and the spec is amended before implementation continues.
+- **Confirmed by the spike (Revision 1):** the style set above works as listed. `SetLayeredWindowAttributes` is **not** called: a `LAYERED` window without it still shows the DirectComposition content. Without `LAYERED`, `WS_EX_TRANSPARENT` has no effect on hit-testing. DWM does not hit-test by pixel alpha on its own (a fully transparent pixel still hits the overlay while `WS_EX_TRANSPARENT` is off), so the §5 sampler and toggle are required.
 
 ## 3. Swap chain and composition
 
@@ -108,3 +109,41 @@ This is the foundation for Gevo's "glass over everything" shell layer.
 ## 8. Known issue recorded for Helena (not fixed here)
 
 In normal mode, 3D draws inherit the 2D `AlphaBlendState` after the first 2D draw (win32_render_bridge.cpp: `OMSetBlendState` only at the 2D sites; `ClearState` only on asset flush). The player has always rendered this way and the goldens encode it. Fixing it is a separate, deliberate change with a re-record.
+
+## Revision 1 (spike results)
+
+Date: 2026-09-25. Plan task 1, throwaway spike (standalone C++ built with `cl`, source and logs outside the repo in `C:\dev\helworks\builds\helengine-windows\spikes\overlay\`). Machine: Windows 11 Pro 10.0.26200, 3840×2160 primary monitor, per-monitor-DPI-aware process.
+
+**Setup.** A 400×300 `WS_POPUP` overlay near the screen center with `WS_EX_NOREDIRECTIONBITMAP | WS_EX_TOPMOST | WS_EX_TOOLWINDOW` (+ `WS_EX_LAYERED` where noted). D3D11 device, `CreateSwapChainForComposition` (B8G8R8A8, 2 buffers, `STRETCH`, `FLIP_DISCARD`, `ALPHA_MODE_PREMULTIPLIED`), `DCompositionCreateDevice` → `CreateTargetForHwnd(hwnd, TRUE)` → visual → `SetContent` → `SetRoot` → `Commit`. Cleared to (0,0,0,0) with an opaque red (1,0,0,1) center rect (a `ClearView` sub-rect), `Present(1, 0)`. Shown with `SW_SHOWNOACTIVATE` + `SetWindowPos(HWND_TOPMOST, …, SWP_NOACTIVATE)`. A solid green `WS_POPUP` "behind" window, 50 px larger on each side, sits under the overlay. `WS_EX_TRANSPARENT` was toggled with `SetWindowLongPtr` + `SetWindowPos(SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE)`, holding each state 3 s, in the order off → on → off.
+
+**Checks (objective, no screenshots):**
+- `WindowFromPoint` at a transparent corner (+15,+15), at the opaque center, and at a point outside the overlay over the behind window.
+- A 1-pixel `BitBlt(… SRCCOPY | CAPTUREBLT)` read from the desktop DC at the same points, which shows the composed desktop color.
+- `DwmGetWindowAttribute(DWMWA_CLOAKED)`, `IsWindowVisible`, the HRESULTs of every D3D/DXGI/DComp call and `Present`.
+- `GetForegroundWindow` before and after showing.
+
+Run A used a non-topmost behind window; the owner's other windows sometimes covered it, which changed only the "behind" readings, not the conclusions. Run B made the behind window topmost (still below the overlay, which was created later) and is fully deterministic. The table is from run B; run A agreed on every overlay reading.
+
+| LAYERED | SetLayeredWindowAttributes(0,255,LWA_ALPHA) | TRANSPARENT | WFP transparent corner | WFP opaque center | Pixel corner | Pixel center |
+|---|---|---|---|---|---|---|
+| off | off | off | overlay | overlay | green (behind) | red (overlay) |
+| off | off | **on** | **overlay** | **overlay** | green | red |
+| off | on (fails: `ERROR_INVALID_PARAMETER`, 87) | off | overlay | overlay | green | red |
+| off | on (fails, 87) | **on** | **overlay** | **overlay** | green | red |
+| on | off | off | overlay | overlay | green | red |
+| on | off | **on** | **behind** | **behind** | green | red |
+| on | on (succeeds) | off | overlay | overlay | green | red |
+| on | on (succeeds) | **on** | **behind** | **behind** | green | red |
+
+In every configuration, every call returned `S_OK`, `Present` succeeded, the overlay was visible and not cloaked (`DWMWA_CLOAKED` = 0), and toggling `WS_EX_TRANSPARENT` back off restored the "off" readings exactly.
+
+**Answers:**
+- (a) DirectComposition content renders with and without `LAYERED`. The composed desktop shows the overlay's opaque red at the center and the window behind through the (0,0,0,0) pixels.
+- (b) With `LAYERED`, `WS_EX_TRANSPARENT` on makes `WindowFromPoint` return the window behind at every point, including over opaque pixels. With it off, the overlay is returned at every point, **including over fully transparent pixels**. DWM does not hit-test by alpha on its own, so the §5 sampler and toggle are required.
+- (c) `WS_EX_LAYERED` **is required**. Without it, `WS_EX_TRANSPARENT` has no effect on `WindowFromPoint`.
+- (d) `LAYERED` without `SetLayeredWindowAttributes` does **not** hide DirectComposition content. `SetLayeredWindowAttributes` is not needed and changes nothing measurable. It fails on a non-layered window.
+- `SW_SHOWNOACTIVATE` + `SWP_NOACTIVATE` left `GetForegroundWindow` unchanged in all eight runs, and the overlay never became the foreground window.
+
+**Working style set (unchanged from §2):** `WS_POPUP`; `WS_EX_NOREDIRECTIONBITMAP | WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_LAYERED`, **without** calling `SetLayeredWindowAttributes`. Shown with `SW_SHOWNOACTIVATE`, then `SetWindowPos(HWND_TOPMOST, …, SWP_NOACTIVATE)`. The click-through toggle is `WS_EX_TRANSPARENT` via `SetWindowLongPtr` + `SetWindowPos(SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE)`. The plan's Global Constraints style line needs no change.
+
+**Scope note.** `WindowFromPoint` is the hit-test the spike could check without moving the user's mouse. Real mouse-click routing is left to the §7 manual proofs.
