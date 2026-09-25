@@ -141,17 +141,19 @@ public sealed class RegressionCommandRunner {
     }
 
     /// <summary>
-    /// Runs "compare-failing baseline.txt current.txt": compares two failing-name lists and
-    /// reports whether any new failures were introduced.
+    /// Runs "compare-failing baseline.txt current.txt [flaky.txt]": compares two failing-name lists
+    /// and reports whether any new failures were introduced. When the optional known-flaky list is
+    /// given, a new failure on that list prints "WARN flaky &lt;name&gt;" and does not fail the command.
     /// </summary>
     static int RunCompareFailing(string[] args, TextWriter output) {
-        if (args.Length != 3) {
-            throw new ArgumentException("compare-failing requires <baseline.txt> <current.txt>");
+        if (args.Length != 3 && args.Length != 4) {
+            throw new ArgumentException("compare-failing requires <baseline.txt> <current.txt> [<flaky.txt>]");
         }
 
         IReadOnlyList<string> baseline = ReadFailingNames(args[1]);
         IReadOnlyList<string> current = ReadFailingNames(args[2]);
-        FailingSetComparison comparison = FailingSetComparer.Compare(baseline, current);
+        IReadOnlyList<string> flaky = args.Length == 4 ? ReadFailingNames(args[3]) : Array.Empty<string>();
+        FailingSetComparison comparison = FailingSetComparer.Compare(baseline, current, flaky);
 
         if (comparison.Passed) {
             output.WriteLine("PASS");
@@ -160,6 +162,10 @@ public sealed class RegressionCommandRunner {
             foreach (string newName in comparison.NewFailures) {
                 output.WriteLine($"NEW {newName}");
             }
+        }
+
+        foreach (string flakyName in comparison.FlakyFailures) {
+            output.WriteLine($"WARN flaky {flakyName}");
         }
 
         foreach (string fixedName in comparison.FixedFailures) {

@@ -36,6 +36,68 @@ public sealed class RegressionCommandRunnerTests {
     }
 
     /// <summary>
+    /// Verifies compare-failing with a flaky list turns a listed new failure into a "WARN flaky" line and returns
+    /// exit code 0.
+    /// </summary>
+    [Fact]
+    public void Run_compare_failing_with_flaky_new_failure_warns_and_returns_0() {
+        string baselinePath = Path.Combine(RegressionTestFixtures.TestOutputDirectory, "flaky-baseline.txt");
+        string currentPath = Path.Combine(RegressionTestFixtures.TestOutputDirectory, "flaky-current.txt");
+        string flakyPath = Path.Combine(RegressionTestFixtures.TestOutputDirectory, "flaky-list.txt");
+        File.WriteAllText(baselinePath, "A\n");
+        File.WriteAllText(currentPath, "A\nF\n");
+        File.WriteAllText(flakyPath, "F\n");
+        StringWriter output = new();
+
+        int exitCode = new RegressionCommandRunner().Run(new[] { "compare-failing", baselinePath, currentPath, flakyPath }, output);
+
+        Assert.Equal(0, exitCode);
+        Assert.StartsWith("PASS", output.ToString());
+        Assert.Contains("WARN flaky F", output.ToString());
+        Assert.DoesNotContain("NEW F", output.ToString());
+    }
+
+    /// <summary>
+    /// Verifies compare-failing with a flaky list still fails, with a NEW line, on a new failure that is not listed.
+    /// </summary>
+    [Fact]
+    public void Run_compare_failing_with_non_flaky_new_failure_returns_1() {
+        string baselinePath = Path.Combine(RegressionTestFixtures.TestOutputDirectory, "nonflaky-baseline.txt");
+        string currentPath = Path.Combine(RegressionTestFixtures.TestOutputDirectory, "nonflaky-current.txt");
+        string flakyPath = Path.Combine(RegressionTestFixtures.TestOutputDirectory, "nonflaky-list.txt");
+        File.WriteAllText(baselinePath, "A\n");
+        File.WriteAllText(currentPath, "A\nN\n");
+        File.WriteAllText(flakyPath, "F\n");
+        StringWriter output = new();
+
+        int exitCode = new RegressionCommandRunner().Run(new[] { "compare-failing", baselinePath, currentPath, flakyPath }, output);
+
+        Assert.Equal(1, exitCode);
+        Assert.StartsWith("FAIL", output.ToString());
+        Assert.Contains("NEW N", output.ToString());
+        Assert.DoesNotContain("WARN", output.ToString());
+    }
+
+    /// <summary>
+    /// Verifies compare-failing without the optional flaky list keeps its original behavior: every new failure is
+    /// a NEW line and the exit code is 1.
+    /// </summary>
+    [Fact]
+    public void Run_compare_failing_without_flaky_list_keeps_original_behavior() {
+        string baselinePath = Path.Combine(RegressionTestFixtures.TestOutputDirectory, "noflaky-baseline.txt");
+        string currentPath = Path.Combine(RegressionTestFixtures.TestOutputDirectory, "noflaky-current.txt");
+        File.WriteAllText(baselinePath, "A\n");
+        File.WriteAllText(currentPath, "A\nF\n");
+        StringWriter output = new();
+
+        int exitCode = new RegressionCommandRunner().Run(new[] { "compare-failing", baselinePath, currentPath }, output);
+
+        Assert.Equal(1, exitCode);
+        Assert.Contains("NEW F", output.ToString());
+        Assert.DoesNotContain("WARN", output.ToString());
+    }
+
+    /// <summary>
     /// Verifies comparing two identical BMP/PNG captures via the compare command passes with exit
     /// code 0.
     /// </summary>

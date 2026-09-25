@@ -27,4 +27,29 @@ public sealed class FailingSetComparerTests {
         Assert.Empty(comparison.NewFailures);
         Assert.True(comparison.Passed);
     }
+
+    /// <summary>
+    /// Verifies a new failure that is listed as known-flaky is reported as a flaky failure instead of a new
+    /// failure, so the comparison still passes.
+    /// </summary>
+    [Fact]
+    public void Compare_new_failure_in_flaky_list_is_reported_as_flaky_and_passes() {
+        FailingSetComparison comparison = FailingSetComparer.Compare(new[] { "A" }, new[] { "A", "F" }, new[] { "F" });
+
+        Assert.Empty(comparison.NewFailures);
+        Assert.Equal(new[] { "F" }, comparison.FlakyFailures);
+        Assert.True(comparison.Passed);
+    }
+
+    /// <summary>
+    /// Verifies a flaky list does not excuse a new failure that is not on it.
+    /// </summary>
+    [Fact]
+    public void Compare_new_failure_not_in_flaky_list_still_fails() {
+        FailingSetComparison comparison = FailingSetComparer.Compare(new[] { "A" }, new[] { "A", "F", "N" }, new[] { "F" });
+
+        Assert.Equal(new[] { "N" }, comparison.NewFailures);
+        Assert.Equal(new[] { "F" }, comparison.FlakyFailures);
+        Assert.False(comparison.Passed);
+    }
 }

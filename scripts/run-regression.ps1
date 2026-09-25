@@ -85,12 +85,13 @@ function Assert-WorkRootIsolated {
 
 <#
 .SYNOPSIS
-Records one check's outcome ("<PASS|FAIL|SKIP> <kind> <name> <detail>") for the final summary and echoes it.
+Records one check's outcome ("<PASS|FAIL|SKIP|WARN> <kind> <name> <detail>") for the final summary and echoes it.
+Only FAIL lines count toward RESULT: FAIL; a WARN is shown in the summary but never changes the result.
 #>
 function Add-CheckResult {
     param(
         [Parameter(Mandatory = $true)]
-        [ValidateSet('PASS', 'FAIL', 'SKIP')]
+        [ValidateSet('PASS', 'FAIL', 'SKIP', 'WARN')]
         [string]$Status,
 
         [Parameter(Mandatory = $true)]
@@ -683,7 +684,8 @@ else {
         }
     }
 
-    # 13V. Compare each test suite's failing-test set with its recorded baseline.
+    # 13V. Compare each test suite's failing-test set with its recorded baseline. When the suite has a committed
+    #      known-flaky list (regression\baselines\<suite>.flaky.txt), a new failure on that list is only a WARN.
     foreach ($testSuite in $testSuites) {
         $failingListPath = Invoke-TestSuite -SuiteName $testSuite.Name -ProjectPath $testSuite.ProjectPath -ExtraArguments $testSuite.ExtraArguments
         $baselinePath = Join-Path $baselineRootPath "$($testSuite.Name).failing.txt"
@@ -691,9 +693,17 @@ else {
             Add-CheckResult -Status FAIL -Kind suite -Name $testSuite.Name -Detail "baseline missing: $baselinePath"
             continue
         }
-        $compareFailingRun = Invoke-RegressionTool -ToolArguments @('compare-failing', $baselinePath, $failingListPath)
+        $compareFailingArguments = @('compare-failing', $baselinePath, $failingListPath)
+        $flakyListPath = Join-Path $baselineRootPath "$($testSuite.Name).flaky.txt"
+        if (Test-Path -LiteralPath $flakyListPath -PathType Leaf) {
+            $compareFailingArguments += $flakyListPath
+        }
+        $compareFailingRun = Invoke-RegressionTool -ToolArguments $compareFailingArguments
         foreach ($compareFailingLine in ($compareFailingRun.Lines | Select-Object -Skip 1)) {
             Write-Output "  $($testSuite.Name): $compareFailingLine"
+            if ("$compareFailingLine" -match '^WARN flaky (.+)$') {
+                Add-CheckResult -Status WARN -Kind suite -Name $testSuite.Name -Detail "known-flaky test failed: $($Matches[1])"
+            }
         }
         $newFailureCount = @($compareFailingRun.Lines | Where-Object { "$_".StartsWith('NEW ') }).Count
         $fixedFailureCount = @($compareFailingRun.Lines | Where-Object { "$_".StartsWith('FIXED ') }).Count

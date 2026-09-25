@@ -10,7 +10,7 @@ that the editor-side test suites have no new failures.
 |---|---|---|
 | `smoke` | The first rendering scene in build order (currently `axis_test`) | The player exits with code 0, writes a capture, and the capture is not blank. |
 | `golden` | Every DemoDisc rendering scene in the committed windows scene package (`scenes/rendering/*.helen`), including the smoke scene | The capture matches `regression\golden\<scene>.png` within the thresholds below. |
-| `suite` | `helengine.editor.tests`, `helengine.render.validation.tests` (both from `-HelengineRoot`), `helengine.windows.builder.tests` (this checkout) | The set of failing tests adds no test that is missing from `regression\baselines\<suite>.failing.txt`. Known failures stay tolerated; fixed ones are only reported. |
+| `suite` | `helengine.editor.tests`, `helengine.render.validation.tests` (both from `-HelengineRoot`), `helengine.windows.builder.tests` (this checkout) | The set of failing tests adds no test that is missing from `regression\baselines\<suite>.failing.txt`. Known failures stay tolerated; fixed ones are only reported. Tests in `<suite>.flaky.txt` only produce a `WARN` (see "Known flaky tests"). |
 | `manifest` | `regression\golden\manifest.json` | It exists and was recorded with the same run settings. |
 
 Every scene runs in a 640x360 window with `--frames 30 --fixed-delta 0.016666 --capture <bmp>`, so the captured
@@ -47,8 +47,8 @@ powershell -File scripts\run-regression.ps1 -Verify
 
 The run builds the player (through `helengine\scripts\build-platform.ps1`), runs every scene through
 `scripts\launch_in_emulator.ps1`, and runs the three test suites. It prints one line per check
-(`PASS|FAIL|SKIP <kind> <name> <detail>`), then `RESULT: PASS` or `RESULT: FAIL (<n> failing)`. It exits 0 only on
-PASS.
+(`PASS|FAIL|SKIP|WARN <kind> <name> <detail>`), then `RESULT: PASS` or `RESULT: FAIL (<n> failing)`. Only `FAIL`
+lines count toward the result. It exits 0 only on PASS.
 
 Optional parameters: `-HelengineRoot` (default `C:\dev\helworks\helengine`), `-ProjectSource` (default
 `C:\dev\helprojs\demodisc`) and `-WorkRoot` (default `C:\dev\helworks\builds\helengine-windows\regression`). The
@@ -100,13 +100,29 @@ helengine moved on purpose). Never re-record just to make a failing `-Verify` pa
   bin/obj output is written into that checkout as for any normal `dotnet test`.
 - The net covers the Windows player host and DemoDisc's rendering scenes only; DemoDisc's menu and gameplay scenes
   are not built.
-- **Flaky editor tests.** In the full `helengine.editor.tests` run, the keyboard-focus tests
-  `SceneHierarchyPanelKeyboardFocusTests` (the four arrow-key tests) and
-  `EditorSessionUndoRedoIntegrationTests.Keyboard_focus_update_component_routes_delete_into_the_session_handler`
-  pass in some runs and fail in others; run on their own, they always pass. When the four arrow-key tests fail,
-  `-Verify` reports `FAIL suite helengine.editor.tests 4 new failure(s)` although nothing in this checkout changed.
-  The probable cause is shared state that leaks between tests in helengine:
-  `TextBoxComponent.FocusedTextEntry` is a process-wide static, and while a text box left focused by an earlier
-  test holds it, `EditorKeyboardFocusUpdateComponent` ignores exactly the arrow keys and Delete. The fix belongs
-  in helengine. The baselines are not widened to hide these tests. Before you blame this checkout for that
-  failure, re-run `-Verify` or run the five tests on their own.
+- Known-flaky tests are tolerated only when they are listed explicitly (see below).
+
+## Known flaky tests
+
+`regression\baselines\<suite>.flaky.txt` (optional, one fully qualified test name per line, the same format as
+`<suite>.failing.txt`) lists tests that pass in some full-suite runs and fail in others for reasons outside this
+checkout. When one of them fails but is not in the baseline, `-Verify` prints
+`WARN suite <suite> known-flaky test failed: <name>`, both inline and in the summary. A WARN never changes
+`RESULT`. Every other new failure still fails the run. The tool command is
+`compare-failing <baseline.txt> <current.txt> [<flaky.txt>]`.
+
+`helengine.editor.tests.flaky.txt` lists five keyboard-focus tests: the four arrow-key tests in
+`SceneHierarchyPanelKeyboardFocusTests` and
+`EditorSessionUndoRedoIntegrationTests.Keyboard_focus_update_component_routes_delete_into_the_session_handler`.
+In repeated full runs each of them sometimes passed and sometimes failed; run on their own, they always pass.
+
+- **Root cause (in helengine):** `TextBoxComponent.FocusedTextEntry` (`helengine.core`) is a process-wide static.
+  A text box that an earlier test in the same process left focused keeps it set. While it is set,
+  `EditorKeyboardFocusUpdateComponent` treats text entry as active and ignores the arrow keys and Delete, which
+  are exactly the keys these tests press.
+- **Proper fix:** it belongs in helengine (for example, clear the focused text box when the text box or the
+  `Core` is disposed). This checkout treats helengine as read-only.
+- **Remove entries once fixed:** as soon as helengine fixes the leak, delete the entries from the flaky list (and
+  the file when it is empty), so that these tests are fully checked again. Never add a test to a flaky list to
+  hide a real regression. Add one only after you have seen it both pass and fail with no change, and document
+  the cause here.
