@@ -138,6 +138,27 @@ public sealed class RegressionScriptSourceTests {
     }
 
     /// <summary>
+    /// Ensures an idle diff image from an earlier run can never be mistaken for this run's: the idle scenario deletes a
+    /// stale diff before it runs, and Verify writes the idle diff into the diffs folder it wipes at the start.
+    /// </summary>
+    [Fact]
+    public void RegressionScript_NeverLeavesAStaleIdleDiff() {
+        string scriptSource = ReadRegressionScriptSource();
+
+        int functionIndex = scriptSource.IndexOf("function Invoke-IdleScenario {", StringComparison.Ordinal);
+        Assert.True(functionIndex >= 0, "The script must define Invoke-IdleScenario.");
+        int staleDiffRemovalIndex = scriptSource.IndexOf("Remove-Item -LiteralPath $DiffPath -Force", functionIndex, StringComparison.Ordinal);
+        int idleRunIndex = scriptSource.IndexOf("$idleRun = Invoke-PlayerScene", functionIndex, StringComparison.Ordinal);
+        Assert.True(staleDiffRemovalIndex > functionIndex, "Invoke-IdleScenario must delete a stale diff image.");
+        Assert.True(idleRunIndex > staleDiffRemovalIndex, "Invoke-IdleScenario must delete the stale diff image before the run.");
+
+        int diffsWipeIndex = scriptSource.IndexOf("Remove-Item -LiteralPath $diffsRootPath -Recurse -Force", StringComparison.Ordinal);
+        int verifyIdleDiffIndex = scriptSource.IndexOf("$idleDiffPath = Join-Path $diffsRootPath", StringComparison.Ordinal);
+        Assert.True(diffsWipeIndex >= 0, "Verify must wipe the diffs folder.");
+        Assert.True(verifyIdleDiffIndex > diffsWipeIndex, "Verify must write the idle diff into the diffs folder it wipes.");
+    }
+
+    /// <summary>
     /// Ensures the regression README documents the idle scenario, the physics caveat and the check-idle command.
     /// </summary>
     [Fact]

@@ -327,6 +327,10 @@ function Invoke-IdleScenario {
         [string]$GoldenPath
     )
 
+    # A diff image left by an earlier run must never be mistaken for this run's, so it is deleted before the run.
+    if (Test-Path -LiteralPath $DiffPath -PathType Leaf) {
+        Remove-Item -LiteralPath $DiffPath -Force
+    }
     $idleRun = Invoke-PlayerScene -SceneId $SceneId -CapturePath $CapturePath -ExtraArguments $script:idlePlayerArguments
     if (-not (Test-PlayerRunSucceeded -PlayerRun $idleRun -Kind idle -SceneId $SceneId -CapturePath $CapturePath)) {
         return
@@ -835,6 +839,7 @@ $capturesRootPath = Join-Path $WorkRoot 'captures'
 # The opt-in idle-throttle scenario: the smoke scene runs its usual 30 frames with the idle throttle on, going idle 1 ms
 # after the last activity and pacing idle frames at 10 fps (about 100 ms each), so the run takes about 3 s.
 $idleCapturePath = Join-Path $capturesRootPath "idle\$($smokeSceneId.Replace('/', '__')).bmp"
+# Record writes the idle diff beside the idle capture; Verify redirects it into its wiped diffs folder.
 $idleDiffPath = Join-Path $capturesRootPath "idle\$($smokeSceneId.Replace('/', '__')).diff.png"
 $idlePlayerArguments = @('--idle-throttle', 'on', '--idle-after-ms', '1', '--idle-fps', '10')
 $idleMinimumIdleFrames = '25'
@@ -1071,6 +1076,8 @@ else {
         Add-CheckResult -Status FAIL -Kind idle -Name $smokeSceneId -Detail "idle entry missing from manifest (re-record required): $manifestPath"
     }
     else {
+        # The idle diff goes into the diffs folder wiped above, beside the scene diffs.
+        $idleDiffPath = Join-Path $diffsRootPath "$($smokeSceneId.Replace('/', '__')).idle.diff.png"
         $idleGoldenPath = Join-Path $goldenRootPath "$($smokeSceneId.Replace('/', '__')).png"
         if ($unstableSceneIds.Contains($smokeSceneId)) {
             $idleGoldenPath = ''
