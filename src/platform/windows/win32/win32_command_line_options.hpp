@@ -109,7 +109,8 @@ namespace helengine::windows {
 
     private:
         /// Returns whether the argument is one of the regression flags (--scene, --frames, --fixed-delta, --capture,
-        /// --idle-throttle, --idle-after-ms, --idle-fps).
+        /// --idle-throttle, --idle-after-ms, --idle-fps, --window-mode, --overlay-bounds, --overlay-background,
+        /// --hit-test-probe).
         static bool IsKnownFlag(const std::wstring& argument);
 
         /// Converts a UTF-16 command-line value to UTF-8 so it can be compared with engine scene ids and logged.

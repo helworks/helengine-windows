@@ -45,8 +45,9 @@ public sealed class Win32WindowModeSettingsSourceTests {
 
     /// <summary>
     /// Verifies the settings value type validates its source like <c>Win32IdleThrottleSettings</c>, lets the
-    /// command line override the profile field by field, and describes the effective configuration with its
-    /// source.
+    /// command line override the profile field by field (falling back to the shared
+    /// <c>Win32WindowModeNames</c> conversion, not a private duplicate parser, when no override was supplied), and
+    /// describes the effective configuration through the same shared conversion.
     /// </summary>
     [Fact]
     public void Win32WindowModeSettings_validates_resolves_and_describes() {
@@ -65,15 +66,69 @@ public sealed class Win32WindowModeSettingsSourceTests {
         Assert.Contains("\"profile\"", settingsSource, StringComparison.Ordinal);
         Assert.Contains("\"commandLine\"", settingsSource, StringComparison.Ordinal);
         Assert.Contains("\"mixed\"", settingsSource, StringComparison.Ordinal);
-        Assert.Contains(
-            "options.HasWindowMode() ? options.GetWindowMode() : ParseProfileWindowMode(profile.WindowMode)",
-            settingsSource, StringComparison.Ordinal);
-        Assert.Contains(
-            "options.HasOverlayBounds() ? options.GetOverlayBounds() : ParseProfileOverlayBounds(profile.OverlayBounds)",
-            settingsSource, StringComparison.Ordinal);
-        Assert.Contains(
-            "options.HasOverlayBackground() ? options.GetOverlayBackground() : ParseProfileOverlayBackground(profile.OverlayBackground)",
-            settingsSource, StringComparison.Ordinal);
+
+        Assert.Contains("Win32WindowModeNames::TryParseWindowMode(profile.WindowMode, windowMode)", settingsSource, StringComparison.Ordinal);
+        Assert.Contains("Win32WindowModeNames::TryParseOverlayBounds(profile.OverlayBounds, overlayBounds)", settingsSource, StringComparison.Ordinal);
+        Assert.Contains("Win32WindowModeNames::TryParseOverlayBackground(profile.OverlayBackground, overlayBackground)", settingsSource, StringComparison.Ordinal);
+        Assert.Contains("Win32WindowModeNames::ToText(WindowMode)", settingsSource, StringComparison.Ordinal);
+        Assert.Contains("Win32WindowModeNames::ToText(OverlayBounds)", settingsSource, StringComparison.Ordinal);
+        Assert.Contains("Win32WindowModeNames::ToText(OverlayBackground)", settingsSource, StringComparison.Ordinal);
+
+        // The settings class must not keep its own duplicate literal-table parsers now that Win32WindowModeNames
+        // is the single conversion point.
+        Assert.DoesNotContain("ParseProfileWindowMode", settingsSource, StringComparison.Ordinal);
+        Assert.DoesNotContain("ParseProfileOverlayBounds", settingsSource, StringComparison.Ordinal);
+        Assert.DoesNotContain("ParseProfileOverlayBackground", settingsSource, StringComparison.Ordinal);
+        Assert.DoesNotContain("== Win32WindowMode::Overlay ? \"overlay\"", settingsSource, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// Verifies <c>Win32WindowModeNames</c> is the single place that knows the exact, case-sensitive accepted text
+    /// for windowMode, overlayBounds and overlayBackground, and how each enum value renders back to text, and that
+    /// the loader, the command-line parser and the settings type all call it instead of keeping their own literal
+    /// tables.
+    /// </summary>
+    [Fact]
+    public void Win32WindowModeNames_is_the_single_conversion_point_for_every_caller() {
+        string namesHeader = ReadRepositoryFile("src", "platform", "windows", "win32", "win32_window_mode_names.hpp");
+        string namesSource = ReadRepositoryFile("src", "platform", "windows", "win32", "win32_window_mode_names.cpp");
+
+        Assert.Contains("static bool TryParseWindowMode(const std::string& text, Win32WindowMode& windowMode);", namesHeader, StringComparison.Ordinal);
+        Assert.Contains("static bool TryParseOverlayBounds(const std::string& text, Win32OverlayBounds& overlayBounds);", namesHeader, StringComparison.Ordinal);
+        Assert.Contains("static bool TryParseOverlayBackground(const std::string& text, Win32OverlayBackground& overlayBackground);", namesHeader, StringComparison.Ordinal);
+        Assert.Contains("static const char* ToText(Win32WindowMode windowMode);", namesHeader, StringComparison.Ordinal);
+        Assert.Contains("static const char* ToText(Win32OverlayBounds overlayBounds);", namesHeader, StringComparison.Ordinal);
+        Assert.Contains("static const char* ToText(Win32OverlayBackground overlayBackground);", namesHeader, StringComparison.Ordinal);
+
+        Assert.Contains("text == \"normal\"", namesSource, StringComparison.Ordinal);
+        Assert.Contains("text == \"overlay\"", namesSource, StringComparison.Ordinal);
+        Assert.Contains("text == \"monitor\"", namesSource, StringComparison.Ordinal);
+        Assert.Contains("text == \"profile\"", namesSource, StringComparison.Ordinal);
+        Assert.Contains("text == \"camera\"", namesSource, StringComparison.Ordinal);
+        Assert.Contains("text == \"transparent\"", namesSource, StringComparison.Ordinal);
+
+        string loaderSource = ReadRepositoryFile("src", "platform", "windows", "runtime", "runtime_player_profile_loader.cpp");
+        string validateWindowModeFieldsStart = "void RuntimePlayerProfileLoader::ValidateWindowModeFields(";
+        int validateStartIndex = loaderSource.IndexOf(validateWindowModeFieldsStart, StringComparison.Ordinal);
+        Assert.True(validateStartIndex >= 0, "ValidateWindowModeFields must be defined in the loader source.");
+        int validateEndIndex = loaderSource.IndexOf("\n    }", validateStartIndex, StringComparison.Ordinal);
+        string validateBody = loaderSource.Substring(validateStartIndex, validateEndIndex - validateStartIndex);
+        Assert.Contains("Win32WindowModeNames::TryParseWindowMode(", validateBody, StringComparison.Ordinal);
+        Assert.Contains("Win32WindowModeNames::TryParseOverlayBounds(", validateBody, StringComparison.Ordinal);
+        Assert.Contains("Win32WindowModeNames::TryParseOverlayBackground(", validateBody, StringComparison.Ordinal);
+        Assert.DoesNotContain("!= \"normal\" && profile.WindowMode != \"overlay\"", validateBody, StringComparison.Ordinal);
+
+        string parserSource = ReadRepositoryFile("src", "platform", "windows", "win32", "win32_command_line_options.cpp");
+        Assert.Contains("Win32WindowModeNames::TryParseWindowMode(text, windowMode)", parserSource, StringComparison.Ordinal);
+        Assert.Contains("Win32WindowModeNames::TryParseOverlayBounds(text, overlayBounds)", parserSource, StringComparison.Ordinal);
+        Assert.Contains("Win32WindowModeNames::TryParseOverlayBackground(text, overlayBackground)", parserSource, StringComparison.Ordinal);
+        Assert.DoesNotContain("value == L\"normal\"", parserSource, StringComparison.Ordinal);
+        Assert.DoesNotContain("value == L\"overlay\"", parserSource, StringComparison.Ordinal);
+        Assert.DoesNotContain("value == L\"monitor\"", parserSource, StringComparison.Ordinal);
+        Assert.DoesNotContain("value == L\"camera\"", parserSource, StringComparison.Ordinal);
+
+        string cmakeSource = ReadRepositoryFile("CMakeLists.txt");
+        Assert.Contains("src/platform/windows/win32/win32_window_mode_names.cpp", cmakeSource, StringComparison.Ordinal);
     }
 
     /// <summary>
@@ -100,9 +155,9 @@ public sealed class Win32WindowModeSettingsSourceTests {
     }
 
     /// <summary>
-    /// Verifies CreateMainWindow resolves the window-mode settings right after the idle-throttle settings (before
-    /// the window is created), and logs the effective configuration only in overlay mode, keeping normal-mode
-    /// startup output byte-identical.
+    /// Verifies CreateMainWindow resolves the window-mode settings right before the idle-throttle settings (both
+    /// before the window is created), and logs the effective configuration only in overlay mode, keeping
+    /// normal-mode startup output byte-identical.
     /// </summary>
     [Fact]
     public void Win32Application_resolves_window_mode_settings_next_to_idle_throttle_settings() {

@@ -7,11 +7,13 @@
 #include "platform/windows/win32/win32_overlay_background.hpp"
 #include "platform/windows/win32/win32_overlay_bounds.hpp"
 #include "platform/windows/win32/win32_window_mode.hpp"
+#include "platform/windows/win32/win32_window_mode_names.hpp"
 
 namespace helengine::windows {
     /// Stores the effective window-mode configuration of the native player after the command line has been applied
-    /// over the runtime profile. The values are validated on construction, so an instance always holds a usable
-    /// configuration. Nothing consumes these settings yet: only Resolve is called today, so an invalid combination
+    /// over the runtime profile: whether the main window presents itself normally or as a borderless, always-on-top
+    /// overlay, and, in overlay mode, how its bounds and back-buffer clear behavior are resolved. The values are
+    /// validated on construction, so an instance always holds a usable configuration, and an invalid combination
     /// (for example a stray --hit-test-probe) already fails startup before the window is created.
     class Win32WindowModeSettings {
     public:
@@ -40,9 +42,11 @@ namespace helengine::windows {
         const std::string& GetSource() const;
 
         /// Resolves the effective settings: every window-mode command-line flag that was supplied overrides the
-        /// matching profile value, and every flag that was not supplied keeps the profile value. Throws
-        /// std::invalid_argument when --hit-test-probe was supplied without both --frames and an effective overlay
-        /// window mode, since the probe has nothing to sample and no frame to sample it on otherwise.
+        /// matching profile value, and every flag that was not supplied keeps the profile value (validated through
+        /// Win32WindowModeNames as a defense-in-depth check; RuntimePlayerProfileLoader already rejects any other
+        /// profile value while loading profile.json). Also throws std::invalid_argument when --hit-test-probe was
+        /// supplied without both --frames and an effective overlay window mode, since the probe has nothing to
+        /// sample and no frame to sample it on otherwise.
         /// <param name="profile">Runtime player profile resolved from profile.json.</param>
         /// <param name="options">Command-line options parsed at startup.</param>
         /// <returns>The validated effective settings.</returns>
@@ -53,21 +57,6 @@ namespace helengine::windows {
         std::string Describe() const;
 
     private:
-        /// Parses the profile's windowMode string into its enum value, throwing std::invalid_argument when it is
-        /// not exactly "normal" or "overlay". This is a defense-in-depth check: RuntimePlayerProfileLoader already
-        /// rejects any other value while loading profile.json.
-        static Win32WindowMode ParseProfileWindowMode(const std::string& windowMode);
-
-        /// Parses the profile's overlayBounds string into its enum value, throwing std::invalid_argument when it is
-        /// not exactly "monitor" or "profile". This is a defense-in-depth check: RuntimePlayerProfileLoader already
-        /// rejects any other value while loading profile.json.
-        static Win32OverlayBounds ParseProfileOverlayBounds(const std::string& overlayBounds);
-
-        /// Parses the profile's overlayBackground string into its enum value, throwing std::invalid_argument when it
-        /// is not exactly "camera" or "transparent". This is a defense-in-depth check: RuntimePlayerProfileLoader
-        /// already rejects any other value while loading profile.json.
-        static Win32OverlayBackground ParseProfileOverlayBackground(const std::string& overlayBackground);
-
         /// Stores how the main window presents itself.
         Win32WindowMode WindowMode;
 

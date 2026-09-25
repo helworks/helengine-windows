@@ -53,9 +53,29 @@ namespace helengine::windows {
     /// <param name="options">Command-line options parsed at startup.</param>
     /// <returns>The validated effective settings.</returns>
     Win32WindowModeSettings Win32WindowModeSettings::Resolve(const RuntimePlayerProfile& profile, const Win32CommandLineOptions& options) {
-        Win32WindowMode windowMode = options.HasWindowMode() ? options.GetWindowMode() : ParseProfileWindowMode(profile.WindowMode);
-        Win32OverlayBounds overlayBounds = options.HasOverlayBounds() ? options.GetOverlayBounds() : ParseProfileOverlayBounds(profile.OverlayBounds);
-        Win32OverlayBackground overlayBackground = options.HasOverlayBackground() ? options.GetOverlayBackground() : ParseProfileOverlayBackground(profile.OverlayBackground);
+        Win32WindowMode windowMode = Win32WindowMode::Normal;
+        if (options.HasWindowMode()) {
+            windowMode = options.GetWindowMode();
+        } else if (!Win32WindowModeNames::TryParseWindowMode(profile.WindowMode, windowMode)) {
+            throw std::invalid_argument(
+                "Runtime player profile windowMode must be \"normal\" or \"overlay\", got: " + profile.WindowMode);
+        }
+
+        Win32OverlayBounds overlayBounds = Win32OverlayBounds::Monitor;
+        if (options.HasOverlayBounds()) {
+            overlayBounds = options.GetOverlayBounds();
+        } else if (!Win32WindowModeNames::TryParseOverlayBounds(profile.OverlayBounds, overlayBounds)) {
+            throw std::invalid_argument(
+                "Runtime player profile overlayBounds must be \"monitor\" or \"profile\", got: " + profile.OverlayBounds);
+        }
+
+        Win32OverlayBackground overlayBackground = Win32OverlayBackground::Camera;
+        if (options.HasOverlayBackground()) {
+            overlayBackground = options.GetOverlayBackground();
+        } else if (!Win32WindowModeNames::TryParseOverlayBackground(profile.OverlayBackground, overlayBackground)) {
+            throw std::invalid_argument(
+                "Runtime player profile overlayBackground must be \"camera\" or \"transparent\", got: " + profile.OverlayBackground);
+        }
 
         bool commandLineSupplied = options.HasWindowMode() || options.HasOverlayBounds() || options.HasOverlayBackground();
         std::string source = "profile";
@@ -77,55 +97,10 @@ namespace helengine::windows {
     /// `windowMode=<normal|overlay> bounds=<monitor|profile> background=<camera|transparent> source=<profile|commandLine|mixed>`.
     std::string Win32WindowModeSettings::Describe() const {
         std::ostringstream builder;
-        builder << "windowMode=" << (WindowMode == Win32WindowMode::Overlay ? "overlay" : "normal")
-            << " bounds=" << (OverlayBounds == Win32OverlayBounds::Profile ? "profile" : "monitor")
-            << " background=" << (OverlayBackground == Win32OverlayBackground::Transparent ? "transparent" : "camera")
+        builder << "windowMode=" << Win32WindowModeNames::ToText(WindowMode)
+            << " bounds=" << Win32WindowModeNames::ToText(OverlayBounds)
+            << " background=" << Win32WindowModeNames::ToText(OverlayBackground)
             << " source=" << Source;
         return builder.str();
-    }
-
-    /// Parses the profile's windowMode string into its enum value, throwing std::invalid_argument when it is not
-    /// exactly "normal" or "overlay". This is a defense-in-depth check: RuntimePlayerProfileLoader already rejects
-    /// any other value while loading profile.json.
-    Win32WindowMode Win32WindowModeSettings::ParseProfileWindowMode(const std::string& windowMode) {
-        if (windowMode == "normal") {
-            return Win32WindowMode::Normal;
-        }
-
-        if (windowMode == "overlay") {
-            return Win32WindowMode::Overlay;
-        }
-
-        throw std::invalid_argument("Runtime player profile windowMode must be \"normal\" or \"overlay\", got: " + windowMode);
-    }
-
-    /// Parses the profile's overlayBounds string into its enum value, throwing std::invalid_argument when it is not
-    /// exactly "monitor" or "profile". This is a defense-in-depth check: RuntimePlayerProfileLoader already rejects
-    /// any other value while loading profile.json.
-    Win32OverlayBounds Win32WindowModeSettings::ParseProfileOverlayBounds(const std::string& overlayBounds) {
-        if (overlayBounds == "monitor") {
-            return Win32OverlayBounds::Monitor;
-        }
-
-        if (overlayBounds == "profile") {
-            return Win32OverlayBounds::Profile;
-        }
-
-        throw std::invalid_argument("Runtime player profile overlayBounds must be \"monitor\" or \"profile\", got: " + overlayBounds);
-    }
-
-    /// Parses the profile's overlayBackground string into its enum value, throwing std::invalid_argument when it is
-    /// not exactly "camera" or "transparent". This is a defense-in-depth check: RuntimePlayerProfileLoader already
-    /// rejects any other value while loading profile.json.
-    Win32OverlayBackground Win32WindowModeSettings::ParseProfileOverlayBackground(const std::string& overlayBackground) {
-        if (overlayBackground == "camera") {
-            return Win32OverlayBackground::Camera;
-        }
-
-        if (overlayBackground == "transparent") {
-            return Win32OverlayBackground::Transparent;
-        }
-
-        throw std::invalid_argument("Runtime player profile overlayBackground must be \"camera\" or \"transparent\", got: " + overlayBackground);
     }
 }

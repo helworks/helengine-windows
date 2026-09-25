@@ -304,7 +304,8 @@ public sealed class RuntimePlayerProfileSourceTests {
 
     /// <summary>
     /// Verifies ValidateWindowModeFields rejects windowMode, overlayBounds and overlayBackground values outside
-    /// their exact, case-sensitive accepted sets by throwing the configuration error.
+    /// their exact, case-sensitive accepted sets by throwing the configuration error, and that it does so through
+    /// the shared <c>Win32WindowModeNames</c> conversion point instead of its own literal comparisons.
     /// </summary>
     [Fact]
     public void ValidateWindowModeFields_rejects_values_outside_the_accepted_enums() {
@@ -322,9 +323,9 @@ public sealed class RuntimePlayerProfileSourceTests {
         Assert.True(methodEndIndex > methodStartIndex, "BuildProfileJson must follow ValidateWindowModeFields in the loader source.");
 
         string methodBody = loaderSource.Substring(methodStartIndex, methodEndIndex - methodStartIndex);
-        Assert.Contains("profile.WindowMode != \"normal\" && profile.WindowMode != \"overlay\"", methodBody, StringComparison.Ordinal);
-        Assert.Contains("profile.OverlayBounds != \"monitor\" && profile.OverlayBounds != \"profile\"", methodBody, StringComparison.Ordinal);
-        Assert.Contains("profile.OverlayBackground != \"camera\" && profile.OverlayBackground != \"transparent\"", methodBody, StringComparison.Ordinal);
+        Assert.Contains("!Win32WindowModeNames::TryParseWindowMode(profile.WindowMode, windowMode)", methodBody, StringComparison.Ordinal);
+        Assert.Contains("!Win32WindowModeNames::TryParseOverlayBounds(profile.OverlayBounds, overlayBounds)", methodBody, StringComparison.Ordinal);
+        Assert.Contains("!Win32WindowModeNames::TryParseOverlayBackground(profile.OverlayBackground, overlayBackground)", methodBody, StringComparison.Ordinal);
         Assert.Equal(3, System.Text.RegularExpressions.Regex.Matches(methodBody, "throw RuntimePlayerProfileConfigurationError\\(").Count);
     }
 

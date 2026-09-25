@@ -10,6 +10,8 @@
 #include <cwctype>
 #include <stdexcept>
 
+#include "platform/windows/win32/win32_window_mode_names.hpp"
+
 namespace helengine::windows {
     /// Creates an options set with no flags supplied, which leaves every player behavior at its default.
     Win32CommandLineOptions::Win32CommandLineOptions()
@@ -424,46 +426,41 @@ namespace helengine::windows {
 
     /// Parses a --window-mode value that must be exactly "normal" or "overlay", throwing std::invalid_argument otherwise.
     Win32WindowMode Win32CommandLineOptions::ParseWindowMode(const std::wstring& value) {
-        if (value == L"normal") {
-            return Win32WindowMode::Normal;
+        std::string text = ConvertToUtf8(value);
+        Win32WindowMode windowMode = Win32WindowMode::Normal;
+        if (Win32WindowModeNames::TryParseWindowMode(text, windowMode)) {
+            return windowMode;
         }
 
-        if (value == L"overlay") {
-            return Win32WindowMode::Overlay;
-        }
-
-        throw std::invalid_argument("Command-line flag --window-mode requires \"normal\" or \"overlay\", got: " + ConvertToUtf8(value));
+        throw std::invalid_argument("Command-line flag --window-mode requires \"normal\" or \"overlay\", got: " + text);
     }
 
     /// Parses an --overlay-bounds value that must be exactly "monitor" or "profile", throwing std::invalid_argument otherwise.
     Win32OverlayBounds Win32CommandLineOptions::ParseOverlayBounds(const std::wstring& value) {
-        if (value == L"monitor") {
-            return Win32OverlayBounds::Monitor;
+        std::string text = ConvertToUtf8(value);
+        Win32OverlayBounds overlayBounds = Win32OverlayBounds::Monitor;
+        if (Win32WindowModeNames::TryParseOverlayBounds(text, overlayBounds)) {
+            return overlayBounds;
         }
 
-        if (value == L"profile") {
-            return Win32OverlayBounds::Profile;
-        }
-
-        throw std::invalid_argument("Command-line flag --overlay-bounds requires \"monitor\" or \"profile\", got: " + ConvertToUtf8(value));
+        throw std::invalid_argument("Command-line flag --overlay-bounds requires \"monitor\" or \"profile\", got: " + text);
     }
 
     /// Parses an --overlay-background value that must be exactly "camera" or "transparent", throwing std::invalid_argument otherwise.
     Win32OverlayBackground Win32CommandLineOptions::ParseOverlayBackground(const std::wstring& value) {
-        if (value == L"camera") {
-            return Win32OverlayBackground::Camera;
+        std::string text = ConvertToUtf8(value);
+        Win32OverlayBackground overlayBackground = Win32OverlayBackground::Camera;
+        if (Win32WindowModeNames::TryParseOverlayBackground(text, overlayBackground)) {
+            return overlayBackground;
         }
 
-        if (value == L"transparent") {
-            return Win32OverlayBackground::Transparent;
-        }
-
-        throw std::invalid_argument("Command-line flag --overlay-background requires \"camera\" or \"transparent\", got: " + ConvertToUtf8(value));
+        throw std::invalid_argument("Command-line flag --overlay-background requires \"camera\" or \"transparent\", got: " + text);
     }
 
     /// Parses a --hit-test-probe value that must be two base-10 non-negative integers separated by exactly one comma,
     /// with both numbers fully consumed, throwing std::invalid_argument otherwise. Writes the parsed coordinates into
-    /// probeX and probeY.
+    /// probeX and probeY. Each coordinate must start with a digit: a leading '+' or '-' is rejected, so the value can
+    /// only ever be non-negative.
     void Win32CommandLineOptions::ParseHitTestProbe(const std::wstring& value, int& probeX, int& probeY) {
         std::string invalidMessage = "Command-line flag --hit-test-probe requires two non-negative whole numbers separated by a comma, got: " + ConvertToUtf8(value);
 
@@ -474,7 +471,7 @@ namespace helengine::windows {
 
         std::wstring xText = value.substr(0, commaIndex);
         std::wstring yText = value.substr(commaIndex + 1);
-        if (xText.empty() || yText.empty() || std::iswspace(xText[0]) || std::iswspace(yText[0])) {
+        if (xText.empty() || yText.empty() || std::iswdigit(xText[0]) == 0 || std::iswdigit(yText[0]) == 0) {
             throw std::invalid_argument(invalidMessage);
         }
 

@@ -235,7 +235,8 @@ public sealed class Win32CommandLineOptionsSourceTests {
     /// <summary>
     /// Verifies the parser recognizes the three window-mode flags as known flags, wires them into explicit
     /// <c>else if</c> branches placed before the trailing <c>--capture</c> branch, and enforces their exact,
-    /// case-sensitive accepted values.
+    /// case-sensitive accepted values through the shared <c>Win32WindowModeNames</c> conversion point rather than
+    /// its own literal comparisons.
     /// </summary>
     [Fact]
     public void Win32CommandLineOptions_parses_window_mode_flags() {
@@ -265,12 +266,17 @@ public sealed class Win32CommandLineOptionsSourceTests {
         Assert.True(overlayBoundsBranchIndex < captureBranchIndex, "The --overlay-bounds branch must precede the --capture branch.");
         Assert.True(overlayBackgroundBranchIndex < captureBranchIndex, "The --overlay-background branch must precede the --capture branch.");
 
-        Assert.Contains("L\"normal\"", parserSource, StringComparison.Ordinal);
-        Assert.Contains("L\"overlay\"", parserSource, StringComparison.Ordinal);
-        Assert.Contains("L\"monitor\"", parserSource, StringComparison.Ordinal);
-        Assert.Contains("L\"profile\"", parserSource, StringComparison.Ordinal);
-        Assert.Contains("L\"camera\"", parserSource, StringComparison.Ordinal);
-        Assert.Contains("L\"transparent\"", parserSource, StringComparison.Ordinal);
+        // Each flag's value is validated through the single Win32WindowModeNames conversion point, not a private
+        // duplicate literal table.
+        Assert.Contains("Win32WindowModeNames::TryParseWindowMode(text, windowMode)", parserSource, StringComparison.Ordinal);
+        Assert.Contains("Win32WindowModeNames::TryParseOverlayBounds(text, overlayBounds)", parserSource, StringComparison.Ordinal);
+        Assert.Contains("Win32WindowModeNames::TryParseOverlayBackground(text, overlayBackground)", parserSource, StringComparison.Ordinal);
+        Assert.DoesNotContain("value == L\"normal\"", parserSource, StringComparison.Ordinal);
+        Assert.DoesNotContain("value == L\"overlay\"", parserSource, StringComparison.Ordinal);
+        Assert.DoesNotContain("value == L\"monitor\"", parserSource, StringComparison.Ordinal);
+        Assert.DoesNotContain("value == L\"profile\"", parserSource, StringComparison.Ordinal);
+        Assert.DoesNotContain("value == L\"camera\"", parserSource, StringComparison.Ordinal);
+        Assert.DoesNotContain("value == L\"transparent\"", parserSource, StringComparison.Ordinal);
 
         Assert.Contains("bool HasWindowMode() const;", parserHeader, StringComparison.Ordinal);
         Assert.Contains("Win32WindowMode GetWindowMode() const;", parserHeader, StringComparison.Ordinal);
@@ -311,6 +317,24 @@ public sealed class Win32CommandLineOptionsSourceTests {
         Assert.Contains("bool HasHitTestProbe() const;", parserHeader, StringComparison.Ordinal);
         Assert.Contains("int GetHitTestProbeX() const;", parserHeader, StringComparison.Ordinal);
         Assert.Contains("int GetHitTestProbeY() const;", parserHeader, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// Verifies each --hit-test-probe coordinate must start with a digit, rejecting a leading '+' or '-' (for
+    /// example "+1,2" or "1,-2") instead of letting <c>wcstol</c>'s own sign handling accept it.
+    /// </summary>
+    [Fact]
+    public void Win32CommandLineOptions_hit_test_probe_rejects_a_leading_sign_on_either_coordinate() {
+        string parserSource = ReadRepositoryFile("src", "platform", "windows", "win32", "win32_command_line_options.cpp");
+
+        int parseHitTestProbeIndex = parserSource.IndexOf("Win32CommandLineOptions::ParseHitTestProbe(", StringComparison.Ordinal);
+        Assert.True(parseHitTestProbeIndex >= 0, "ParseHitTestProbe definition was not found.");
+        string parseHitTestProbeBody = parserSource.Substring(parseHitTestProbeIndex, parserSource.IndexOf("\n    }", parseHitTestProbeIndex, StringComparison.Ordinal) - parseHitTestProbeIndex);
+
+        Assert.Contains("std::iswdigit(xText[0]) == 0", parseHitTestProbeBody, StringComparison.Ordinal);
+        Assert.Contains("std::iswdigit(yText[0]) == 0", parseHitTestProbeBody, StringComparison.Ordinal);
+        Assert.DoesNotContain("std::iswspace(xText[0])", parseHitTestProbeBody, StringComparison.Ordinal);
+        Assert.DoesNotContain("std::iswspace(yText[0])", parseHitTestProbeBody, StringComparison.Ordinal);
     }
 
     /// <summary>

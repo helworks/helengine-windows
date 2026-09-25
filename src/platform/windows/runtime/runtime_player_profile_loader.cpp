@@ -6,6 +6,7 @@
 #include <stdexcept>
 
 #include "platform/windows/runtime/runtime_player_profile_configuration_error.hpp"
+#include "platform/windows/win32/win32_window_mode_names.hpp"
 
 namespace helengine::windows {
     /// Resolves one runtime player profile from disk or seeds it from deployment defaults.
@@ -360,17 +361,20 @@ namespace helengine::windows {
     /// RuntimePlayerProfileConfigurationError when WindowMode, OverlayBounds or OverlayBackground holds anything
     /// other than its exact, case-sensitive accepted values.
     void RuntimePlayerProfileLoader::ValidateWindowModeFields(const RuntimePlayerProfile& profile) const {
-        if (profile.WindowMode != "normal" && profile.WindowMode != "overlay") {
+        Win32WindowMode windowMode = Win32WindowMode::Normal;
+        if (!Win32WindowModeNames::TryParseWindowMode(profile.WindowMode, windowMode)) {
             throw RuntimePlayerProfileConfigurationError(
                 "Runtime player profile windowMode must be \"normal\" or \"overlay\", got: " + profile.WindowMode);
         }
 
-        if (profile.OverlayBounds != "monitor" && profile.OverlayBounds != "profile") {
+        Win32OverlayBounds overlayBounds = Win32OverlayBounds::Monitor;
+        if (!Win32WindowModeNames::TryParseOverlayBounds(profile.OverlayBounds, overlayBounds)) {
             throw RuntimePlayerProfileConfigurationError(
                 "Runtime player profile overlayBounds must be \"monitor\" or \"profile\", got: " + profile.OverlayBounds);
         }
 
-        if (profile.OverlayBackground != "camera" && profile.OverlayBackground != "transparent") {
+        Win32OverlayBackground overlayBackground = Win32OverlayBackground::Camera;
+        if (!Win32WindowModeNames::TryParseOverlayBackground(profile.OverlayBackground, overlayBackground)) {
             throw RuntimePlayerProfileConfigurationError(
                 "Runtime player profile overlayBackground must be \"camera\" or \"transparent\", got: " + profile.OverlayBackground);
         }
