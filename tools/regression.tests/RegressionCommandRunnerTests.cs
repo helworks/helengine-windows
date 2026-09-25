@@ -98,6 +98,133 @@ public sealed class RegressionCommandRunnerTests {
     }
 
     /// <summary>
+    /// Verifies compare-fingerprint prints PASS and returns 0 for matching fingerprints.
+    /// </summary>
+    [Fact]
+    public void Run_compare_fingerprint_matching_passes_and_returns_0() {
+        StringWriter output = new();
+
+        int exitCode = new RegressionCommandRunner().Run(new[] { "compare-fingerprint", "axis_test", HostFingerprintTests.SampleLine, HostFingerprintTests.SampleLine }, output);
+
+        Assert.Equal(0, exitCode);
+        Assert.Equal("PASS" + Environment.NewLine, output.ToString());
+    }
+
+    /// <summary>
+    /// Verifies compare-fingerprint prints one "FAIL fingerprint" line per differing field and returns 1, and prints a
+    /// pacing WARN line without failing on its own.
+    /// </summary>
+    [Fact]
+    public void Run_compare_fingerprint_prints_fail_and_warn_lines() {
+        string actualLine = HostFingerprintTests.SampleLine.Replace("buffers=2", "buffers=3").Replace("elapsedMs=483", "elapsedMs=5000");
+        StringWriter output = new();
+
+        int exitCode = new RegressionCommandRunner().Run(new[] { "compare-fingerprint", "axis_test", HostFingerprintTests.SampleLine, actualLine }, output);
+
+        Assert.Equal(1, exitCode);
+        string[] lines = output.ToString().Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries);
+        Assert.Equal(new[] { "FAIL", "FAIL fingerprint axis_test buffers recorded=2 actual=3", "WARN pacing axis_test recorded=483ms actual=5000ms" }, lines);
+    }
+
+    /// <summary>
+    /// Verifies a pacing warning alone keeps compare-fingerprint passing.
+    /// </summary>
+    [Fact]
+    public void Run_compare_fingerprint_pacing_warning_alone_returns_0() {
+        string actualLine = HostFingerprintTests.SampleLine.Replace("elapsedMs=483", "elapsedMs=5000");
+        StringWriter output = new();
+
+        int exitCode = new RegressionCommandRunner().Run(new[] { "compare-fingerprint", "axis_test", HostFingerprintTests.SampleLine, actualLine }, output);
+
+        Assert.Equal(0, exitCode);
+        Assert.StartsWith("PASS", output.ToString());
+        Assert.Contains("WARN pacing axis_test recorded=483ms actual=5000ms", output.ToString());
+    }
+
+    /// <summary>
+    /// Verifies check-fingerprint fails a single run with Present failures.
+    /// </summary>
+    [Fact]
+    public void Run_check_fingerprint_fails_on_present_failures() {
+        StringWriter output = new();
+
+        int exitCode = new RegressionCommandRunner().Run(new[] { "check-fingerprint", "axis_test", HostFingerprintTests.SampleLine.Replace("presentFailures=0", "presentFailures=1") }, output);
+
+        Assert.Equal(1, exitCode);
+        Assert.Contains("FAIL fingerprint axis_test presentFailures actual=1 must be 0", output.ToString());
+    }
+
+    /// <summary>
+    /// Verifies record-executed writes the executed count of a healthy run as a single integer.
+    /// </summary>
+    [Fact]
+    public void Run_record_executed_writes_the_executed_count() {
+        string trxPath = Path.Combine(RegressionTestFixtures.TestOutputDirectory, "record-executed.trx");
+        string executedPath = Path.Combine(RegressionTestFixtures.TestOutputDirectory, "record-executed.txt");
+        File.WriteAllText(trxPath, BuildSummaryTrx("Failed", 42));
+        StringWriter output = new();
+
+        int exitCode = new RegressionCommandRunner().Run(new[] { "record-executed", trxPath, executedPath }, output);
+
+        Assert.Equal(0, exitCode);
+        Assert.Equal("42\n", File.ReadAllText(executedPath));
+        Assert.StartsWith("RECORDED 42", output.ToString());
+    }
+
+    /// <summary>
+    /// Verifies record-executed refuses an aborted run and writes nothing.
+    /// </summary>
+    [Fact]
+    public void Run_record_executed_refuses_an_aborted_run() {
+        string trxPath = Path.Combine(RegressionTestFixtures.TestOutputDirectory, "record-aborted.trx");
+        string executedPath = Path.Combine(RegressionTestFixtures.TestOutputDirectory, "record-aborted.txt");
+        File.WriteAllText(trxPath, BuildSummaryTrx("Aborted", 3));
+        if (File.Exists(executedPath)) {
+            File.Delete(executedPath);
+        }
+        StringWriter output = new();
+
+        int exitCode = new RegressionCommandRunner().Run(new[] { "record-executed", trxPath, executedPath }, output);
+
+        Assert.Equal(1, exitCode);
+        Assert.StartsWith("FAIL outcome Aborted", output.ToString());
+        Assert.False(File.Exists(executedPath));
+    }
+
+    /// <summary>
+    /// Verifies check-executed prints PASS, WARN or FAIL with the documented exit codes.
+    /// </summary>
+    [Fact]
+    public void Run_check_executed_prints_status_and_exit_code() {
+        string executedPath = Path.Combine(RegressionTestFixtures.TestOutputDirectory, "check-executed.txt");
+        string matchingPath = Path.Combine(RegressionTestFixtures.TestOutputDirectory, "check-matching.trx");
+        string warnPath = Path.Combine(RegressionTestFixtures.TestOutputDirectory, "check-warn.trx");
+        string failPath = Path.Combine(RegressionTestFixtures.TestOutputDirectory, "check-fail.trx");
+        File.WriteAllText(executedPath, "100\n");
+        File.WriteAllText(matchingPath, BuildSummaryTrx("Failed", 100));
+        File.WriteAllText(warnPath, BuildSummaryTrx("Completed", 97));
+        File.WriteAllText(failPath, BuildSummaryTrx("Completed", 50));
+        RegressionCommandRunner runner = new();
+        StringWriter matchingOutput = new();
+        StringWriter warnOutput = new();
+        StringWriter failOutput = new();
+
+        Assert.Equal(0, runner.Run(new[] { "check-executed", matchingPath, executedPath }, matchingOutput));
+        Assert.Equal(0, runner.Run(new[] { "check-executed", warnPath, executedPath }, warnOutput));
+        Assert.Equal(1, runner.Run(new[] { "check-executed", failPath, executedPath }, failOutput));
+        Assert.Equal("PASS executed 100 matches recorded 100" + Environment.NewLine, matchingOutput.ToString());
+        Assert.Equal("WARN executed 97 differs from recorded 100" + Environment.NewLine, warnOutput.ToString());
+        Assert.Equal("FAIL executed 50 is below 95% of recorded 100" + Environment.NewLine, failOutput.ToString());
+    }
+
+    /// <summary>
+    /// Builds a minimal TRX document with the given ResultSummary outcome and executed counter.
+    /// </summary>
+    static string BuildSummaryTrx(string outcome, int executed) {
+        return $"<?xml version=\"1.0\" encoding=\"UTF-8\"?><TestRun xmlns=\"http://microsoft.com/schemas/VisualStudio/TeamTest/2010\"><ResultSummary outcome=\"{outcome}\"><Counters total=\"{executed}\" executed=\"{executed}\" /></ResultSummary></TestRun>";
+    }
+
+    /// <summary>
     /// Verifies comparing two identical BMP/PNG captures via the compare command passes with exit
     /// code 0.
     /// </summary>

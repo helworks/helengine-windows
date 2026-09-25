@@ -5,10 +5,11 @@ using System.Text;
 
 /// <summary>
 /// Dispatches the regression tool's command-line interface: image comparison, golden recording,
-/// stability checking, blank-frame detection and TRX failing-set comparison. Every command prints
-/// exactly one result line (plus, for compare-failing, one line per new or fixed failure) and
-/// returns the documented exit code. Any I/O or format error is reported as a single
-/// "ERROR &lt;message&gt;" line with exit code 2.
+/// stability checking, blank-frame detection, TRX failing-set comparison, TRX executed-count
+/// recording and checking, and host-fingerprint checking and comparison. Every command prints
+/// one result line (plus, for compare-failing, check-fingerprint and compare-fingerprint, one line
+/// per finding) and returns the documented exit code. Any I/O or format error is reported as a
+/// single "ERROR &lt;message&gt;" line with exit code 2.
 /// </summary>
 public sealed class RegressionCommandRunner {
     /// <summary>
@@ -30,6 +31,10 @@ public sealed class RegressionCommandRunner {
                 "blank-check" => RunBlankCheck(args, output),
                 "trx-failing" => RunTrxFailing(args, output),
                 "compare-failing" => RunCompareFailing(args, output),
+                "record-executed" => RunRecordExecuted(args, output),
+                "check-executed" => RunCheckExecuted(args, output),
+                "check-fingerprint" => RunCheckFingerprint(args, output),
+                "compare-fingerprint" => RunCompareFingerprint(args, output),
                 _ => PrintUsage(output)
             };
         } catch (Exception exception) {
@@ -176,6 +181,95 @@ public sealed class RegressionCommandRunner {
     }
 
     /// <summary>
+    /// Runs "record-executed result.trx executed.txt": writes the run's executed-test count as a
+    /// single integer followed by "\n". An Error or Aborted run prints "FAIL outcome &lt;outcome&gt;",
+    /// writes nothing and returns 1, so an aborted run never becomes a baseline.
+    /// </summary>
+    static int RunRecordExecuted(string[] args, TextWriter output) {
+        if (args.Length != 3) {
+            throw new ArgumentException("record-executed requires <result.trx> <executed.txt>");
+        }
+
+        TrxResultSummary summary = TrxResultSummaryReader.Read(args[1]);
+        if (!TrxExecutedCountChecker.IsRecordable(summary)) {
+            output.WriteLine($"FAIL outcome {summary.Outcome}");
+            return 1;
+        }
+
+        File.WriteAllText(args[2], summary.Executed.ToString(CultureInfo.InvariantCulture) + "\n");
+        output.WriteLine($"RECORDED {summary.Executed}");
+        return 0;
+    }
+
+    /// <summary>
+    /// Runs "check-executed result.trx executed.txt": prints "PASS|WARN|FAIL &lt;detail&gt;" for the
+    /// run's outcome and executed count against the recorded count, and returns 1 only on FAIL.
+    /// </summary>
+    static int RunCheckExecuted(string[] args, TextWriter output) {
+        if (args.Length != 3) {
+            throw new ArgumentException("check-executed requires <result.trx> <executed.txt>");
+        }
+
+        TrxResultSummary summary = TrxResultSummaryReader.Read(args[1]);
+        string recordedText = File.ReadAllText(args[2]).Trim();
+        if (!int.TryParse(recordedText, NumberStyles.None, CultureInfo.InvariantCulture, out int recordedExecuted)) {
+            throw new InvalidDataException($"Executed-count baseline must hold one whole number, got '{recordedText}': {args[2]}");
+        }
+
+        TrxExecutedCountCheck check = TrxExecutedCountChecker.Check(summary, recordedExecuted);
+        string status = check.Status switch {
+            TrxExecutedCountCheckStatus.Pass => "PASS",
+            TrxExecutedCountCheckStatus.Warn => "WARN",
+            _ => "FAIL"
+        };
+        output.WriteLine($"{status} {check.Detail}");
+        return check.Status == TrxExecutedCountCheckStatus.Fail ? 1 : 0;
+    }
+
+    /// <summary>
+    /// Runs "check-fingerprint scene line": checks one run's fingerprint on its own (at least one
+    /// Present per frame, no Present failures). Prints "PASS", or "FAIL" followed by one
+    /// "FAIL &lt;finding&gt;" line per failed check and returns 1.
+    /// </summary>
+    static int RunCheckFingerprint(string[] args, TextWriter output) {
+        if (args.Length != 3) {
+            throw new ArgumentException("check-fingerprint requires <scene> <fingerprint line>");
+        }
+
+        IReadOnlyList<string> failures = HostFingerprintComparer.CheckHealth(args[1], HostFingerprint.Parse(args[2]));
+        output.WriteLine(failures.Count == 0 ? "PASS" : "FAIL");
+        foreach (string failure in failures) {
+            output.WriteLine($"FAIL {failure}");
+        }
+
+        return failures.Count == 0 ? 0 : 1;
+    }
+
+    /// <summary>
+    /// Runs "compare-fingerprint scene recorded-line actual-line": compares a run's fingerprint
+    /// with the recorded one. Prints "PASS" or "FAIL", then one "FAIL &lt;finding&gt;" line per failed
+    /// check and one "WARN &lt;finding&gt;" line per pacing warning. Returns 1 only when a check failed;
+    /// a pacing warning alone returns 0.
+    /// </summary>
+    static int RunCompareFingerprint(string[] args, TextWriter output) {
+        if (args.Length != 4) {
+            throw new ArgumentException("compare-fingerprint requires <scene> <recorded fingerprint line> <actual fingerprint line>");
+        }
+
+        HostFingerprintComparison comparison = HostFingerprintComparer.Compare(args[1], HostFingerprint.Parse(args[2]), HostFingerprint.Parse(args[3]));
+        output.WriteLine(comparison.Passed ? "PASS" : "FAIL");
+        foreach (string failure in comparison.Failures) {
+            output.WriteLine($"FAIL {failure}");
+        }
+
+        foreach (string warning in comparison.Warnings) {
+            output.WriteLine($"WARN {warning}");
+        }
+
+        return comparison.Passed ? 0 : 1;
+    }
+
+    /// <summary>
     /// Reads non-empty test names from a failing-set file, tolerant of both "\n" and "\r\n" line
     /// endings.
     /// </summary>
@@ -187,7 +281,7 @@ public sealed class RegressionCommandRunner {
     /// Prints the CLI usage line for an empty or unrecognized command.
     /// </summary>
     static int PrintUsage(TextWriter output) {
-        output.WriteLine("USAGE regression <compare|record-golden|stable|blank-check|trx-failing|compare-failing> ...");
+        output.WriteLine("USAGE regression <compare|record-golden|stable|blank-check|trx-failing|compare-failing|record-executed|check-executed|check-fingerprint|compare-fingerprint> ...");
         return 2;
     }
 }
