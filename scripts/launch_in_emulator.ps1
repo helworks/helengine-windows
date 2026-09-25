@@ -6,10 +6,19 @@ param(
     [string[]]$ArgumentList,
 
     [Parameter()]
-    [switch]$Wait
+    [switch]$Wait,
+
+    # With -Wait: the most seconds to wait before the process is killed and EXIT_CODE=timeout is reported (exit 124).
+    # 0, the default, waits without a limit.
+    [Parameter()]
+    [int]$TimeoutSeconds = 0
 )
 
 $ErrorActionPreference = 'Stop'
+
+if ($TimeoutSeconds -lt 0) {
+    throw "-TimeoutSeconds must be 0 (no timeout) or a positive number of seconds, got $TimeoutSeconds."
+}
 
 $resolvedArtifactPath = [System.IO.Path]::GetFullPath($ArtifactPath)
 if (-not (Test-Path -LiteralPath $resolvedArtifactPath -PathType Leaf)) {
@@ -48,6 +57,14 @@ if ($Wait) {
 Write-Output ("ARTIFACT=" + $resolvedArtifactPath)
 Write-Output ("PROCESS_ID=" + $process.Id)
 if ($Wait) {
+    if ($TimeoutSeconds -gt 0) {
+        if (-not $process.WaitForExit($TimeoutSeconds * 1000)) {
+            $process.Kill()
+            $process.WaitForExit()
+            Write-Output 'EXIT_CODE=timeout'
+            exit 124
+        }
+    }
     $process.WaitForExit()
     Write-Output ("EXIT_CODE=" + $process.ExitCode)
     exit $process.ExitCode

@@ -26,6 +26,22 @@ public sealed class WindowsLauncherScriptTests {
     }
 
     /// <summary>
+    /// Ensures the launcher's -Wait can time out: -TimeoutSeconds defaults to 0 (no timeout, the existing behavior), and a
+    /// run that outlives it is killed, reported as EXIT_CODE=timeout and ends the launcher with exit code 124.
+    /// </summary>
+    [Fact]
+    public void Launcher_KillsTimedOutProcess_AndReportsTimeout() {
+        string repositoryRootPath = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", ".."));
+        string scriptSource = File.ReadAllText(Path.Combine(repositoryRootPath, "scripts", "launch_in_emulator.ps1"));
+
+        Assert.Contains("[int]$TimeoutSeconds = 0", scriptSource, StringComparison.Ordinal);
+        Assert.Contains("$process.WaitForExit($TimeoutSeconds * 1000)", scriptSource, StringComparison.Ordinal);
+        Assert.Contains("$process.Kill()", scriptSource, StringComparison.Ordinal);
+        Assert.Contains("Write-Output 'EXIT_CODE=timeout'", scriptSource, StringComparison.Ordinal);
+        Assert.Contains("exit 124", scriptSource, StringComparison.Ordinal);
+    }
+
+    /// <summary>
     /// Ensures the root README documents the canonical launcher entrypoint.
     /// </summary>
     [Fact]
