@@ -185,8 +185,8 @@ namespace helengine::windows {
         /// it renders immediately like the default loop.
         void RunIdleThrottledLoop();
 
-        /// Returns whether the engine needs full-rate frames right now: physics will step this update, or a scene
-        /// transition or scene operation is pending.
+        /// Returns whether the engine needs full-rate frames right now: physics will step this update, a looping audio
+        /// voice is playing, or a scene transition or scene operation is pending.
         bool IsEngineKeepAwake() const;
 
         /// Writes one lifecycle message to the host console.

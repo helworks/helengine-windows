@@ -26,6 +26,11 @@ namespace helengine::windows {
         /// Returns whether one backend voice is still active.
         bool IsPlaying(int32_t voiceId) override;
 
+        /// Returns whether any voice that is still owned by the backend loops and is not paused, including a looping voice
+        /// whose buffer just completed and waits for Update to restart it. Read-only; the idle-throttled loop consults it
+        /// so looping audio keeps the player at full rate and its restarts never wait for an idle interval.
+        bool HasActiveLoopingVoice() const;
+
         /// Starts playback of one PCM audio asset and returns its backend-owned voice identifier.
         int32_t Play(::AudioAsset* asset, ::AudioPlaybackRequest* request) override;
 
@@ -101,8 +106,8 @@ namespace helengine::windows {
         /// Tracks paused-state flags by normalized bus identifier.
         std::unordered_map<std::string, bool> BusPausedById;
 
-        /// Serializes access to active voice state and callback-driven completion changes.
-        std::mutex VoicesMutex;
+        /// Serializes access to active voice state and callback-driven completion changes; mutable so read-only queries can lock it.
+        mutable std::mutex VoicesMutex;
 
         /// Stores the next backend-owned voice identifier.
         int32_t NextVoiceId;

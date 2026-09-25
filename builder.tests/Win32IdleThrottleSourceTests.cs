@@ -131,6 +131,28 @@ public sealed class Win32IdleThrottleSourceTests {
     }
 
     /// <summary>
+    /// Verifies the idle loop stays at full rate while a looping voice plays, so the audio backend can restart the loop
+    /// at the end of its buffer without an idle-interval gap: the backend exposes a read-only query guarded by its voice
+    /// mutex, and <c>IsEngineKeepAwake</c> consults it when the backend exists.
+    /// </summary>
+    [Fact]
+    public void Win32Application_keeps_awake_while_a_looping_voice_plays() {
+        string applicationSource = ReadRepositoryFile("src", "platform", "windows", "win32", "win32_application.cpp");
+        string audioSource = ReadRepositoryFile("src", "platform", "windows", "win32", "win32_audio_backend.cpp");
+        string audioHeader = ReadRepositoryFile("src", "platform", "windows", "win32", "win32_audio_backend.hpp");
+
+        Assert.Contains("bool HasActiveLoopingVoice() const;", audioHeader, StringComparison.Ordinal);
+        Assert.Contains("mutable std::mutex VoicesMutex;", audioHeader, StringComparison.Ordinal);
+
+        string loopingQueryBody = ExtractMethodBody(audioSource, "Win32AudioBackend::HasActiveLoopingVoice(");
+        Assert.Contains("std::scoped_lock<std::mutex> lock(VoicesMutex);", loopingQueryBody, StringComparison.Ordinal);
+        Assert.Contains(".Loop", loopingQueryBody, StringComparison.Ordinal);
+
+        string keepAwakeBody = ExtractMethodBody(applicationSource, "Win32Application::IsEngineKeepAwake(");
+        Assert.Contains("EngineAudioBackend != nullptr && EngineAudioBackend->HasActiveLoopingVoice()", keepAwakeBody, StringComparison.Ordinal);
+    }
+
+    /// <summary>
     /// Verifies the activity tracker treats exactly the keyboard, mouse and window messages listed in the design as
     /// activity.
     /// </summary>

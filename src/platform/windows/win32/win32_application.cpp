@@ -1886,9 +1886,10 @@ namespace helengine::windows {
     }
 
     /// Returns whether the engine needs full-rate frames right now: physics will step this update (the previous
-    /// update's physics-step prediction is positive), or the scene manager reports an active scene transition or
-    /// pending scene operations. Returns false before the engine core is initialized or when the build has no
-    /// generated core.
+    /// update's physics-step prediction is positive), a looping audio voice is playing (its restart at the end of the
+    /// buffer happens in the audio backend's Update, so an idle interval between frames would be heard as a gap), or
+    /// the scene manager reports an active scene transition or pending scene operations. Returns false before the
+    /// engine core is initialized or when the build has no generated core.
     bool Win32Application::IsEngineKeepAwake() const {
 #if __has_include("Core.hpp")
         if (!EngineInitialized || EngineCore == nullptr) {
@@ -1896,6 +1897,10 @@ namespace helengine::windows {
         }
 
         if (EngineCore->get_PredictedPhysicsStepSeconds() > 0.0) {
+            return true;
+        }
+
+        if (EngineAudioBackend != nullptr && EngineAudioBackend->HasActiveLoopingVoice()) {
             return true;
         }
 

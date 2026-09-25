@@ -64,6 +64,22 @@ namespace helengine::windows {
         return voice.Queued || voice.Paused || (voice.Loop && voice.Completed);
     }
 
+    /// Returns whether any voice that is still owned by the backend loops and is not paused, including a looping voice
+    /// whose buffer just completed and waits for Update to restart it. Stopped voices are removed from the map, so they
+    /// never count. Read-only; the idle-throttled loop consults it so looping audio keeps the player at full rate and its
+    /// restarts never wait for an idle interval.
+    bool Win32AudioBackend::HasActiveLoopingVoice() const {
+        std::scoped_lock<std::mutex> lock(VoicesMutex);
+        for (const auto& pair : VoicesById) {
+            const VoiceState& voice = pair.second;
+            if (voice.Loop && !voice.Paused) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     /// Starts playback of one PCM audio asset and returns its backend-owned voice identifier.
     int32_t Win32AudioBackend::Play(::AudioAsset* asset, ::AudioPlaybackRequest* request) {
         if (asset == nullptr) {
