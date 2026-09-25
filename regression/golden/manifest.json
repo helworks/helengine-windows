@@ -5,8 +5,11 @@
     "height":  360,
     "projectSource":  "C:\\dev\\helprojs\\demodisc",
     "projectCommit":  "5cc124eec06b8db729b2f9b15d99d26cb1ca8cc3",
+    "buildConfigSourceHash":  "40092F0483A4B5F0A825B150B7B65179314834449538A31150663F953D3C2635",
+    "generatedCodeHash":  "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
     "helengineCommit":  "d98d00208a040dd00352a0b6417eed27d387af07",
     "helengineDirty":  true,
+    "helengineWorkingTreeHash":  "E24870119F6B5241035CE359CF9211A09FEBDAC5D0844EB98DFD8A0963017141",
     "scenes":  [
                    {
                        "id":  "axis_test",
@@ -16,57 +19,211 @@
                    {
                        "id":  "axis_test",
                        "kind":  "golden",
-                       "status":  "stable"
+                       "status":  "stable",
+                       "fingerprint":  {
+                                           "format":  "87",
+                                           "alpha":  "3",
+                                           "swapEffect":  "4",
+                                           "buffers":  "2",
+                                           "scaling":  "0",
+                                           "style":  "0x14CF0000",
+                                           "exStyle":  "0x00000100",
+                                           "client":  "640x360",
+                                           "presentCount":  "30",
+                                           "presentFailures":  "0",
+                                           "frames":  "30"
+                                       },
+                       "elapsedMs":  117
                    },
                    {
                        "id":  "axis_test2",
                        "kind":  "golden",
-                       "status":  "stable"
+                       "status":  "stable",
+                       "fingerprint":  {
+                                           "format":  "87",
+                                           "alpha":  "3",
+                                           "swapEffect":  "4",
+                                           "buffers":  "2",
+                                           "scaling":  "0",
+                                           "style":  "0x14CF0000",
+                                           "exStyle":  "0x00000100",
+                                           "client":  "640x360",
+                                           "presentCount":  "30",
+                                           "presentFailures":  "0",
+                                           "frames":  "30"
+                                       },
+                       "elapsedMs":  120
                    },
                    {
                        "id":  "colored_cube_grid",
                        "kind":  "golden",
-                       "status":  "stable"
+                       "status":  "stable",
+                       "fingerprint":  {
+                                           "format":  "87",
+                                           "alpha":  "3",
+                                           "swapEffect":  "4",
+                                           "buffers":  "2",
+                                           "scaling":  "0",
+                                           "style":  "0x14CF0000",
+                                           "exStyle":  "0x00000100",
+                                           "client":  "640x360",
+                                           "presentCount":  "30",
+                                           "presentFailures":  "0",
+                                           "frames":  "30"
+                                       },
+                       "elapsedMs":  121
                    },
                    {
                        "id":  "cube_test",
                        "kind":  "golden",
-                       "status":  "stable"
+                       "status":  "stable",
+                       "fingerprint":  {
+                                           "format":  "87",
+                                           "alpha":  "3",
+                                           "swapEffect":  "4",
+                                           "buffers":  "2",
+                                           "scaling":  "0",
+                                           "style":  "0x14CF0000",
+                                           "exStyle":  "0x00000100",
+                                           "client":  "640x360",
+                                           "presentCount":  "30",
+                                           "presentFailures":  "0",
+                                           "frames":  "30"
+                                       },
+                       "elapsedMs":  119
                    },
                    {
                        "id":  "directional_shadow_plaza",
                        "kind":  "golden",
-                       "status":  "stable"
+                       "status":  "stable",
+                       "fingerprint":  {
+                                           "format":  "87",
+                                           "alpha":  "3",
+                                           "swapEffect":  "4",
+                                           "buffers":  "2",
+                                           "scaling":  "0",
+                                           "style":  "0x14CF0000",
+                                           "exStyle":  "0x00000100",
+                                           "client":  "640x360",
+                                           "presentCount":  "30",
+                                           "presentFailures":  "0",
+                                           "frames":  "30"
+                                       },
+                       "elapsedMs":  118
                    },
                    {
                        "id":  "pbr_material_gallery",
                        "kind":  "golden",
-                       "status":  "stable"
+                       "status":  "stable",
+                       "fingerprint":  {
+                                           "format":  "87",
+                                           "alpha":  "3",
+                                           "swapEffect":  "4",
+                                           "buffers":  "2",
+                                           "scaling":  "0",
+                                           "style":  "0x14CF0000",
+                                           "exStyle":  "0x00000100",
+                                           "client":  "640x360",
+                                           "presentCount":  "30",
+                                           "presentFailures":  "0",
+                                           "frames":  "30"
+                                       },
+                       "elapsedMs":  120
                    },
                    {
                        "id":  "pbr_shadow_theater",
                        "kind":  "golden",
-                       "status":  "stable"
+                       "status":  "stable",
+                       "fingerprint":  {
+                                           "format":  "87",
+                                           "alpha":  "3",
+                                           "swapEffect":  "4",
+                                           "buffers":  "2",
+                                           "scaling":  "0",
+                                           "style":  "0x14CF0000",
+                                           "exStyle":  "0x00000100",
+                                           "client":  "640x360",
+                                           "presentCount":  "30",
+                                           "presentFailures":  "0",
+                                           "frames":  "30"
+                                       },
+                       "elapsedMs":  120
                    },
                    {
                        "id":  "pbr_textured_showcase",
                        "kind":  "golden",
-                       "status":  "stable"
+                       "status":  "stable",
+                       "fingerprint":  {
+                                           "format":  "87",
+                                           "alpha":  "3",
+                                           "swapEffect":  "4",
+                                           "buffers":  "2",
+                                           "scaling":  "0",
+                                           "style":  "0x14CF0000",
+                                           "exStyle":  "0x00000100",
+                                           "client":  "640x360",
+                                           "presentCount":  "30",
+                                           "presentFailures":  "0",
+                                           "frames":  "30"
+                                       },
+                       "elapsedMs":  118
                    },
                    {
                        "id":  "software_path_tracer",
                        "kind":  "golden",
-                       "status":  "stable"
+                       "status":  "stable",
+                       "fingerprint":  {
+                                           "format":  "87",
+                                           "alpha":  "3",
+                                           "swapEffect":  "4",
+                                           "buffers":  "2",
+                                           "scaling":  "0",
+                                           "style":  "0x14CF0000",
+                                           "exStyle":  "0x00000100",
+                                           "client":  "640x360",
+                                           "presentCount":  "30",
+                                           "presentFailures":  "0",
+                                           "frames":  "30"
+                                       },
+                       "elapsedMs":  121
                    },
                    {
                        "id":  "test_scene_matrix_render",
                        "kind":  "golden",
-                       "status":  "stable"
+                       "status":  "stable",
+                       "fingerprint":  {
+                                           "format":  "87",
+                                           "alpha":  "3",
+                                           "swapEffect":  "4",
+                                           "buffers":  "2",
+                                           "scaling":  "0",
+                                           "style":  "0x14CF0000",
+                                           "exStyle":  "0x00000100",
+                                           "client":  "640x360",
+                                           "presentCount":  "30",
+                                           "presentFailures":  "0",
+                                           "frames":  "30"
+                                       },
+                       "elapsedMs":  118
                    },
                    {
                        "id":  "textured_cube_grid",
                        "kind":  "golden",
-                       "status":  "stable"
+                       "status":  "stable",
+                       "fingerprint":  {
+                                           "format":  "87",
+                                           "alpha":  "3",
+                                           "swapEffect":  "4",
+                                           "buffers":  "2",
+                                           "scaling":  "0",
+                                           "style":  "0x14CF0000",
+                                           "exStyle":  "0x00000100",
+                                           "client":  "640x360",
+                                           "presentCount":  "30",
+                                           "presentFailures":  "0",
+                                           "frames":  "30"
+                                       },
+                       "elapsedMs":  118
                    }
                ]
 }
