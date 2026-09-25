@@ -15,6 +15,7 @@ its host layer (swap chain, window, Present) is unchanged, and that the editor-s
 | `pacing` | Every scene run | Never fails. `WARN pacing <scene> recorded=<x>ms actual=<y>ms` when the run took more than 3 times, or less than a third of, the recorded wall-clock time. |
 | `suite` | `helengine.editor.tests`, `helengine.render.validation.tests` (both from `-HelengineRoot`), `helengine.windows.builder.tests` (this checkout) | The run neither errored nor aborted, executed at least 95% of the tests recorded in `<suite>.executed.txt` (any other difference is a `WARN`), and its set of failing tests adds no test that is missing from `regression\baselines\<suite>.failing.txt`. Known failures stay tolerated; fixed ones are only reported. Tests in `<suite>.flaky.txt` only produce a `WARN` (see "Known flaky tests"). |
 | `idle` | The smoke scene, once more, with the idle throttle on (see "Idle-throttle scenario") | The manifest has an idle entry, `check-idle` passes (throttle on, no Present failures, at least 25 idle frames, at least 2400 ms elapsed) and the capture matches the smoke scene's golden. |
+| `overlay` | The smoke scene, twice more, in a transparent overlay window with one hit-test probe per run (see "Overlay scenario") | The manifest has a complete overlay entry, and each run exits 0, logs the expected `HIT_TEST` click-through state, passes `check-premultiplied`, matches `regression\golden\<scene>.overlay.png` with `compare-rgba` and matches the recorded overlay fingerprint field for field. |
 | `manifest` | `regression\golden\manifest.json` | It exists and was recorded with the same run settings. |
 
 Every scene runs in a 640x360 window with `--frames 30 --fixed-delta 0.016666 --capture <bmp>`, so the captured
@@ -113,11 +114,88 @@ scene ever gains physics, point the idle scenario at the first golden scene with
 idle entry, so goldens recorded before the idle throttle must be re-recorded once with `-Record`: an older manifest
 fails every fingerprint check (missing fields) and the idle check (`idle entry missing from manifest`).
 
+## Overlay scenario
+
+The player's overlay window (`--window-mode overlay`, a DirectComposition swap chain with premultiplied alpha and
+per-pixel click-through) is opt-in and off in every normal scene run. To prove that it still renders a valid
+transparent frame and that its hit-test readback still decides click-through from the drawn alpha, `-Record` and
+`-Verify` both run the smoke scene in overlay mode, after the idle scenario, with the usual 30-frame arguments plus:
+
+```
+--window-mode overlay --overlay-bounds profile --overlay-background transparent --hit-test-probe <x,y>
+```
+
+`--overlay-bounds profile` sizes the overlay from the 640x360 `profile.json` the script writes before every run, and
+`--overlay-background transparent` clears to (0,0,0,0), so only the scene's drawn content is opaque.
+`--hit-test-probe x,y` (valid only with `--frames` in overlay mode) samples that fixed client pixel through the same
+readback that follows the cursor in normal use, never toggles the window style and logs
+`HIT_TEST x=<x> y=<y> alpha=<a> clickThrough=<on|off>` in the startup log after the last frame (`clickThrough=on`
+when the alpha is below 8). A run whose readback never completed logs `alpha=pending` and exits with code 3.
+
+**Probes.** The probe points come from the overlay golden itself. `find-probes <golden.png>` prints
+`TRANSPARENT x,y` (the first pixel, in row-major order, whose 5x5 neighbourhood is entirely alpha 0) and
+`OPAQUE x,y` (the same for alpha 255), kept 2 pixels from every edge so that the probe never sits on an anti-aliased
+border. They are stored in the manifest as `transparentProbe` and `opaqueProbe`.
+
+**Record** (everything goes to `<WorkRoot>\record-staging` first, like every other golden):
+
+1. One record run with `--hit-test-probe 2,2`, an arbitrary in-bounds point (the probe never changes the capture;
+   the real probes are only known once the golden exists), captured to `<WorkRoot>\captures\overlay\<scene>.record.bmp`.
+   Its fingerprint must be healthy (`check-fingerprint`) and describe the overlay window (`windowMode=overlay`,
+   `alpha=1`, and an `exStyle` holding `WS_EX_NOREDIRECTIONBITMAP`, `WS_EX_LAYERED`, `WS_EX_TOOLWINDOW` and
+   `WS_EX_TOPMOST`, mask `0x00280088`), and its capture must pass `check-premultiplied`.
+2. `record-golden-rgba` turns that capture into `<scene>.overlay.png` (today `axis_test.overlay.png`), keeping its
+   real alpha, and `find-probes` picks the two probes from it.
+3. One run with the transparent probe (it must report `clickThrough=on`) and one with the opaque probe (it must report
+   `clickThrough=off`). Each goes through the same checks as a verify run (below), against the staged golden and the
+   record run's fingerprint, so a record whose overlay frame is not reproducible fails.
+4. The manifest gains
+   `{ "id": "<smoke scene>", "kind": "overlay", "transparentProbe": "x,y", "opaqueProbe": "x,y", "fingerprint": { ... }, "elapsedMs": <n> }`,
+   with the record run's fingerprint stored like a scene's (every field except `elapsedMs`, which sits beside it).
+
+**Verify** runs the overlay scenario twice, first with the recorded transparent probe and then with the opaque one
+(captures `<WorkRoot>\captures\overlay\<scene>.transparent.bmp` and `<scene>.opaque.bmp`). Each run must:
+
+- exit with code 0 and write its capture and `HOST_FINGERPRINT` line;
+- log `HIT_TEST x=<probe x> y=<probe y> alpha=<a> clickThrough=on` for the transparent probe, or `clickThrough=off`
+  for the opaque probe;
+- pass `check-premultiplied <capture.bmp> 0.01 0.01`: the capture is read with its real alpha, every pixel has B, G
+  and R at most A (valid premultiplied alpha), and at least 1% of the pixels are fully transparent and at least 1%
+  fully opaque;
+- match `regression\golden\<scene>.overlay.png` with `compare-rgba`, which compares all four channels with the normal
+  thresholds (a channel differs by more than 8 levels; more than 0.1% of the pixels differ fails). The opaque-forcing
+  `compare` is never used on an overlay capture. On failure the diff goes to
+  `<WorkRoot>\diffs\<scene>.overlay.transparent.diff.png` or `<scene>.overlay.opaque.diff.png`;
+- match the recorded overlay fingerprint field for field through `compare-fingerprint`. Its lines are named
+  `<scene>.overlay.transparent` and `<scene>.overlay.opaque` (for example
+  `FAIL fingerprint axis_test.overlay.opaque exStyle recorded=<x> actual=<y>`), so they never mix with the scene's
+  normal-run fingerprint lines.
+
+A manifest without an overlay entry prints `FAIL overlay <scene> overlay entry missing from manifest (re-record required)`,
+and an entry without `transparentProbe`, `opaqueProbe`, `fingerprint` or `elapsedMs` prints
+`FAIL overlay <scene> overlay entry lacks transparentProbe, opaqueProbe, fingerprint or elapsedMs (re-record required)`.
+The other check lines are `PASS|FAIL overlay <scene> <detail>`. The idle and golden scenarios are unchanged.
+
+**What it proves, and what it cannot see.** The scenario proves that overlay mode creates the overlay window and its
+premultiplied composition swap chain (the fingerprint), that the frame the player presents is valid premultiplied
+alpha with a transparent background and opaque content, that this frame has not changed, and that the hit-test
+readback turns a transparent pixel into click-through on and an opaque pixel into click-through off. The capture is
+the swap chain's back buffer before Present. The net cannot see what DWM finally composites on screen (whether the
+overlay really shows over other windows with the desktop visible through its transparent pixels), and probe runs
+never toggle `WS_EX_TRANSPARENT` or route a real mouse click. Those are covered only by the manual proofs in the
+overlay window spec (`docs\superpowers\specs\2026-09-25-windows-player-overlay-window-design.md`, section 7): the
+overlay is visible over other windows with a transparent background, clicks on transparent areas reach the window
+behind, clicks on opaque content activate the overlay, and a no-argument boot is unchanged.
+
+The overlay window is topmost while it runs; do not click over it or move the mouse across it during Record/Verify.
+
 ## What this net does NOT catch
 
 - Resize and `ResizeBuffers` paths: the window is never resized during a run.
 - On-screen composition beyond the back buffer: what a DirectComposition commit or the DWM finally shows is not
-  captured, only the swap chain's back buffer before Present.
+  captured, only the swap chain's back buffer before Present. For the overlay window this includes whether it is
+  visible over other windows and whether real clicks pass through its transparent pixels (see "Overlay scenario";
+  only the manual proofs cover that).
 - Exact frame pacing: `elapsedMs` only produces a coarse `WARN pacing` when it moves by more than a factor of three.
 - The Release configuration: the net builds and runs the Debug player only.
 - Different GPUs and drivers: the goldens are only valid on the machine that recorded them.
