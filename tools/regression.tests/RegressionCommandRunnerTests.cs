@@ -381,4 +381,253 @@ public sealed class RegressionCommandRunnerTests {
         Assert.Equal(0, exitCode);
         Assert.StartsWith("PASS 0", output.ToString());
     }
+
+    /// <summary>
+    /// Verifies compare-rgba treats an alpha-only difference as a real difference, unlike compare,
+    /// and writes a diff image on failure.
+    /// </summary>
+    [Fact]
+    public void Run_compare_rgba_alpha_difference_fails_and_writes_diff() {
+        string capturePath = Path.Combine(RegressionTestFixtures.TestOutputDirectory, "rgba-capture.bmp");
+        string goldenPath = Path.Combine(RegressionTestFixtures.TestOutputDirectory, "rgba-golden.png");
+        string diffPath = Path.Combine(RegressionTestFixtures.TestOutputDirectory, "rgba-diff.png");
+        RegressionImage golden = RegressionTestFixtures.CreateUniformImage(4, 4, 10, 20, 30);
+        RegressionImage capture = RegressionTestFixtures.CreateUniformImage(4, 4, 10, 20, 30);
+        for (int i = 0; i < 11; i++) {
+            capture.Bgra[i * 4 + 3] = 0;
+        }
+
+        PngImageStore.SaveWithAlpha(golden, goldenPath);
+        RegressionTestFixtures.WriteBmp(capturePath, capture);
+        StringWriter output = new();
+
+        int exitCode = new RegressionCommandRunner().Run(new[] { "compare-rgba", capturePath, goldenPath, diffPath }, output);
+
+        Assert.Equal(1, exitCode);
+        Assert.StartsWith("FAIL", output.ToString());
+        Assert.True(File.Exists(diffPath));
+    }
+
+    /// <summary>
+    /// Verifies compare-rgba passes identical captures, exactly like compare.
+    /// </summary>
+    [Fact]
+    public void Run_compare_rgba_identical_captures_passes_and_returns_0() {
+        string capturePath = Path.Combine(RegressionTestFixtures.TestOutputDirectory, "rgba-identical-capture.bmp");
+        string goldenPath = Path.Combine(RegressionTestFixtures.TestOutputDirectory, "rgba-identical-golden.png");
+        string diffPath = Path.Combine(RegressionTestFixtures.TestOutputDirectory, "rgba-identical-diff.png");
+        RegressionImage image = RegressionTestFixtures.CreateUniformImage(4, 4, 10, 20, 30);
+        RegressionTestFixtures.WriteBmp(capturePath, image);
+        PngImageStore.SaveWithAlpha(image, goldenPath);
+        StringWriter output = new();
+
+        int exitCode = new RegressionCommandRunner().Run(new[] { "compare-rgba", capturePath, goldenPath, diffPath }, output);
+
+        Assert.Equal(0, exitCode);
+        Assert.StartsWith("PASS", output.ToString());
+    }
+
+    /// <summary>
+    /// Verifies record-golden-rgba keeps a capture's real alpha bytes in the recorded golden, instead
+    /// of forcing them opaque like record-golden does.
+    /// </summary>
+    [Fact]
+    public void Run_record_golden_rgba_preserves_alpha() {
+        string capturePath = Path.Combine(RegressionTestFixtures.TestOutputDirectory, "record-rgba-capture.bmp");
+        string goldenPath = Path.Combine(RegressionTestFixtures.TestOutputDirectory, "record-rgba-golden.png");
+        RegressionImage capture = RegressionTestFixtures.CreateUniformImage(2, 2, 10, 20, 30);
+        capture.Bgra[3] = 0;
+        RegressionTestFixtures.WriteBmp(capturePath, capture);
+        StringWriter output = new();
+
+        int exitCode = new RegressionCommandRunner().Run(new[] { "record-golden-rgba", capturePath, goldenPath }, output);
+        RegressionImage golden = PngImageStore.LoadWithAlpha(goldenPath);
+
+        Assert.Equal(0, exitCode);
+        Assert.StartsWith("RECORDED", output.ToString());
+        Assert.Equal(0, golden.Bgra[3]);
+    }
+
+    /// <summary>
+    /// Verifies check-premultiplied passes a correctly premultiplied capture whose transparent and
+    /// opaque fractions both meet their minimums.
+    /// </summary>
+    [Fact]
+    public void Run_check_premultiplied_passes_when_thresholds_are_met() {
+        byte[] bgra = {
+            0, 0, 0, 0,
+            0, 0, 0, 0,
+            10, 10, 10, 255,
+            10, 10, 10, 255
+        };
+        string path = Path.Combine(RegressionTestFixtures.TestOutputDirectory, "premultiplied-pass.bmp");
+        RegressionTestFixtures.WriteBmp(path, new RegressionImage(4, 1, bgra));
+        StringWriter output = new();
+
+        int exitCode = new RegressionCommandRunner().Run(new[] { "check-premultiplied", path, "0.4", "0.4" }, output);
+
+        Assert.Equal(0, exitCode);
+        Assert.Equal("PASS transparent=0.5 opaque=0.5" + Environment.NewLine, output.ToString());
+    }
+
+    /// <summary>
+    /// Verifies check-premultiplied fails, ahead of the fraction checks, when any pixel's color
+    /// channel exceeds its own alpha.
+    /// </summary>
+    [Fact]
+    public void Run_check_premultiplied_fails_on_a_non_premultiplied_pixel() {
+        byte[] bgra = { 200, 10, 10, 100 };
+        string path = Path.Combine(RegressionTestFixtures.TestOutputDirectory, "premultiplied-violation.bmp");
+        RegressionTestFixtures.WriteBmp(path, new RegressionImage(1, 1, bgra));
+        StringWriter output = new();
+
+        int exitCode = new RegressionCommandRunner().Run(new[] { "check-premultiplied", path, "0", "0" }, output);
+
+        Assert.Equal(1, exitCode);
+        Assert.Equal("FAIL premultiplied 1 pixels have a color channel above alpha" + Environment.NewLine, output.ToString());
+    }
+
+    /// <summary>
+    /// Verifies check-premultiplied fails when the transparent pixel fraction is below its minimum.
+    /// </summary>
+    [Fact]
+    public void Run_check_premultiplied_fails_below_transparent_threshold() {
+        byte[] bgra = {
+            10, 10, 10, 255,
+            10, 10, 10, 255
+        };
+        string path = Path.Combine(RegressionTestFixtures.TestOutputDirectory, "premultiplied-transparent-fail.bmp");
+        RegressionTestFixtures.WriteBmp(path, new RegressionImage(2, 1, bgra));
+        StringWriter output = new();
+
+        int exitCode = new RegressionCommandRunner().Run(new[] { "check-premultiplied", path, "0.1", "0" }, output);
+
+        Assert.Equal(1, exitCode);
+        Assert.Equal("FAIL transparent 0 below 0.1" + Environment.NewLine, output.ToString());
+    }
+
+    /// <summary>
+    /// Verifies check-premultiplied fails when the opaque pixel fraction is below its minimum.
+    /// </summary>
+    [Fact]
+    public void Run_check_premultiplied_fails_below_opaque_threshold() {
+        byte[] bgra = {
+            0, 0, 0, 0,
+            0, 0, 0, 0
+        };
+        string path = Path.Combine(RegressionTestFixtures.TestOutputDirectory, "premultiplied-opaque-fail.bmp");
+        RegressionTestFixtures.WriteBmp(path, new RegressionImage(2, 1, bgra));
+        StringWriter output = new();
+
+        int exitCode = new RegressionCommandRunner().Run(new[] { "check-premultiplied", path, "0", "0.1" }, output);
+
+        Assert.Equal(1, exitCode);
+        Assert.Equal("FAIL opaque 0 below 0.1" + Environment.NewLine, output.ToString());
+    }
+
+    /// <summary>
+    /// Verifies check-premultiplied reports an ERROR and returns 2 when a threshold argument is not a
+    /// number.
+    /// </summary>
+    [Fact]
+    public void Run_check_premultiplied_bad_threshold_returns_2() {
+        string path = Path.Combine(RegressionTestFixtures.TestOutputDirectory, "premultiplied-bad-threshold.bmp");
+        RegressionTestFixtures.WriteBmp(path, RegressionTestFixtures.CreateUniformImage(1, 1, 1, 1, 1));
+        StringWriter output = new();
+
+        int exitCode = new RegressionCommandRunner().Run(new[] { "check-premultiplied", path, "many", "0.1" }, output);
+
+        Assert.Equal(2, exitCode);
+        Assert.StartsWith("ERROR", output.ToString());
+    }
+
+    /// <summary>
+    /// Builds a golden image whose top rows are entirely transparent and whose bottom rows are
+    /// entirely opaque, each block thick enough to contain a valid 5x5 probe neighbourhood.
+    /// </summary>
+    static RegressionImage BuildProbeTestImage() {
+        int width = 9;
+        int height = 14;
+        byte[] bgra = new byte[width * height * 4];
+        for (int y = 0; y < height; y++) {
+            byte alpha = y <= 6 ? (byte)0 : (byte)255;
+            for (int x = 0; x < width; x++) {
+                int offset = (y * width + x) * 4;
+                bgra[offset] = 5;
+                bgra[offset + 1] = 5;
+                bgra[offset + 2] = 5;
+                bgra[offset + 3] = alpha;
+            }
+        }
+
+        return new RegressionImage(width, height, bgra);
+    }
+
+    /// <summary>
+    /// Verifies find-probes prints the first transparent and opaque probe coordinates, in that order.
+    /// </summary>
+    [Fact]
+    public void Run_find_probes_prints_transparent_and_opaque_coordinates() {
+        string path = Path.Combine(RegressionTestFixtures.TestOutputDirectory, "find-probes-golden.png");
+        PngImageStore.SaveWithAlpha(BuildProbeTestImage(), path);
+        StringWriter output = new();
+
+        int exitCode = new RegressionCommandRunner().Run(new[] { "find-probes", path }, output);
+
+        Assert.Equal(0, exitCode);
+        string[] lines = output.ToString().Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries);
+        Assert.Equal(new[] { "TRANSPARENT 2,2", "OPAQUE 2,9" }, lines);
+    }
+
+    /// <summary>
+    /// Verifies find-probes fails with a named reason when no transparent probe exists in the image.
+    /// </summary>
+    [Fact]
+    public void Run_find_probes_fails_when_no_transparent_probe_exists() {
+        string path = Path.Combine(RegressionTestFixtures.TestOutputDirectory, "find-probes-no-transparent.png");
+        PngImageStore.SaveWithAlpha(RegressionTestFixtures.CreateUniformImage(9, 9, 10, 20, 30), path);
+        StringWriter output = new();
+
+        int exitCode = new RegressionCommandRunner().Run(new[] { "find-probes", path }, output);
+
+        Assert.Equal(1, exitCode);
+        Assert.Equal("FAIL no transparent probe found" + Environment.NewLine, output.ToString());
+    }
+
+    /// <summary>
+    /// Verifies find-probes fails with a named reason when a transparent probe exists but no opaque
+    /// probe does.
+    /// </summary>
+    [Fact]
+    public void Run_find_probes_fails_when_no_opaque_probe_exists() {
+        string path = Path.Combine(RegressionTestFixtures.TestOutputDirectory, "find-probes-no-opaque.png");
+        RegressionImage image = BuildProbeTestImage();
+        for (int offset = 3; offset < image.Bgra.Length; offset += 4) {
+            if (image.Bgra[offset] == 255) {
+                image.Bgra[offset] = 128;
+            }
+        }
+
+        PngImageStore.SaveWithAlpha(image, path);
+        StringWriter output = new();
+
+        int exitCode = new RegressionCommandRunner().Run(new[] { "find-probes", path }, output);
+
+        Assert.Equal(1, exitCode);
+        Assert.Equal("FAIL no opaque probe found" + Environment.NewLine, output.ToString());
+    }
+
+    /// <summary>
+    /// Verifies the four new alpha-aware commands report an ERROR and return exit code 2 when called
+    /// with the wrong number of arguments, exactly like the existing commands.
+    /// </summary>
+    [Fact]
+    public void Run_new_alpha_commands_wrong_argument_count_returns_2() {
+        RegressionCommandRunner runner = new();
+
+        Assert.Equal(2, runner.Run(new[] { "compare-rgba", "a", "b" }, new StringWriter()));
+        Assert.Equal(2, runner.Run(new[] { "record-golden-rgba", "a" }, new StringWriter()));
+        Assert.Equal(2, runner.Run(new[] { "check-premultiplied", "a", "0.1" }, new StringWriter()));
+        Assert.Equal(2, runner.Run(new[] { "find-probes" }, new StringWriter()));
+    }
 }

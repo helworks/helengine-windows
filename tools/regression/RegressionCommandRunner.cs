@@ -6,11 +6,13 @@ using System.Text;
 /// <summary>
 /// Dispatches the regression tool's command-line interface: image comparison, golden recording,
 /// stability checking, blank-frame detection, TRX failing-set comparison, TRX executed-count
-/// recording and checking, host-fingerprint checking and comparison, and idle-scenario checking. Every
-/// command prints one result line (plus, for compare-failing, check-fingerprint and compare-fingerprint,
-/// one line per finding; check-idle prints one FAIL line per finding instead of its PASS line) and
-/// returns the documented exit code. Any I/O or format error is reported as a
-/// single "ERROR &lt;message&gt;" line with exit code 2.
+/// recording and checking, host-fingerprint checking and comparison, idle-scenario checking, and the
+/// alpha-aware overlay-mode counterparts of image comparison and golden recording, a premultiplied-alpha
+/// check and probe-pixel discovery. Every command prints one result line (plus, for compare-failing,
+/// check-fingerprint and compare-fingerprint, one line per finding; check-idle prints one FAIL line
+/// per finding instead of its PASS line; find-probes prints two lines on success) and returns the
+/// documented exit code. Any I/O or format error is reported as a single "ERROR &lt;message&gt;" line
+/// with exit code 2.
 /// </summary>
 public sealed class RegressionCommandRunner {
     /// <summary>
@@ -37,6 +39,10 @@ public sealed class RegressionCommandRunner {
                 "check-fingerprint" => RunCheckFingerprint(args, output),
                 "compare-fingerprint" => RunCompareFingerprint(args, output),
                 "check-idle" => RunCheckIdle(args, output),
+                "compare-rgba" => RunCompareRgba(args, output),
+                "record-golden-rgba" => RunRecordGoldenRgba(args, output),
+                "check-premultiplied" => RunCheckPremultiplied(args, output),
+                "find-probes" => RunFindProbes(args, output),
                 _ => PrintUsage(output)
             };
         } catch (Exception exception) {
@@ -299,6 +305,111 @@ public sealed class RegressionCommandRunner {
     }
 
     /// <summary>
+    /// Runs "compare-rgba capture.bmp golden.png diff.png": the alpha-aware counterpart of compare,
+    /// comparing all four B, G, R and A channels for an overlay-mode capture whose alpha is
+    /// meaningful, and writing the diff image only when the comparison fails.
+    /// </summary>
+    static int RunCompareRgba(string[] args, TextWriter output) {
+        if (args.Length != 4) {
+            throw new ArgumentException("compare-rgba requires <capture.bmp> <golden.png> <diff.png>");
+        }
+
+        RegressionImage actual = BmpImageReader.ReadWithAlpha(args[1]);
+        RegressionImage expected = PngImageStore.LoadWithAlpha(args[2]);
+        ImageComparison comparison = ImageComparer.CompareRgba(expected, actual);
+
+        if (!comparison.SizesMatch) {
+            output.WriteLine($"FAIL size {actual.Width}x{actual.Height} vs {expected.Width}x{expected.Height}");
+            return 1;
+        }
+
+        if (comparison.Passed) {
+            output.WriteLine($"PASS {comparison.DifferingFraction.ToString(CultureInfo.InvariantCulture)}");
+            return 0;
+        }
+
+        PngImageStore.SaveWithAlpha(comparison.DiffImage, args[3]);
+        output.WriteLine($"FAIL {comparison.DifferingFraction.ToString(CultureInfo.InvariantCulture)} {args[3]}");
+        return 1;
+    }
+
+    /// <summary>
+    /// Runs "record-golden-rgba capture.bmp golden.png": the alpha-aware counterpart of record-golden,
+    /// converting a capture into a golden PNG while keeping its real alpha bytes.
+    /// </summary>
+    static int RunRecordGoldenRgba(string[] args, TextWriter output) {
+        if (args.Length != 3) {
+            throw new ArgumentException("record-golden-rgba requires <capture.bmp> <golden.png>");
+        }
+
+        RegressionImage capture = BmpImageReader.ReadWithAlpha(args[1]);
+        PngImageStore.SaveWithAlpha(capture, args[2]);
+        output.WriteLine($"RECORDED {args[2]}");
+        return 0;
+    }
+
+    /// <summary>
+    /// Runs "check-premultiplied capture.bmp minTransparentFraction minOpaqueFraction": fails when any
+    /// pixel's color channel exceeds its own alpha channel, otherwise fails when the fully transparent
+    /// or fully opaque pixel fraction is below its minimum, otherwise passes with both fractions.
+    /// </summary>
+    static int RunCheckPremultiplied(string[] args, TextWriter output) {
+        if (args.Length != 4) {
+            throw new ArgumentException("check-premultiplied requires <capture.bmp> <minTransparentFraction> <minOpaqueFraction>");
+        }
+
+        RegressionImage image = BmpImageReader.ReadWithAlpha(args[1]);
+        double minimumTransparentFraction = ParseFractionArgument("minTransparentFraction", args[2]);
+        double minimumOpaqueFraction = ParseFractionArgument("minOpaqueFraction", args[3]);
+        PremultipliedAlphaMeasurement measurement = PremultipliedAlphaChecker.Measure(image);
+
+        if (measurement.ViolatingPixels > 0) {
+            output.WriteLine($"FAIL premultiplied {measurement.ViolatingPixels} pixels have a color channel above alpha");
+            return 1;
+        }
+
+        if (measurement.TransparentFraction < minimumTransparentFraction) {
+            output.WriteLine($"FAIL transparent {measurement.TransparentFraction.ToString(CultureInfo.InvariantCulture)} below {minimumTransparentFraction.ToString(CultureInfo.InvariantCulture)}");
+            return 1;
+        }
+
+        if (measurement.OpaqueFraction < minimumOpaqueFraction) {
+            output.WriteLine($"FAIL opaque {measurement.OpaqueFraction.ToString(CultureInfo.InvariantCulture)} below {minimumOpaqueFraction.ToString(CultureInfo.InvariantCulture)}");
+            return 1;
+        }
+
+        output.WriteLine($"PASS transparent={measurement.TransparentFraction.ToString(CultureInfo.InvariantCulture)} opaque={measurement.OpaqueFraction.ToString(CultureInfo.InvariantCulture)}");
+        return 0;
+    }
+
+    /// <summary>
+    /// Runs "find-probes golden.png": prints the first fully transparent and fully opaque probe pixel
+    /// coordinates found in row-major scan order, or fails naming whichever kind was not found.
+    /// </summary>
+    static int RunFindProbes(string[] args, TextWriter output) {
+        if (args.Length != 2) {
+            throw new ArgumentException("find-probes requires <golden.png>");
+        }
+
+        RegressionImage image = PngImageStore.LoadWithAlpha(args[1]);
+        ProbeCandidate transparent = ProbeFinder.FindTransparent(image);
+        if (transparent == null) {
+            output.WriteLine("FAIL no transparent probe found");
+            return 1;
+        }
+
+        ProbeCandidate opaque = ProbeFinder.FindOpaque(image);
+        if (opaque == null) {
+            output.WriteLine("FAIL no opaque probe found");
+            return 1;
+        }
+
+        output.WriteLine($"TRANSPARENT {transparent.X},{transparent.Y}");
+        output.WriteLine($"OPAQUE {opaque.X},{opaque.Y}");
+        return 0;
+    }
+
+    /// <summary>
     /// Parses a command-line argument that must be a whole non-negative number, throwing <see cref="FormatException"/>
     /// that names the argument otherwise.
     /// </summary>
@@ -308,6 +419,18 @@ public sealed class RegressionCommandRunner {
         }
 
         return number;
+    }
+
+    /// <summary>
+    /// Parses a command-line argument that must be a fraction, throwing <see cref="FormatException"/>
+    /// that names the argument otherwise.
+    /// </summary>
+    static double ParseFractionArgument(string argumentName, string value) {
+        if (!double.TryParse(value, NumberStyles.Float, CultureInfo.InvariantCulture, out double fraction)) {
+            throw new FormatException($"{argumentName} must be a number, got '{value}'.");
+        }
+
+        return fraction;
     }
 
     /// <summary>
@@ -322,7 +445,7 @@ public sealed class RegressionCommandRunner {
     /// Prints the CLI usage line for an empty or unrecognized command.
     /// </summary>
     static int PrintUsage(TextWriter output) {
-        output.WriteLine("USAGE regression <compare|record-golden|stable|blank-check|trx-failing|compare-failing|record-executed|check-executed|check-fingerprint|compare-fingerprint|check-idle> ...");
+        output.WriteLine("USAGE regression <compare|record-golden|stable|blank-check|trx-failing|compare-failing|record-executed|check-executed|check-fingerprint|compare-fingerprint|check-idle|compare-rgba|record-golden-rgba|check-premultiplied|find-probes> ...");
         return 2;
     }
 }

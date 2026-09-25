@@ -29,4 +29,29 @@ public sealed class PngImageStoreTests {
         Assert.Equal(original.Height, loaded.Height);
         Assert.Equal(original.Bgra, loaded.Bgra);
     }
+
+    /// <summary>
+    /// Verifies SaveWithAlpha then LoadWithAlpha round-trips every byte exactly, including pixels
+    /// whose alpha is 0 or near 0 with a non-zero color: Load's Graphics.DrawImageUnscaled would
+    /// composite those pixels against black and lose their color, so the alpha-preserving pair must
+    /// copy raw ARGB bytes instead.
+    /// </summary>
+    [Fact]
+    public void SaveWithAlpha_then_LoadWithAlpha_round_trips_alpha_zero_pixels_with_nonzero_color() {
+        string path = Path.Combine(RegressionTestFixtures.TestOutputDirectory, "alpha-round-trip.png");
+        byte[] bgra = {
+            200, 180, 160, 0,
+            10, 20, 30, 255,
+            90, 60, 30, 128,
+            1, 2, 3, 1
+        };
+        RegressionImage original = new(2, 2, bgra);
+
+        PngImageStore.SaveWithAlpha(original, path);
+        RegressionImage loaded = PngImageStore.LoadWithAlpha(path);
+
+        Assert.Equal(original.Width, loaded.Width);
+        Assert.Equal(original.Height, loaded.Height);
+        Assert.Equal(original.Bgra, loaded.Bgra);
+    }
 }

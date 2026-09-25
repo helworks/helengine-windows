@@ -113,4 +113,80 @@ public sealed class ImageComparerTests {
         Assert.Equal(255, comparison.DiffImage.Bgra[2]);
         Assert.Equal(255, comparison.DiffImage.Bgra[3]);
     }
+
+    /// <summary>
+    /// Verifies CompareRgba counts an alpha-only difference over tolerance as differing, unlike
+    /// Compare which only looks at B, G and R.
+    /// </summary>
+    [Fact]
+    public void CompareRgba_alpha_difference_over_tolerance_counts_as_differing() {
+        RegressionImage expected = new(1, 1, new byte[] { 10, 20, 30, 255 });
+        RegressionImage actual = new(1, 1, new byte[] { 10, 20, 30, 200 });
+
+        ImageComparison comparison = ImageComparer.CompareRgba(expected, actual);
+
+        Assert.Equal(1, comparison.DifferingPixels);
+        Assert.False(comparison.Passed);
+    }
+
+    /// <summary>
+    /// Verifies CompareRgba does not count an alpha difference within the channel tolerance.
+    /// </summary>
+    [Fact]
+    public void CompareRgba_alpha_difference_within_tolerance_does_not_count() {
+        RegressionImage expected = new(1, 1, new byte[] { 10, 20, 30, 255 });
+        RegressionImage actual = new(1, 1, new byte[] { 10, 20, 30, (byte)(255 - ImageComparer.ChannelTolerance) });
+
+        ImageComparison comparison = ImageComparer.CompareRgba(expected, actual);
+
+        Assert.Equal(0, comparison.DifferingPixels);
+    }
+
+    /// <summary>
+    /// Verifies CompareRgba still applies the same tolerance and fraction rules to color channels as
+    /// Compare does.
+    /// </summary>
+    [Fact]
+    public void CompareRgba_matches_rgb_only_behavior_for_color_differences() {
+        RegressionImage expected = RegressionTestFixtures.CreateUniformImage(10, 10, 10, 20, 30);
+        RegressionImage actual = RegressionTestFixtures.CreateUniformImage(10, 10, 10, 20, 30);
+        actual.Bgra[1] = (byte)(actual.Bgra[1] + 9);
+
+        ImageComparison comparison = ImageComparer.CompareRgba(expected, actual);
+
+        Assert.Equal(1, comparison.DifferingPixels);
+    }
+
+    /// <summary>
+    /// Verifies a size mismatch under CompareRgba fails without a diff image, exactly like Compare.
+    /// </summary>
+    [Fact]
+    public void CompareRgba_size_mismatch_fails_without_diff_image() {
+        RegressionImage expected = RegressionTestFixtures.CreateUniformImage(10, 10, 10, 20, 30);
+        RegressionImage actual = RegressionTestFixtures.CreateUniformImage(20, 10, 10, 20, 30);
+
+        ImageComparison comparison = ImageComparer.CompareRgba(expected, actual);
+
+        Assert.False(comparison.SizesMatch);
+        Assert.False(comparison.Passed);
+        Assert.Null(comparison.DiffImage);
+    }
+
+    /// <summary>
+    /// Verifies CompareRgba's diff image marks a differing pixel opaque magenta and a matching pixel
+    /// opaque greyscale, even though the matching pixel's own alpha was fully transparent.
+    /// </summary>
+    [Fact]
+    public void CompareRgba_diff_image_marks_differing_pixels_magenta_and_others_greyscale_opaque() {
+        RegressionImage expected = new(2, 1, new byte[] { 10, 20, 30, 255, 10, 20, 30, 255 });
+        RegressionImage actual = new(2, 1, new byte[] { 10, 20, 30, 0, 10, 20, 30, 255 });
+
+        ImageComparison comparison = ImageComparer.CompareRgba(expected, actual);
+
+        Assert.Equal(255, comparison.DiffImage.Bgra[0]);
+        Assert.Equal(0, comparison.DiffImage.Bgra[1]);
+        Assert.Equal(255, comparison.DiffImage.Bgra[2]);
+        Assert.Equal(255, comparison.DiffImage.Bgra[3]);
+        Assert.Equal(255, comparison.DiffImage.Bgra[7]);
+    }
 }

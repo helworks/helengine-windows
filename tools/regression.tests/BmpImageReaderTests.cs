@@ -74,6 +74,57 @@ public sealed class BmpImageReaderTests {
     }
 
     /// <summary>
+    /// Verifies ReadWithAlpha keeps each pixel's exact alpha byte instead of forcing opacity, which
+    /// overlay-mode captures need because their alpha channel is meaningful premultiplied alpha.
+    /// </summary>
+    [Fact]
+    public void ReadWithAlpha_keeps_exact_alpha_bytes() {
+        string path = Path.Combine(RegressionTestFixtures.TestOutputDirectory, "alpha-preserved.bmp");
+        byte[] storageOrder = {
+            10, 20, 30, 0,
+            40, 50, 60, 224
+        };
+        File.WriteAllBytes(path, RegressionTestFixtures.BuildBmp(2, -1, storageOrder));
+
+        RegressionImage image = BmpImageReader.ReadWithAlpha(path);
+
+        Assert.Equal(storageOrder, image.Bgra);
+    }
+
+    /// <summary>
+    /// Verifies ReadWithAlpha reverses bottom-up row order into top-down order exactly like Read,
+    /// without altering the alpha bytes it carries.
+    /// </summary>
+    [Fact]
+    public void ReadWithAlpha_reverses_bottom_up_rows_into_top_down_order() {
+        string path = Path.Combine(RegressionTestFixtures.TestOutputDirectory, "alpha-bottom-up.bmp");
+        byte[] pixel00 = { 10, 20, 30, 0 };
+        byte[] pixel10 = { 40, 50, 60, 128 };
+        byte[] pixel01 = { 70, 80, 90, 255 };
+        byte[] pixel11 = { 100, 110, 120, 64 };
+        byte[] storageOrder = RegressionTestFixtures.Concat(pixel01, pixel11, pixel00, pixel10);
+        File.WriteAllBytes(path, RegressionTestFixtures.BuildBmp(2, 2, storageOrder));
+
+        RegressionImage image = BmpImageReader.ReadWithAlpha(path);
+
+        Assert.Equal(RegressionTestFixtures.Concat(pixel00, pixel10, pixel01, pixel11), image.Bgra);
+    }
+
+    /// <summary>
+    /// Verifies ReadWithAlpha still rejects a truncated capture instead of reading out of bounds.
+    /// </summary>
+    [Fact]
+    public void ReadWithAlpha_truncated_bmp_throws_invalid_data_exception() {
+        string path = Path.Combine(RegressionTestFixtures.TestOutputDirectory, "alpha-truncated.bmp");
+        byte[] fullPixels = new byte[2 * 2 * 4];
+        byte[] header = RegressionTestFixtures.BuildBmpHeader(2, 2, 32, 0, fullPixels.Length);
+        byte[] truncatedPixels = fullPixels[..(fullPixels.Length - 4)];
+        File.WriteAllBytes(path, RegressionTestFixtures.Concat(header, truncatedPixels));
+
+        Assert.Throws<InvalidDataException>(() => BmpImageReader.ReadWithAlpha(path));
+    }
+
+    /// <summary>
     /// Verifies a 24-bit BMP is rejected as an unsupported bit depth.
     /// </summary>
     [Fact]
