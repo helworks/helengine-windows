@@ -4,22 +4,33 @@
 
 #include <string>
 
+#include "platform/windows/win32/win32_window_style.hpp"
+
 namespace helengine::windows {
     class Win32ActivityTracker;
 
     /// Owns one native Win32 window and the static-to-instance message bridge.
     class Win32Window {
     public:
-        /// Creates a window wrapper with a title and requested client size.
-        Win32Window(const wchar_t* title, int width, int height);
+        /// Creates a window wrapper with a title, a requested position and client size, and the style set that decides
+        /// how the window is created and shown.
+        /// <param name="title">Native window title.</param>
+        /// <param name="left">Screen x of the window's top-left corner; only the overlay style uses it, a normal window
+        /// keeps the CW_USEDEFAULT placement.</param>
+        /// <param name="top">Screen y of the window's top-left corner; only the overlay style uses it.</param>
+        /// <param name="width">Requested client width in pixels.</param>
+        /// <param name="height">Requested client height in pixels.</param>
+        /// <param name="windowStyle">Normal or overlay style set.</param>
+        Win32Window(const wchar_t* title, int left, int top, int width, int height, const Win32WindowStyle& windowStyle);
 
         /// Releases the native window if it is still alive.
         ~Win32Window();
 
-        /// Registers the window class and creates the native window.
+        /// Registers the window class and creates the native window through the normal or overlay path chosen by the
+        /// window style.
         void Create();
 
-        /// Shows the native window using the default show mode.
+        /// Shows the native window through the normal or overlay path chosen by the window style.
         void Show() const;
 
         /// Gets the native window handle.
@@ -48,6 +59,23 @@ namespace helengine::windows {
         /// Registers the native window class used by the player host.
         void RegisterWindowClass();
 
+        /// Creates today's ordinary WS_OVERLAPPEDWINDOW window at the default placement, with exactly the calls the
+        /// player has always made.
+        void CreateNormalWindow();
+
+        /// Creates the borderless overlay window at the requested position, sized with AdjustWindowRectEx for the
+        /// overlay style set.
+        void CreateOverlayWindow();
+
+        /// Shows today's ordinary window and brings it to the foreground with keyboard focus, exactly as the player
+        /// has always done.
+        void ShowNormalWindow() const;
+
+        /// Shows the overlay window without activating it and pins it topmost at its bounds with SWP_NOACTIVATE; it
+        /// never calls a foreground or focus function, so the user's foreground window keeps focus. Throws
+        /// std::runtime_error when SetWindowPos fails.
+        void ShowOverlayWindow() const;
+
         /// Updates the cached client size from the current native window state.
         void RefreshClientSize();
 
@@ -57,11 +85,20 @@ namespace helengine::windows {
         /// Stores the native window title.
         std::wstring Title;
 
+        /// Stores the requested screen x of the window's top-left corner; only used by the overlay style.
+        int Left;
+
+        /// Stores the requested screen y of the window's top-left corner; only used by the overlay style.
+        int Top;
+
         /// Stores the requested initial client width.
         int Width;
 
         /// Stores the requested initial client height.
         int Height;
+
+        /// Stores the style set that selects the normal or overlay creation and show path.
+        Win32WindowStyle WindowStyle;
 
         /// Stores the native window handle.
         HWND Handle;

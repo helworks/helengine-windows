@@ -682,7 +682,27 @@ namespace helengine::windows {
         RuntimePlayerProfile profile = ResolveRuntimePlayerProfile();
         Win32WindowModeSettings windowModeSettings = ResolveWindowModeSettings(profile);
         Win32IdleThrottleSettings idleThrottleSettings = Win32IdleThrottleSettings::Resolve(profile, CommandLineOptions);
-        MainWindow = std::make_unique<Win32Window>(L"HelEngine Windows Host", profile.ResolutionWidth, profile.ResolutionHeight);
+        WindowModeSettings = std::make_unique<Win32WindowModeSettings>(windowModeSettings);
+        if (windowModeSettings.GetWindowMode() == Win32WindowMode::Overlay) {
+            RECT overlayRectangle = ResolveOverlayRectangle(windowModeSettings, profile);
+            int overlayWidth = overlayRectangle.right - overlayRectangle.left;
+            int overlayHeight = overlayRectangle.bottom - overlayRectangle.top;
+            MainWindow = std::make_unique<Win32Window>(
+                L"HelEngine Windows Host",
+                overlayRectangle.left,
+                overlayRectangle.top,
+                overlayWidth,
+                overlayHeight,
+                Win32WindowStyle::Overlay());
+            std::ostringstream overlayBoundsBuilder;
+            overlayBoundsBuilder << "Overlay window bounds: left=" << overlayRectangle.left
+                << " top=" << overlayRectangle.top
+                << " size=" << overlayWidth << "x" << overlayHeight << '.';
+            std::string overlayBoundsMessage = overlayBoundsBuilder.str();
+            WriteLifecycleLog(overlayBoundsMessage.c_str());
+        } else {
+            MainWindow = std::make_unique<Win32Window>(L"HelEngine Windows Host", CW_USEDEFAULT, CW_USEDEFAULT, profile.ResolutionWidth, profile.ResolutionHeight, Win32WindowStyle::Normal());
+        }
         if (idleThrottleSettings.IsEnabled()) {
             ActivityTracker = std::make_unique<Win32ActivityTracker>();
             IdleFramePacer = std::make_unique<Win32IdleFramePacer>(idleThrottleSettings);
@@ -714,7 +734,8 @@ namespace helengine::windows {
         Bootstrap = std::make_unique<DirectX11Bootstrap>(
             MainWindow->GetHandle(),
             MainWindow->GetClientWidth(),
-            MainWindow->GetClientHeight());
+            MainWindow->GetClientHeight(),
+            WindowModeSettings->GetWindowMode() == Win32WindowMode::Overlay);
         Presenter = std::make_unique<DirectX11Presenter>(*Bootstrap);
         if (CommandLineOptions.HasCapturePath()) {
             BackBufferCapture = std::make_unique<DirectX11BackBufferCapture>(*Bootstrap);
@@ -1320,6 +1341,34 @@ namespace helengine::windows {
         }
     }
 
+    /// Resolves the overlay window's screen rectangle from the primary monitor (the monitor containing the origin):
+    /// its full bounds for overlayBounds=monitor, or the profile resolution at its top-left for
+    /// overlayBounds=profile. Throws std::runtime_error when the primary monitor's information cannot be read.
+    /// <param name="windowModeSettings">Resolved window-mode settings; only called in overlay mode.</param>
+    /// <param name="profile">Runtime player profile supplying the resolution for overlayBounds=profile.</param>
+    /// <returns>The overlay window's rectangle in screen coordinates.</returns>
+    RECT Win32Application::ResolveOverlayRectangle(const Win32WindowModeSettings& windowModeSettings, const RuntimePlayerProfile& profile) const {
+        POINT primaryMonitorOrigin { 0, 0 };
+        HMONITOR primaryMonitor = MonitorFromPoint(primaryMonitorOrigin, MONITOR_DEFAULTTOPRIMARY);
+        MONITORINFO monitorInfo {};
+        monitorInfo.cbSize = sizeof(MONITORINFO);
+        if (!GetMonitorInfoW(primaryMonitor, &monitorInfo)) {
+            throw std::runtime_error("GetMonitorInfoW failed for the primary monitor while resolving the overlay window bounds.");
+        }
+
+        if (windowModeSettings.GetOverlayBounds() == Win32OverlayBounds::Monitor) {
+            return monitorInfo.rcMonitor;
+        }
+
+        RECT profileRectangle {
+            monitorInfo.rcMonitor.left,
+            monitorInfo.rcMonitor.top,
+            monitorInfo.rcMonitor.left + profile.ResolutionWidth,
+            monitorInfo.rcMonitor.top + profile.ResolutionHeight
+        };
+        return profileRectangle;
+    }
+
     /// Builds the runtime scene catalog consumed by packaged menu scene transitions.
     RuntimeSceneCatalog* Win32Application::BuildRuntimeSceneCatalog() {
 #if __has_include("Core.hpp")
@@ -1821,7 +1870,7 @@ namespace helengine::windows {
                     ActiveFrameCount++;
                 }
                 if (RenderedFrameCount >= CommandLineOptions.GetFrameLimit()) {
-                    std::string fingerprintLine = HostFingerprint->Describe(RenderedFrameCount, IdleFramePacer != nullptr, IdleFrameCount, ActiveFrameCount);
+                    std::string fingerprintLine = HostFingerprint->Describe(RenderedFrameCount, IdleFramePacer != nullptr, IdleFrameCount, ActiveFrameCount, WindowModeSettings->GetWindowMode());
                     WriteLifecycleLog(fingerprintLine.c_str());
                     PostQuitMessage(0);
                 }

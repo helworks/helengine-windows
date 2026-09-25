@@ -39,6 +39,21 @@ public sealed class HostFingerprintComparerTests {
     }
 
     /// <summary>
+    /// Verifies the window mode is compared exactly, so a run that came up as an overlay against a normal-mode record
+    /// fails instead of passing on matching counters.
+    /// </summary>
+    [Fact]
+    public void Compare_reports_a_differing_window_mode() {
+        HostFingerprint recorded = HostFingerprint.Parse(HostFingerprintTests.SampleLine);
+        HostFingerprint actual = HostFingerprint.Parse(HostFingerprintTests.SampleLine.Replace("windowMode=normal", "windowMode=overlay"));
+
+        HostFingerprintComparison comparison = HostFingerprintComparer.Compare("axis_test", recorded, actual);
+
+        Assert.False(comparison.Passed);
+        Assert.Equal(new[] { "fingerprint axis_test windowMode recorded=normal actual=overlay" }, comparison.Failures);
+    }
+
+    /// <summary>
     /// Verifies a run that presented fewer times than it rendered frames fails even when the record had the same
     /// shortfall.
     /// </summary>

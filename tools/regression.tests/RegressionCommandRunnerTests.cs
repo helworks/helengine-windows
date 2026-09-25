@@ -158,7 +158,7 @@ public sealed class RegressionCommandRunnerTests {
     /// A fingerprint of a healthy idle-scenario run: the throttle was on, most frames ran idle and the 30 frames took
     /// about 2.75 s.
     /// </summary>
-    const string IdleSampleLine = "HOST_FINGERPRINT format=87 alpha=3 swapEffect=4 buffers=2 scaling=0 style=0x14CF0000 exStyle=0x00000100 client=640x360 presentCount=30 presentFailures=0 frames=30 idleThrottle=on idleFrames=28 activeFrames=2 elapsedMs=2750";
+    const string IdleSampleLine = "HOST_FINGERPRINT format=87 alpha=3 swapEffect=4 buffers=2 scaling=0 style=0x14CF0000 exStyle=0x00000100 client=640x360 presentCount=30 presentFailures=0 frames=30 idleThrottle=on idleFrames=28 activeFrames=2 windowMode=normal elapsedMs=2750";
 
     /// <summary>
     /// Verifies check-idle prints "PASS idleFrames=&lt;n&gt; elapsedMs=&lt;n&gt;" and returns 0 when the run was throttled,

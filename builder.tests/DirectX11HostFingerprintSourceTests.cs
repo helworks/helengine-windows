@@ -37,13 +37,14 @@ public sealed class DirectX11HostFingerprintSourceTests {
         Assert.Contains("GetClientRect(", fingerprintSource, StringComparison.Ordinal);
         Assert.Contains("std::chrono::steady_clock", fingerprintSource, StringComparison.Ordinal);
         Assert.Contains("FAILED(presentResult)", fingerprintSource, StringComparison.Ordinal);
-        Assert.Contains("std::string DirectX11HostFingerprint::Describe(int frameCount, bool idleThrottleEnabled, int idleFrames, int activeFrames) const {", fingerprintSource, StringComparison.Ordinal);
+        Assert.Contains("std::string DirectX11HostFingerprint::Describe(int frameCount, bool idleThrottleEnabled, int idleFrames, int activeFrames, Win32WindowMode windowMode) const {", fingerprintSource, StringComparison.Ordinal);
         Assert.Contains("<< \" idleThrottle=\" << (idleThrottleEnabled ? \"on\" : \"off\")", fingerprintSource, StringComparison.Ordinal);
         Assert.Contains("<< \" idleFrames=\" << idleFrames", fingerprintSource, StringComparison.Ordinal);
         Assert.Contains("<< \" activeFrames=\" << activeFrames", fingerprintSource, StringComparison.Ordinal);
+        Assert.Contains("<< \" windowMode=\" << Win32WindowModeNames::ToText(windowMode)", fingerprintSource, StringComparison.Ordinal);
 
         string fingerprintHeader = ReadRepositoryFile("src", "platform", "windows", "directx11", "directx11_host_fingerprint.hpp");
-        Assert.Contains("std::string Describe(int frameCount, bool idleThrottleEnabled, int idleFrames, int activeFrames) const;", fingerprintHeader, StringComparison.Ordinal);
+        Assert.Contains("std::string Describe(int frameCount, bool idleThrottleEnabled, int idleFrames, int activeFrames, Win32WindowMode windowMode) const;", fingerprintHeader, StringComparison.Ordinal);
 
         string[] orderedFields = {
             "\"HOST_FINGERPRINT format=\"",
@@ -60,6 +61,7 @@ public sealed class DirectX11HostFingerprintSourceTests {
             "\" idleThrottle=\"",
             "\" idleFrames=\"",
             "\" activeFrames=\"",
+            "\" windowMode=\"",
             "\" elapsedMs=\""
         };
         int previousIndex = -1;
@@ -92,7 +94,7 @@ public sealed class DirectX11HostFingerprintSourceTests {
         Assert.Contains("presentResult = Presenter->RenderFrame();", applicationSource, StringComparison.Ordinal);
         Match frameLimitBlock = Regex.Match(
             applicationSource,
-            @"if \(CommandLineOptions\.HasFrameLimit\(\)\) \{\s*if \(HostFingerprint->RecordPresent\(presentResult\)\) \{\s*std::string presentFailureMessage = DirectX11HostFingerprint::DescribePresentFailure\(presentResult\);\s*WriteLifecycleLog\(presentFailureMessage\.c_str\(\)\);\s*\}\s*RenderedFrameCount\+\+;\s*if \(CurrentFrameIsIdle\) \{\s*IdleFrameCount\+\+;\s*\} else \{\s*ActiveFrameCount\+\+;\s*\}\s*if \(RenderedFrameCount >= CommandLineOptions\.GetFrameLimit\(\)\) \{\s*std::string fingerprintLine = HostFingerprint->Describe\(RenderedFrameCount, IdleFramePacer != nullptr, IdleFrameCount, ActiveFrameCount\);\s*WriteLifecycleLog\(fingerprintLine\.c_str\(\)\);\s*PostQuitMessage\(0\);\s*\}\s*\}");
+            @"if \(CommandLineOptions\.HasFrameLimit\(\)\) \{\s*if \(HostFingerprint->RecordPresent\(presentResult\)\) \{\s*std::string presentFailureMessage = DirectX11HostFingerprint::DescribePresentFailure\(presentResult\);\s*WriteLifecycleLog\(presentFailureMessage\.c_str\(\)\);\s*\}\s*RenderedFrameCount\+\+;\s*if \(CurrentFrameIsIdle\) \{\s*IdleFrameCount\+\+;\s*\} else \{\s*ActiveFrameCount\+\+;\s*\}\s*if \(RenderedFrameCount >= CommandLineOptions\.GetFrameLimit\(\)\) \{\s*std::string fingerprintLine = HostFingerprint->Describe\(RenderedFrameCount, IdleFramePacer != nullptr, IdleFrameCount, ActiveFrameCount, WindowModeSettings->GetWindowMode\(\)\);\s*WriteLifecycleLog\(fingerprintLine\.c_str\(\)\);\s*PostQuitMessage\(0\);\s*\}\s*\}");
         Assert.True(frameLimitBlock.Success, "The frame-limit block must count Present failures, split frames into idle and active counts, and log the fingerprint before PostQuitMessage(0).");
 
         // Every read of the fingerprint and of the Present result is one of the matched lines inside the block above.

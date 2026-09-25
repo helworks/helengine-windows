@@ -9,6 +9,7 @@
 #include <dxgi1_2.h>
 
 #include "platform/windows/directx11/directx11_bootstrap.hpp"
+#include "platform/windows/win32/win32_window_mode_names.hpp"
 
 namespace helengine::windows {
     /// Creates a fingerprint bound to the bootstrap that owns the swap chain and to the player's main window.
@@ -47,10 +48,10 @@ namespace helengine::windows {
 
     /// Builds the HOST_FINGERPRINT line from the current swap-chain description, window styles, client rectangle
     /// and Present count, plus the recorded failures, the given frame count, whether the idle throttle is enabled
-    /// (written as idleThrottle=on or off), how many of the frames ran in idle and in active mode, and the
-    /// milliseconds between the first and the last recorded Present. Throws std::runtime_error when a DXGI or Win32
-    /// query fails.
-    std::string DirectX11HostFingerprint::Describe(int frameCount, bool idleThrottleEnabled, int idleFrames, int activeFrames) const {
+    /// (written as idleThrottle=on or off), how many of the frames ran in idle and in active mode, the window mode
+    /// (written as windowMode=normal or overlay), and the milliseconds between the first and the last recorded
+    /// Present. Throws std::runtime_error when a DXGI or Win32 query fails.
+    std::string DirectX11HostFingerprint::Describe(int frameCount, bool idleThrottleEnabled, int idleFrames, int activeFrames, Win32WindowMode windowMode) const {
         IDXGISwapChain1* swapChain = Bootstrap.GetSwapChain();
         DXGI_SWAP_CHAIN_DESC1 swapChainDesc = {};
         ThrowIfFailed(swapChain->GetDesc1(&swapChainDesc), "IDXGISwapChain1::GetDesc1");
@@ -88,6 +89,7 @@ namespace helengine::windows {
                     << " idleThrottle=" << (idleThrottleEnabled ? "on" : "off")
                     << " idleFrames=" << idleFrames
                     << " activeFrames=" << activeFrames
+                    << " windowMode=" << Win32WindowModeNames::ToText(windowMode)
                     << " elapsedMs=" << elapsedMilliseconds;
         return lineBuilder.str();
     }

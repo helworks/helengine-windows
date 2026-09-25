@@ -8,7 +8,7 @@ public sealed class HostFingerprintTests {
     /// <summary>
     /// A complete fingerprint line exactly as the player writes it (after the "[Host] " log prefix).
     /// </summary>
-    public const string SampleLine = "HOST_FINGERPRINT format=87 alpha=3 swapEffect=4 buffers=2 scaling=0 style=0x16CF0000 exStyle=0x00000100 client=640x360 presentCount=30 presentFailures=0 frames=30 idleThrottle=off idleFrames=0 activeFrames=30 elapsedMs=483";
+    public const string SampleLine = "HOST_FINGERPRINT format=87 alpha=3 swapEffect=4 buffers=2 scaling=0 style=0x16CF0000 exStyle=0x00000100 client=640x360 presentCount=30 presentFailures=0 frames=30 idleThrottle=off idleFrames=0 activeFrames=30 windowMode=normal elapsedMs=483";
 
     /// <summary>
     /// Verifies every compared field and the elapsed time are read from a complete line.
@@ -24,6 +24,8 @@ public sealed class HostFingerprintTests {
         Assert.Equal("off", fingerprint.Fields["idleThrottle"]);
         Assert.Equal("0", fingerprint.Fields["idleFrames"]);
         Assert.Equal("30", fingerprint.Fields["activeFrames"]);
+        Assert.Equal("normal", fingerprint.Fields["windowMode"]);
+        Assert.Equal("normal", fingerprint.WindowMode);
         Assert.Equal(HostFingerprint.ComparedFieldNames.Count, fingerprint.Fields.Count);
         Assert.False(fingerprint.Fields.ContainsKey("elapsedMs"));
         Assert.Equal(483, fingerprint.ElapsedMilliseconds);
@@ -35,10 +37,11 @@ public sealed class HostFingerprintTests {
     /// </summary>
     [Fact]
     public void Parse_accepts_fields_without_the_marker_in_any_order() {
-        HostFingerprint fingerprint = HostFingerprint.Parse("elapsedMs=10 activeFrames=30 idleFrames=0 idleThrottle=off frames=30 presentFailures=0 presentCount=30 client=640x360 exStyle=0x00000100 style=0x16CF0000 scaling=0 buffers=2 swapEffect=4 alpha=3 format=87");
+        HostFingerprint fingerprint = HostFingerprint.Parse("elapsedMs=10 windowMode=overlay activeFrames=30 idleFrames=0 idleThrottle=off frames=30 presentFailures=0 presentCount=30 client=640x360 exStyle=0x00000100 style=0x16CF0000 scaling=0 buffers=2 swapEffect=4 alpha=3 format=87");
 
         Assert.Equal("4", fingerprint.Fields["swapEffect"]);
         Assert.Equal("off", fingerprint.Fields["idleThrottle"]);
+        Assert.Equal("overlay", fingerprint.WindowMode);
         Assert.Equal(10, fingerprint.ElapsedMilliseconds);
     }
 
@@ -57,6 +60,17 @@ public sealed class HostFingerprintTests {
     [Fact]
     public void Parse_rejects_an_old_line_without_the_idle_fields() {
         string oldLine = "HOST_FINGERPRINT format=87 alpha=3 swapEffect=4 buffers=2 scaling=0 style=0x16CF0000 exStyle=0x00000100 client=640x360 presentCount=30 presentFailures=0 frames=30 elapsedMs=483";
+
+        Assert.Throws<FormatException>(() => HostFingerprint.Parse(oldLine));
+    }
+
+    /// <summary>
+    /// Verifies a line written before the overlay window mode existed, which has no windowMode field, is rejected
+    /// instead of being read as a normal-mode run; manifests recorded before the field existed must be re-recorded.
+    /// </summary>
+    [Fact]
+    public void Parse_rejects_an_old_line_without_the_window_mode_field() {
+        string oldLine = "HOST_FINGERPRINT format=87 alpha=3 swapEffect=4 buffers=2 scaling=0 style=0x16CF0000 exStyle=0x00000100 client=640x360 presentCount=30 presentFailures=0 frames=30 idleThrottle=off idleFrames=0 activeFrames=30 elapsedMs=483";
 
         Assert.Throws<FormatException>(() => HostFingerprint.Parse(oldLine));
     }

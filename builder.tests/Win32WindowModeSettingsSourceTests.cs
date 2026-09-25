@@ -169,7 +169,9 @@ public sealed class Win32WindowModeSettingsSourceTests {
                 @"RuntimePlayerProfile profile = ResolveRuntimePlayerProfile\(\);\s*"
                 + @"Win32WindowModeSettings windowModeSettings = ResolveWindowModeSettings\(profile\);\s*"
                 + @"Win32IdleThrottleSettings idleThrottleSettings = Win32IdleThrottleSettings::Resolve\(profile, CommandLineOptions\);\s*"
-                + @"MainWindow = std::make_unique<Win32Window>\(",
+                + @"WindowModeSettings = std::make_unique<Win32WindowModeSettings>\(windowModeSettings\);\s*"
+                + @"if \(windowModeSettings\.GetWindowMode\(\) == Win32WindowMode::Overlay\) \{\s*"
+                + @"RECT overlayRectangle = ResolveOverlayRectangle\(windowModeSettings, profile\);",
                 RegexOptions.Singleline),
             createMainWindowBody);
 

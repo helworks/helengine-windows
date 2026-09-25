@@ -75,6 +75,7 @@ set(HELENGINE_WINDOWS_SOURCES
     src/platform/windows/win32/win32_window.cpp
     src/platform/windows/win32/win32_window_mode_names.cpp
     src/platform/windows/win32/win32_window_mode_settings.cpp
+    src/platform/windows/win32/win32_window_style.cpp
     src/platform/windows/directx11/directx11_back_buffer_capture.cpp
     src/platform/windows/directx11/directx11_bootstrap.cpp
     src/platform/windows/directx11/directx11_host_fingerprint.cpp
@@ -146,6 +147,7 @@ target_link_libraries(helengine_windows PRIVATE
     d3d11
     d3dcompiler
     dbghelp
+    dcomp
     dxgi
     psapi
     shell32

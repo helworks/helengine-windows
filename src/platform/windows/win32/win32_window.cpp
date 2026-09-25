@@ -2,14 +2,26 @@
 
 #include "platform/windows/win32/win32_activity_tracker.hpp"
 
+#include <sstream>
 #include <stdexcept>
 
 namespace helengine::windows {
-    /// Creates a window wrapper with a title and requested client size.
-    Win32Window::Win32Window(const wchar_t* title, int width, int height)
+    /// Creates a window wrapper with a title, a requested position and client size, and the style set that decides
+    /// how the window is created and shown.
+    /// <param name="title">Native window title.</param>
+    /// <param name="left">Screen x of the window's top-left corner; only the overlay style uses it, a normal window
+    /// keeps the CW_USEDEFAULT placement.</param>
+    /// <param name="top">Screen y of the window's top-left corner; only the overlay style uses it.</param>
+    /// <param name="width">Requested client width in pixels.</param>
+    /// <param name="height">Requested client height in pixels.</param>
+    /// <param name="windowStyle">Normal or overlay style set.</param>
+    Win32Window::Win32Window(const wchar_t* title, int left, int top, int width, int height, const Win32WindowStyle& windowStyle)
         : Title(title)
+        , Left(left)
+        , Top(top)
         , Width(width)
         , Height(height)
+        , WindowStyle(windowStyle)
         , Handle(nullptr)
         , MouseWheelDelta(0)
         , ActivityTracker(nullptr) {
@@ -23,10 +35,36 @@ namespace helengine::windows {
         }
     }
 
-    /// Registers the window class and creates the native window.
+    /// Registers the window class and creates the native window through the normal or overlay path chosen by the
+    /// window style.
     void Win32Window::Create() {
         RegisterWindowClass();
 
+        if (WindowStyle.GetWindowMode() == Win32WindowMode::Overlay) {
+            CreateOverlayWindow();
+        } else {
+            CreateNormalWindow();
+        }
+
+        if (Handle == nullptr) {
+            throw std::runtime_error("CreateWindowExW failed for the HelEngine Windows host.");
+        }
+
+        RefreshClientSize();
+    }
+
+    /// Shows the native window through the normal or overlay path chosen by the window style.
+    void Win32Window::Show() const {
+        if (WindowStyle.GetWindowMode() == Win32WindowMode::Overlay) {
+            ShowOverlayWindow();
+        } else {
+            ShowNormalWindow();
+        }
+    }
+
+    /// Creates today's ordinary WS_OVERLAPPEDWINDOW window at the default placement, with exactly the calls the
+    /// player has always made.
+    void Win32Window::CreateNormalWindow() {
         RECT windowRectangle { 0, 0, Width, Height };
         AdjustWindowRect(&windowRectangle, WS_OVERLAPPEDWINDOW, FALSE);
 
@@ -43,22 +81,50 @@ namespace helengine::windows {
             nullptr,
             GetModuleHandleW(nullptr),
             this);
-
-        if (Handle == nullptr) {
-            throw std::runtime_error("CreateWindowExW failed for the HelEngine Windows host.");
-        }
-
-        RefreshClientSize();
     }
 
-    /// Shows the native window using the default show mode.
-    void Win32Window::Show() const {
+    /// Creates the borderless overlay window at the requested position, sized with AdjustWindowRectEx for the
+    /// overlay style set.
+    void Win32Window::CreateOverlayWindow() {
+        RECT windowRectangle { 0, 0, Width, Height };
+        AdjustWindowRectEx(&windowRectangle, WindowStyle.GetStyle(), FALSE, WindowStyle.GetExStyle());
+
+        Handle = CreateWindowExW(
+            WindowStyle.GetExStyle(),
+            L"HelEngineWindowClass",
+            Title.c_str(),
+            WindowStyle.GetStyle(),
+            Left,
+            Top,
+            windowRectangle.right - windowRectangle.left,
+            windowRectangle.bottom - windowRectangle.top,
+            nullptr,
+            nullptr,
+            GetModuleHandleW(nullptr),
+            this);
+    }
+
+    /// Shows today's ordinary window and brings it to the foreground with keyboard focus, exactly as the player
+    /// has always done.
+    void Win32Window::ShowNormalWindow() const {
         ShowWindow(Handle, SW_SHOWDEFAULT);
         UpdateWindow(Handle);
         BringWindowToTop(Handle);
         SetActiveWindow(Handle);
         SetForegroundWindow(Handle);
         SetFocus(Handle);
+    }
+
+    /// Shows the overlay window without activating it and pins it topmost at its bounds with SWP_NOACTIVATE; it
+    /// never calls a foreground or focus function, so the user's foreground window keeps focus. Throws
+    /// std::runtime_error when SetWindowPos fails.
+    void Win32Window::ShowOverlayWindow() const {
+        ShowWindow(Handle, WindowStyle.GetShowCommand());
+        if (!SetWindowPos(Handle, HWND_TOPMOST, Left, Top, Width, Height, SWP_NOACTIVATE)) {
+            std::ostringstream messageBuilder;
+            messageBuilder << "SetWindowPos failed for the HelEngine Windows overlay window with Win32 error " << GetLastError() << ".";
+            throw std::runtime_error(messageBuilder.str());
+        }
     }
 
     /// Gets the native window handle.

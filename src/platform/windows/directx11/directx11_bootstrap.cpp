@@ -1,13 +1,22 @@
 #include "platform/windows/directx11/directx11_bootstrap.hpp"
 
+#include <cstdint>
+#include <iomanip>
+#include <sstream>
 #include <stdexcept>
 
 namespace helengine::windows {
     /// Creates the DirectX11 bootstrap for one native window.
-    DirectX11Bootstrap::DirectX11Bootstrap(HWND windowHandle, int width, int height)
+    /// <param name="windowHandle">Window the swap chain presents to.</param>
+    /// <param name="width">Initial back-buffer width in pixels.</param>
+    /// <param name="height">Initial back-buffer height in pixels.</param>
+    /// <param name="useComposition">True only in overlay mode: create a premultiplied composition swap chain and
+    /// the DirectComposition device, target and visual instead of the window swap chain.</param>
+    DirectX11Bootstrap::DirectX11Bootstrap(HWND windowHandle, int width, int height, bool useComposition)
         : WindowHandle(windowHandle)
         , Width(width)
-        , Height(height) {
+        , Height(height)
+        , UseComposition(useComposition) {
         CreateDevice();
         CreateSwapChain();
         CreateRenderTargetView();
@@ -104,8 +113,14 @@ namespace helengine::windows {
         ThrowIfFailed(result, "D3D11CreateDevice failed for the HelEngine Windows host.");
     }
 
-    /// Creates the DXGI swap chain for the current native window.
+    /// Creates the DXGI swap chain for the current native window: the composition swap chain in overlay mode,
+    /// otherwise the window swap chain with exactly the calls the player has always made.
     void DirectX11Bootstrap::CreateSwapChain() {
+        if (UseComposition) {
+            CreateCompositionSwapChain();
+            return;
+        }
+
         Microsoft::WRL::ComPtr<IDXGIDevice> dxgiDevice;
         ThrowIfFailed(Device.As(&dxgiDevice), "ID3D11Device to IDXGIDevice query failed.");
 
@@ -137,6 +152,54 @@ namespace helengine::windows {
             "IDXGIFactory2::CreateSwapChainForHwnd failed.");
 
         ThrowIfFailed(factory->MakeWindowAssociation(WindowHandle, DXGI_MWA_NO_ALT_ENTER), "IDXGIFactory2::MakeWindowAssociation failed.");
+    }
+
+    /// Creates the premultiplied composition swap chain (B8G8R8A8, 2 buffers, STRETCH, FLIP_DISCARD) and shows it
+    /// on the window through a DirectComposition device, a topmost target, one visual, SetContent, SetRoot and
+    /// Commit. Throws std::runtime_error carrying the failing HRESULT in hexadecimal when any call fails.
+    void DirectX11Bootstrap::CreateCompositionSwapChain() {
+        Microsoft::WRL::ComPtr<IDXGIDevice> dxgiDevice;
+        ThrowIfCompositionFailed(Device.As(&dxgiDevice), "ID3D11Device to IDXGIDevice query");
+
+        Microsoft::WRL::ComPtr<IDXGIAdapter> adapter;
+        ThrowIfCompositionFailed(dxgiDevice->GetAdapter(adapter.GetAddressOf()), "IDXGIDevice::GetAdapter");
+
+        Microsoft::WRL::ComPtr<IDXGIFactory2> factory;
+        ThrowIfCompositionFailed(adapter->GetParent(__uuidof(IDXGIFactory2), reinterpret_cast<void**>(factory.GetAddressOf())), "IDXGIAdapter::GetParent for IDXGIFactory2");
+
+        DXGI_SWAP_CHAIN_DESC1 swapChainDescription {};
+        swapChainDescription.Width = static_cast<UINT>(Width);
+        swapChainDescription.Height = static_cast<UINT>(Height);
+        swapChainDescription.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
+        swapChainDescription.SampleDesc.Count = 1;
+        swapChainDescription.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
+        swapChainDescription.BufferCount = 2;
+        swapChainDescription.Scaling = DXGI_SCALING_STRETCH;
+        swapChainDescription.SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD;
+        swapChainDescription.AlphaMode = DXGI_ALPHA_MODE_PREMULTIPLIED;
+
+        ThrowIfCompositionFailed(
+            factory->CreateSwapChainForComposition(
+                Device.Get(),
+                &swapChainDescription,
+                nullptr,
+                SwapChain.GetAddressOf()),
+            "IDXGIFactory2::CreateSwapChainForComposition");
+
+        // DXGI watches the window for Alt+Enter per factory and HWND, independently of how the swap chain presents;
+        // the association keeps the player's opt-out of the DXGI fullscreen toggle in overlay mode too.
+        ThrowIfCompositionFailed(factory->MakeWindowAssociation(WindowHandle, DXGI_MWA_NO_ALT_ENTER), "IDXGIFactory2::MakeWindowAssociation");
+
+        ThrowIfCompositionFailed(
+            DCompositionCreateDevice(dxgiDevice.Get(), __uuidof(IDCompositionDevice), reinterpret_cast<void**>(CompositionDevice.GetAddressOf())),
+            "DCompositionCreateDevice");
+        ThrowIfCompositionFailed(
+            CompositionDevice->CreateTargetForHwnd(WindowHandle, TRUE, CompositionTarget.GetAddressOf()),
+            "IDCompositionDevice::CreateTargetForHwnd");
+        ThrowIfCompositionFailed(CompositionDevice->CreateVisual(CompositionVisual.GetAddressOf()), "IDCompositionDevice::CreateVisual");
+        ThrowIfCompositionFailed(CompositionVisual->SetContent(SwapChain.Get()), "IDCompositionVisual::SetContent");
+        ThrowIfCompositionFailed(CompositionTarget->SetRoot(CompositionVisual.Get()), "IDCompositionTarget::SetRoot");
+        ThrowIfCompositionFailed(CompositionDevice->Commit(), "IDCompositionDevice::Commit");
     }
 
     /// Creates the back-buffer render target view from the swap chain.
@@ -183,6 +246,17 @@ namespace helengine::windows {
     void DirectX11Bootstrap::ThrowIfFailed(HRESULT result, const char* message) {
         if (FAILED(result)) {
             throw std::runtime_error(message);
+        }
+    }
+
+    /// Throws std::runtime_error naming the failed composition-path operation and carrying its HRESULT in
+    /// hexadecimal, so an overlay bootstrap failure is diagnosable from the startup log.
+    void DirectX11Bootstrap::ThrowIfCompositionFailed(HRESULT result, const char* operation) {
+        if (FAILED(result)) {
+            std::ostringstream messageBuilder;
+            messageBuilder << operation << " failed for the HelEngine Windows overlay with HRESULT 0x" << std::hex << std::uppercase
+                           << std::setw(8) << std::setfill('0') << static_cast<std::uint32_t>(result) << ".";
+            throw std::runtime_error(messageBuilder.str());
         }
     }
 }

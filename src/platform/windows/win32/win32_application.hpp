@@ -147,6 +147,14 @@ namespace helengine::windows {
         /// Win32ExitRequest with exit code 2 instead of a generic startup failure.
         Win32WindowModeSettings ResolveWindowModeSettings(const RuntimePlayerProfile& profile) const;
 
+        /// Resolves the overlay window's screen rectangle from the primary monitor (the monitor containing the origin):
+        /// its full bounds for overlayBounds=monitor, or the profile resolution at its top-left for
+        /// overlayBounds=profile. Throws std::runtime_error when the primary monitor's information cannot be read.
+        /// <param name="windowModeSettings">Resolved window-mode settings; only called in overlay mode.</param>
+        /// <param name="profile">Runtime player profile supplying the resolution for overlayBounds=profile.</param>
+        /// <returns>The overlay window's rectangle in screen coordinates.</returns>
+        RECT ResolveOverlayRectangle(const Win32WindowModeSettings& windowModeSettings, const RuntimePlayerProfile& profile) const;
+
         /// Builds the runtime scene catalog consumed by scene-loading menu actions in packaged players.
         RuntimeSceneCatalog* BuildRuntimeSceneCatalog();
 
@@ -291,6 +299,10 @@ namespace helengine::windows {
             const std::array<DebugWin32HeapSnapshot, 32>& currentHeapSnapshots,
             std::uint32_t currentHeapSnapshotCount) const;
 #endif
+
+        /// Stores the window-mode settings resolved once in CreateMainWindow; they select the window style, the
+        /// composition swap chain and the fingerprint's windowMode field.
+        std::unique_ptr<Win32WindowModeSettings> WindowModeSettings;
 
         /// Stores the main native window instance.
         std::unique_ptr<Win32Window> MainWindow;

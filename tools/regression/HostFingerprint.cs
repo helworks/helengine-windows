@@ -5,9 +5,9 @@ using System.Globalization;
 /// <summary>
 /// The host-layer facts of one player run, as written by the player's HOST_FINGERPRINT startup-log line in --frames
 /// mode: the swap-chain description, the window styles, the client size, the Present count and failures, the frame
-/// count, whether the idle throttle was enabled and how many frames ran idle and active, and the wall-clock time from
-/// the first to the last Present. Every field except the elapsed time is compared exactly between a record and a verify
-/// run; the elapsed time is only a coarse pacing signal.
+/// count, whether the idle throttle was enabled and how many frames ran idle and active, the window mode (normal or
+/// overlay), and the wall-clock time from the first to the last Present. Every field except the elapsed time is compared
+/// exactly between a record and a verify run; the elapsed time is only a coarse pacing signal.
 /// </summary>
 public sealed class HostFingerprint {
     /// <summary>
@@ -25,7 +25,7 @@ public sealed class HostFingerprint {
     /// </summary>
     public static readonly IReadOnlyList<string> ComparedFieldNames = new[] {
         "format", "alpha", "swapEffect", "buffers", "scaling", "style", "exStyle", "client", "presentCount", "presentFailures", "frames",
-        "idleThrottle", "idleFrames", "activeFrames"
+        "idleThrottle", "idleFrames", "activeFrames", "windowMode"
     };
 
     /// <summary>
@@ -77,6 +77,11 @@ public sealed class HostFingerprint {
     /// Gets the number of frames the run rendered while the idle throttle considered the window idle.
     /// </summary>
     public long IdleFrames => long.Parse(Fields["idleFrames"], CultureInfo.InvariantCulture);
+
+    /// <summary>
+    /// Gets how the player's main window presented itself for the run, as written by the player: "normal" or "overlay".
+    /// </summary>
+    public string WindowMode => Fields["windowMode"];
 
     /// <summary>
     /// Parses a fingerprint from space-separated "name=value" tokens, optionally preceded by the HOST_FINGERPRINT
