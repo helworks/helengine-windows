@@ -46,9 +46,11 @@ namespace helengine::windows {
     }
 
     /// Builds the HOST_FINGERPRINT line from the current swap-chain description, window styles, client rectangle
-    /// and Present count, plus the recorded failures, the given frame count and the milliseconds between the first
-    /// and the last recorded Present. Throws std::runtime_error when a DXGI or Win32 query fails.
-    std::string DirectX11HostFingerprint::Describe(int frameCount) const {
+    /// and Present count, plus the recorded failures, the given frame count, whether the idle throttle is enabled
+    /// (written as idleThrottle=on or off), how many of the frames ran in idle and in active mode, and the
+    /// milliseconds between the first and the last recorded Present. Throws std::runtime_error when a DXGI or Win32
+    /// query fails.
+    std::string DirectX11HostFingerprint::Describe(int frameCount, bool idleThrottleEnabled, int idleFrames, int activeFrames) const {
         IDXGISwapChain1* swapChain = Bootstrap.GetSwapChain();
         DXGI_SWAP_CHAIN_DESC1 swapChainDesc = {};
         ThrowIfFailed(swapChain->GetDesc1(&swapChainDesc), "IDXGISwapChain1::GetDesc1");
@@ -83,6 +85,9 @@ namespace helengine::windows {
                     << " presentCount=" << presentCount
                     << " presentFailures=" << PresentFailureCount
                     << " frames=" << frameCount
+                    << " idleThrottle=" << (idleThrottleEnabled ? "on" : "off")
+                    << " idleFrames=" << idleFrames
+                    << " activeFrames=" << activeFrames
                     << " elapsedMs=" << elapsedMilliseconds;
         return lineBuilder.str();
     }

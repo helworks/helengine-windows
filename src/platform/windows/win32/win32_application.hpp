@@ -388,6 +388,14 @@ namespace helengine::windows {
         /// stays false in the default loop.
         bool CurrentFrameIsIdle;
 
+        /// Counts the frames of a --frames run that were rendered in idle mode; only advanced inside the frame-limit
+        /// block of RenderFrame, so a no-argument run never touches it.
+        int IdleFrameCount;
+
+        /// Counts the frames of a --frames run that were rendered in active mode (every frame when the idle throttle is
+        /// disabled); only advanced inside the frame-limit block of RenderFrame, so a no-argument run never touches it.
+        int ActiveFrameCount;
+
 #if defined(HELENGINE_WINDOWS_DEBUG_RUNTIME_DIAGNOSTICS) && __has_include("IRuntimeDiagnosticsProvider.hpp") && __has_include("RuntimeMemoryDiagnosticsSnapshot.hpp")
         /// Stores the debug-build Windows runtime diagnostics provider exposed to the shared core service.
         std::unique_ptr<RuntimeMemoryDiagnosticsProvider> RuntimeDiagnosticsProvider;

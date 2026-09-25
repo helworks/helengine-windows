@@ -526,7 +526,9 @@ namespace helengine::windows {
           RenderedFrameCount(0),
           ActivityTracker(),
           IdleFramePacer(),
-          CurrentFrameIsIdle(false)
+          CurrentFrameIsIdle(false),
+          IdleFrameCount(0),
+          ActiveFrameCount(0)
 #if defined(HELENGINE_WINDOWS_DEBUG_RUNTIME_DIAGNOSTICS)
           , DebugAllocationBaselineCaptured(false),
           DebugAllocationBaselineState(),
@@ -1795,8 +1797,13 @@ namespace helengine::windows {
                     WriteLifecycleLog(presentFailureMessage.c_str());
                 }
                 RenderedFrameCount++;
+                if (CurrentFrameIsIdle) {
+                    IdleFrameCount++;
+                } else {
+                    ActiveFrameCount++;
+                }
                 if (RenderedFrameCount >= CommandLineOptions.GetFrameLimit()) {
-                    std::string fingerprintLine = HostFingerprint->Describe(RenderedFrameCount);
+                    std::string fingerprintLine = HostFingerprint->Describe(RenderedFrameCount, IdleFramePacer != nullptr, IdleFrameCount, ActiveFrameCount);
                     WriteLifecycleLog(fingerprintLine.c_str());
                     PostQuitMessage(0);
                 }
@@ -1823,7 +1830,8 @@ namespace helengine::windows {
     /// it renders immediately like the default loop. Each iteration decides whether to wait, pumps messages (which
     /// lets the activity tracker see any wake-up input), decides the mode of the frame again, and renders. When a
     /// message that is not activity ends the wait before the idle frame is due, the loop waits again for the rest of
-    /// the interval instead of rendering early. The loop never spins: an idle iteration waits until one idle interval
+    /// the interval instead of rendering early; a wait that timed out always renders, since any remainder the second
+    /// decision reports is only timer granularity. The loop never spins: an idle iteration waits until one idle interval
     /// after the previous frame started, even when RenderFrame returned early because the window has no client area,
     /// and an active iteration with no client area also waits one idle interval before retrying.
     void Win32Application::RunIdleThrottledLoop() {
@@ -1842,12 +1850,14 @@ namespace helengine::windows {
                 waitMilliseconds = IdleFramePacer->GetIdleFrameIntervalMilliseconds();
             }
 
+            bool waitTimedOut = false;
             if (waitMilliseconds > 0) {
                 HELENGINE_TRACY_ZONE_N("Frame.PacingAndIdle");
                 DWORD waitResult = MsgWaitForMultipleObjectsEx(0, nullptr, static_cast<DWORD>(waitMilliseconds), QS_ALLINPUT, MWMO_INPUTAVAILABLE);
                 if (waitResult == WAIT_FAILED) {
                     throw std::runtime_error("MsgWaitForMultipleObjectsEx failed in the idle-throttled loop with error " + std::to_string(GetLastError()) + ".");
                 }
+                waitTimedOut = waitResult == WAIT_TIMEOUT;
             }
 
             if (!PumpMessages()) {
@@ -1861,9 +1871,11 @@ namespace helengine::windows {
                 frameActivityMilliseconds,
                 lastFrameStartMilliseconds,
                 IsEngineKeepAwake());
-            if (!frameDecision.Active && frameDecision.WaitMilliseconds > 0) {
+            if (!waitTimedOut && !frameDecision.Active && frameDecision.WaitMilliseconds > 0) {
                 // A message that is not activity woke the wait before the idle frame was due: go back to waiting
-                // for the rest of the interval instead of rendering early.
+                // for the rest of the interval instead of rendering early. A wait that timed out renders even when
+                // the second decision still reports a millisecond or two left, because that remainder is only timer
+                // granularity.
                 continue;
             }
 

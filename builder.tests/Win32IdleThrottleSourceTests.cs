@@ -113,10 +113,12 @@ public sealed class Win32IdleThrottleSourceTests {
         Assert.True(renderIndex > markIndex, "The idle loop must mark the frame mode before rendering.");
         Assert.Contains("GetIdleFrameIntervalMilliseconds()", idleLoopBody, StringComparison.Ordinal);
 
-        int earlyWakeIndex = idleLoopBody.IndexOf("if (!frameDecision.Active && frameDecision.WaitMilliseconds > 0) {", StringComparison.Ordinal);
-        Assert.True(earlyWakeIndex > pumpIndex && earlyWakeIndex < markIndex, "A non-activity wake before the idle frame is due must go back to waiting instead of rendering.");
+        int timedOutIndex = idleLoopBody.IndexOf("waitTimedOut = waitResult == WAIT_TIMEOUT;", StringComparison.Ordinal);
+        Assert.True(timedOutIndex > waitIndex && timedOutIndex < pumpIndex, "The idle loop must record whether the wait timed out.");
+        int earlyWakeIndex = idleLoopBody.IndexOf("if (!waitTimedOut && !frameDecision.Active && frameDecision.WaitMilliseconds > 0) {", StringComparison.Ordinal);
+        Assert.True(earlyWakeIndex > pumpIndex && earlyWakeIndex < markIndex, "A non-activity wake before the idle frame is due must go back to waiting instead of rendering, but a timed-out wait must render.");
         Assert.Matches(
-            new Regex(@"if \(!frameDecision\.Active && frameDecision\.WaitMilliseconds > 0\) \{[^}]*continue;\s*\}"),
+            new Regex(@"if \(!waitTimedOut && !frameDecision\.Active && frameDecision\.WaitMilliseconds > 0\) \{[^}]*continue;\s*\}"),
             idleLoopBody);
 
         string keepAwakeBody = ExtractMethodBody(applicationSource, "Win32Application::IsEngineKeepAwake(");

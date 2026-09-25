@@ -24,9 +24,11 @@ namespace helengine::windows {
         bool RecordPresent(HRESULT presentResult);
 
         /// Builds the HOST_FINGERPRINT line from the current swap-chain description, window styles, client rectangle
-        /// and Present count, plus the recorded failures, the given frame count and the milliseconds between the first
-        /// and the last recorded Present. Throws std::runtime_error when a DXGI or Win32 query fails.
-        std::string Describe(int frameCount) const;
+        /// and Present count, plus the recorded failures, the given frame count, whether the idle throttle is enabled
+        /// (written as idleThrottle=on or off), how many of the frames ran in idle and in active mode, and the
+        /// milliseconds between the first and the last recorded Present. Throws std::runtime_error when a DXGI or Win32
+        /// query fails.
+        std::string Describe(int frameCount, bool idleThrottleEnabled, int idleFrames, int activeFrames) const;
 
         /// Formats a failing Present HRESULT as a readable startup-log line with the value in hexadecimal.
         static std::string DescribePresentFailure(HRESULT presentResult);

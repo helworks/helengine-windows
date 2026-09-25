@@ -37,6 +37,13 @@ public sealed class DirectX11HostFingerprintSourceTests {
         Assert.Contains("GetClientRect(", fingerprintSource, StringComparison.Ordinal);
         Assert.Contains("std::chrono::steady_clock", fingerprintSource, StringComparison.Ordinal);
         Assert.Contains("FAILED(presentResult)", fingerprintSource, StringComparison.Ordinal);
+        Assert.Contains("std::string DirectX11HostFingerprint::Describe(int frameCount, bool idleThrottleEnabled, int idleFrames, int activeFrames) const {", fingerprintSource, StringComparison.Ordinal);
+        Assert.Contains("<< \" idleThrottle=\" << (idleThrottleEnabled ? \"on\" : \"off\")", fingerprintSource, StringComparison.Ordinal);
+        Assert.Contains("<< \" idleFrames=\" << idleFrames", fingerprintSource, StringComparison.Ordinal);
+        Assert.Contains("<< \" activeFrames=\" << activeFrames", fingerprintSource, StringComparison.Ordinal);
+
+        string fingerprintHeader = ReadRepositoryFile("src", "platform", "windows", "directx11", "directx11_host_fingerprint.hpp");
+        Assert.Contains("std::string Describe(int frameCount, bool idleThrottleEnabled, int idleFrames, int activeFrames) const;", fingerprintHeader, StringComparison.Ordinal);
 
         string[] orderedFields = {
             "\"HOST_FINGERPRINT format=\"",
@@ -50,6 +57,9 @@ public sealed class DirectX11HostFingerprintSourceTests {
             "\" presentCount=\"",
             "\" presentFailures=\"",
             "\" frames=\"",
+            "\" idleThrottle=\"",
+            "\" idleFrames=\"",
+            "\" activeFrames=\"",
             "\" elapsedMs=\""
         };
         int previousIndex = -1;
@@ -71,6 +81,9 @@ public sealed class DirectX11HostFingerprintSourceTests {
         string applicationHeader = ReadRepositoryFile("src", "platform", "windows", "win32", "win32_application.hpp");
 
         Assert.Contains("std::unique_ptr<DirectX11HostFingerprint> HostFingerprint;", applicationHeader, StringComparison.Ordinal);
+        Assert.Contains("int IdleFrameCount;", applicationHeader, StringComparison.Ordinal);
+        Assert.Contains("int ActiveFrameCount;", applicationHeader, StringComparison.Ordinal);
+        Assert.Matches(new Regex(@"CurrentFrameIsIdle\(false\),\s*IdleFrameCount\(0\),\s*ActiveFrameCount\(0\)"), applicationSource);
         Assert.Single(Regex.Matches(applicationSource, @"std::make_unique<DirectX11HostFingerprint>"));
         Assert.Matches(
             new Regex(@"if \(CommandLineOptions\.HasFrameLimit\(\)\) \{\s*HostFingerprint = std::make_unique<DirectX11HostFingerprint>\(\*Bootstrap, MainWindow->GetHandle\(\)\);\s*\}"),
@@ -79,8 +92,8 @@ public sealed class DirectX11HostFingerprintSourceTests {
         Assert.Contains("presentResult = Presenter->RenderFrame();", applicationSource, StringComparison.Ordinal);
         Match frameLimitBlock = Regex.Match(
             applicationSource,
-            @"if \(CommandLineOptions\.HasFrameLimit\(\)\) \{\s*if \(HostFingerprint->RecordPresent\(presentResult\)\) \{\s*std::string presentFailureMessage = DirectX11HostFingerprint::DescribePresentFailure\(presentResult\);\s*WriteLifecycleLog\(presentFailureMessage\.c_str\(\)\);\s*\}\s*RenderedFrameCount\+\+;\s*if \(RenderedFrameCount >= CommandLineOptions\.GetFrameLimit\(\)\) \{\s*std::string fingerprintLine = HostFingerprint->Describe\(RenderedFrameCount\);\s*WriteLifecycleLog\(fingerprintLine\.c_str\(\)\);\s*PostQuitMessage\(0\);\s*\}\s*\}");
-        Assert.True(frameLimitBlock.Success, "The frame-limit block must count Present failures and log the fingerprint before PostQuitMessage(0).");
+            @"if \(CommandLineOptions\.HasFrameLimit\(\)\) \{\s*if \(HostFingerprint->RecordPresent\(presentResult\)\) \{\s*std::string presentFailureMessage = DirectX11HostFingerprint::DescribePresentFailure\(presentResult\);\s*WriteLifecycleLog\(presentFailureMessage\.c_str\(\)\);\s*\}\s*RenderedFrameCount\+\+;\s*if \(CurrentFrameIsIdle\) \{\s*IdleFrameCount\+\+;\s*\} else \{\s*ActiveFrameCount\+\+;\s*\}\s*if \(RenderedFrameCount >= CommandLineOptions\.GetFrameLimit\(\)\) \{\s*std::string fingerprintLine = HostFingerprint->Describe\(RenderedFrameCount, IdleFramePacer != nullptr, IdleFrameCount, ActiveFrameCount\);\s*WriteLifecycleLog\(fingerprintLine\.c_str\(\)\);\s*PostQuitMessage\(0\);\s*\}\s*\}");
+        Assert.True(frameLimitBlock.Success, "The frame-limit block must count Present failures, split frames into idle and active counts, and log the fingerprint before PostQuitMessage(0).");
 
         // Every read of the fingerprint and of the Present result is one of the matched lines inside the block above.
         Assert.Equal(2, Regex.Matches(applicationSource, @"HostFingerprint->").Count);

@@ -5,8 +5,9 @@ using System.Globalization;
 /// <summary>
 /// The host-layer facts of one player run, as written by the player's HOST_FINGERPRINT startup-log line in --frames
 /// mode: the swap-chain description, the window styles, the client size, the Present count and failures, the frame
-/// count, and the wall-clock time from the first to the last Present. Every field except the elapsed time is compared
-/// exactly between a record and a verify run; the elapsed time is only a coarse pacing signal.
+/// count, whether the idle throttle was enabled and how many frames ran idle and active, and the wall-clock time from
+/// the first to the last Present. Every field except the elapsed time is compared exactly between a record and a verify
+/// run; the elapsed time is only a coarse pacing signal.
 /// </summary>
 public sealed class HostFingerprint {
     /// <summary>
@@ -23,13 +24,14 @@ public sealed class HostFingerprint {
     /// The names of the fields that are compared exactly, in the order the player writes them.
     /// </summary>
     public static readonly IReadOnlyList<string> ComparedFieldNames = new[] {
-        "format", "alpha", "swapEffect", "buffers", "scaling", "style", "exStyle", "client", "presentCount", "presentFailures", "frames"
+        "format", "alpha", "swapEffect", "buffers", "scaling", "style", "exStyle", "client", "presentCount", "presentFailures", "frames",
+        "idleThrottle", "idleFrames", "activeFrames"
     };
 
     /// <summary>
     /// The compared fields whose values must be whole non-negative numbers, because rules compare them numerically.
     /// </summary>
-    static readonly IReadOnlyList<string> CounterFieldNames = new[] { "presentCount", "presentFailures", "frames" };
+    static readonly IReadOnlyList<string> CounterFieldNames = new[] { "presentCount", "presentFailures", "frames", "idleFrames", "activeFrames" };
 
     /// <summary>
     /// Initializes a fingerprint from its compared fields and its elapsed time.
