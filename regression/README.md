@@ -113,23 +113,29 @@ fails every fingerprint check (missing fields) and the idle check (`idle entry m
 
 ## Current record
 
-The goldens were first recorded on 2026-09-24 from commit `f8a92cb`. They were re-recorded on 2026-09-25 on the
-owner's development machine, from this branch at commit `d7defda` (feature/regression-safety-net), to add the host
-fingerprints, the executed-test counts and the provenance hashes to the manifest. DemoDisc was at
-`5cc124eec06b8db729b2f9b15d99d26cb1ca8cc3` and helengine at `d98d00208a040dd00352a0b6417eed27d387af07` with
-uncommitted changes (`helengineDirty: true`).
+The goldens were first recorded on 2026-09-24 from commit `f8a92cb`, and re-recorded on 2026-09-25 from commit
+`d7defda` (feature/regression-safety-net) to add the host fingerprints, the executed-test counts and the provenance
+hashes. They were re-recorded again on 2026-09-25 on the owner's development machine, from commit `b8e1197`
+(feature/idle-throttle), because the fingerprint gained `idleThrottle`, `idleFrames` and `activeFrames` and the
+manifest gained the idle entry. DemoDisc was at `5cc124eec06b8db729b2f9b15d99d26cb1ca8cc3` and helengine at
+`dd9ca693403d91b5e2fc52860a3511e6358ed776` with uncommitted changes (`helengineDirty: true`).
 
 - All 11 rendering scenes were stable across the two record runs (0 differing pixels), so every scene has a golden
   and no scene is marked `unstable`. The re-recorded golden PNGs are byte-identical to the first record.
 - Every scene's fingerprint: `format=87 alpha=3 swapEffect=4 buffers=2 scaling=0 style=0x14CF0000
-  exStyle=0x00000100 client=640x360 presentCount=30 presentFailures=0 frames=30`, `elapsedMs` 117 to 121.
-- Baselines: `helengine.editor.tests` 45 failing of 3134 executed, `helengine.render.validation.tests` 1 failing of
-  1 executed, `helengine.windows.builder.tests` 0 failing of 91 executed. The known-flaky
-  `Keyboard_focus_update_component_routes_delete_into_the_session_handler` happened to pass during this record, so
-  it left the editor baseline (46 -> 45). It is still in the flaky list, so it only produces a `WARN` when it fails.
+  exStyle=0x00000100 client=640x360 presentCount=30 presentFailures=0 frames=30 idleThrottle=off idleFrames=0
+  activeFrames=30`, `elapsedMs` 119 to 128.
+- The idle scenario on `axis_test` passed with `idleFrames=29 elapsedMs=3058`, and its capture matched the golden
+  with 0 differing pixels.
+- Baselines: `helengine.editor.tests` 49 failing of 3134 executed, `helengine.render.validation.tests` 1 failing of
+  1 executed, `helengine.windows.builder.tests` 0 failing of 115 executed. The four known-flaky
+  `SceneHierarchyPanelKeyboardFocusTests` arrow-key tests happened to fail during this record, so they entered the
+  editor baseline (45 -> 49); they are also in the flaky list, and `-Verify` reports them as `FIXED` when they pass.
 - DemoDisc's `user_settings\generated_code` holds only `obj` files, which the copy leaves out, so
   `generatedCodeHash` is the SHA-256 of an empty list.
-- After the record, `-Verify` passed twice with every golden at 0 differing pixels and every fingerprint matching.
+- After the record, `-Verify` passed twice with every golden at 0 differing pixels, every fingerprint matching and
+  the idle scenario passing. With the idle scenario's `--idle-fps 10` changed locally to 30, `-Verify` failed with
+  `FAIL idle axis_test elapsedMs=1279 is below 2400`.
 
 ## How to run
 
