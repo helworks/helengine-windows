@@ -564,6 +564,10 @@ namespace helengine::windows {
                 WriteLifecycleLog(error.what());
                 return 2;
             }
+            if (CommandLineOptions.HasIgnoredArguments()) {
+                std::string ignoredArgumentsMessage = "Ignoring command-line arguments: " + CommandLineOptions.GetIgnoredArguments();
+                WriteLifecycleLog(ignoredArgumentsMessage.c_str());
+            }
 #if defined(HELENGINE_WINDOWS_DEBUG_RUNTIME_DIAGNOSTICS)
             InstallDebugCrashHandler();
             InstallDebugAbortHandlers();

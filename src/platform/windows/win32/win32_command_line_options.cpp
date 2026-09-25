@@ -20,24 +20,47 @@ namespace helengine::windows {
           FixedDeltaSupplied(false),
           FixedDeltaSeconds(0.0),
           CapturePathSupplied(false),
-          CapturePath() {
+          CapturePath(),
+          ArgumentsIgnored(false),
+          IgnoredArguments() {
     }
 
-    /// Parses the given argument vector, skipping arguments[0] (the executable path). Each flag takes exactly
-    /// one value; unknown, repeated or value-less flags and out-of-range values throw std::invalid_argument
-    /// with a readable message.
+    /// Parses the given argument vector, skipping arguments[0] (the executable path). When no argument is a known
+    /// flag (--scene, --frames, --fixed-delta, --capture), nothing is validated: the arguments are only kept as
+    /// ignored text (see GetIgnoredArguments) so launches that pass unrelated arguments, such as a file path split by
+    /// CommandLineToArgvW, keep working exactly as before. Once any known flag is present, validation is strict:
+    /// each flag takes exactly one value, and unknown, repeated or value-less flags and out-of-range values throw
+    /// std::invalid_argument with a readable message.
     Win32CommandLineOptions Win32CommandLineOptions::Parse(int argumentCount, wchar_t** arguments) {
         if (argumentCount < 1 || arguments == nullptr) {
             throw std::invalid_argument("Command line must contain at least the executable path.");
         }
 
         Win32CommandLineOptions options;
+        bool knownFlagPresent = false;
+        for (int scanIndex = 1; scanIndex < argumentCount; scanIndex++) {
+            if (IsKnownFlag(arguments[scanIndex])) {
+                knownFlagPresent = true;
+                break;
+            }
+        }
+
+        if (!knownFlagPresent) {
+            for (int ignoredIndex = 1; ignoredIndex < argumentCount; ignoredIndex++) {
+                if (ignoredIndex > 1) {
+                    options.IgnoredArguments += ' ';
+                }
+                options.IgnoredArguments += ConvertToUtf8(arguments[ignoredIndex]);
+            }
+            options.ArgumentsIgnored = argumentCount > 1;
+            return options;
+        }
+
         int index = 1;
         while (index < argumentCount) {
             std::wstring flag = arguments[index];
             std::string flagText = ConvertToUtf8(flag);
-            bool isKnownFlag = flag == L"--scene" || flag == L"--frames" || flag == L"--fixed-delta" || flag == L"--capture";
-            if (!isKnownFlag) {
+            if (!IsKnownFlag(flag)) {
                 throw std::invalid_argument("Unknown command-line argument: " + flagText);
             }
 
@@ -150,6 +173,21 @@ namespace helengine::windows {
     /// Gets the capture file path requested through --capture; only meaningful when HasCapturePath() is true.
     const std::wstring& Win32CommandLineOptions::GetCapturePath() const {
         return CapturePath;
+    }
+
+    /// Gets whether arguments were supplied without any known flag, so they were ignored instead of validated.
+    bool Win32CommandLineOptions::HasIgnoredArguments() const {
+        return ArgumentsIgnored;
+    }
+
+    /// Gets the ignored arguments as UTF-8, joined by single spaces; only meaningful when HasIgnoredArguments() is true.
+    const std::string& Win32CommandLineOptions::GetIgnoredArguments() const {
+        return IgnoredArguments;
+    }
+
+    /// Returns whether the argument is one of the regression flags (--scene, --frames, --fixed-delta, --capture).
+    bool Win32CommandLineOptions::IsKnownFlag(const std::wstring& argument) {
+        return argument == L"--scene" || argument == L"--frames" || argument == L"--fixed-delta" || argument == L"--capture";
     }
 
     /// Converts a UTF-16 command-line value to UTF-8 so it can be compared with engine scene ids and logged.

@@ -25,6 +25,43 @@ public sealed class Win32CommandLineOptionsSourceTests {
     }
 
     /// <summary>
+    /// Verifies strict validation only applies once a known flag is present: a command line with arguments but no known
+    /// flag (for example a file path that <c>CommandLineToArgvW</c> split into pieces) is kept as ignored text instead of
+    /// being rejected, so existing launches that pass arguments keep working.
+    /// </summary>
+    [Fact]
+    public void Win32CommandLineOptions_ignores_arguments_when_no_known_flag_is_present() {
+        string parserSource = ReadRepositoryFile("src", "platform", "windows", "win32", "win32_command_line_options.cpp");
+        string parserHeader = ReadRepositoryFile("src", "platform", "windows", "win32", "win32_command_line_options.hpp");
+
+        Assert.Contains("bool HasIgnoredArguments() const;", parserHeader, StringComparison.Ordinal);
+        Assert.Contains("const std::string& GetIgnoredArguments() const;", parserHeader, StringComparison.Ordinal);
+        Assert.Contains("static bool IsKnownFlag(const std::wstring& argument);", parserHeader, StringComparison.Ordinal);
+
+        int knownFlagScanIndex = parserSource.IndexOf("IsKnownFlag(arguments[scanIndex])", StringComparison.Ordinal);
+        int strictUnknownIndex = parserSource.IndexOf("Unknown command-line argument: ", StringComparison.Ordinal);
+        Assert.True(knownFlagScanIndex >= 0, "Parse must scan for a known flag before validating.");
+        Assert.True(knownFlagScanIndex < strictUnknownIndex, "The known-flag scan must run before the strict unknown-argument rejection.");
+        Assert.Matches(
+            new Regex(@"if \(!knownFlagPresent\) \{.*?options\.IgnoredArguments \+= ConvertToUtf8\(arguments\[ignoredIndex\]\);.*?options\.ArgumentsIgnored = argumentCount > 1;\s*return options;\s*\}", RegexOptions.Singleline),
+            parserSource);
+    }
+
+    /// <summary>
+    /// Verifies the application logs ignored arguments once, only when there are any, and then continues startup exactly
+    /// as before.
+    /// </summary>
+    [Fact]
+    public void Win32Application_logs_ignored_arguments_only_when_present() {
+        string applicationSource = ReadRepositoryFile("src", "platform", "windows", "win32", "win32_application.cpp");
+
+        Assert.Single(Regex.Matches(applicationSource, "Ignoring command-line arguments: "));
+        Assert.Matches(
+            new Regex(@"if \(CommandLineOptions\.HasIgnoredArguments\(\)\) \{\s*std::string ignoredArgumentsMessage = ""Ignoring command-line arguments: "" \+ CommandLineOptions\.GetIgnoredArguments\(\);\s*WriteLifecycleLog\(ignoredArgumentsMessage\.c_str\(\)\);\s*\}"),
+            applicationSource);
+    }
+
+    /// <summary>
     /// Verifies the native build compiles the parser and exit-request sources and links the shell library that
     /// provides <c>CommandLineToArgvW</c>.
     /// </summary>

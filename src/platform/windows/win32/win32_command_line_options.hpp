@@ -11,9 +11,12 @@ namespace helengine::windows {
         /// Creates an options set with no flags supplied, which leaves every player behavior at its default.
         Win32CommandLineOptions();
 
-        /// Parses the given argument vector, skipping arguments[0] (the executable path). Each flag takes exactly
-        /// one value; unknown, repeated or value-less flags and out-of-range values throw std::invalid_argument
-        /// with a readable message.
+        /// Parses the given argument vector, skipping arguments[0] (the executable path). When no argument is a known
+        /// flag (--scene, --frames, --fixed-delta, --capture), nothing is validated: the arguments are only kept as
+        /// ignored text (see GetIgnoredArguments) so launches that pass unrelated arguments, such as a file path split by
+        /// CommandLineToArgvW, keep working exactly as before. Once any known flag is present, validation is strict:
+        /// each flag takes exactly one value, and unknown, repeated or value-less flags and out-of-range values throw
+        /// std::invalid_argument with a readable message.
         static Win32CommandLineOptions Parse(int argumentCount, wchar_t** arguments);
 
         /// Reads the real process command line through CommandLineToArgvW and parses it with Parse.
@@ -43,7 +46,16 @@ namespace helengine::windows {
         /// Gets the capture file path requested through --capture; only meaningful when HasCapturePath() is true.
         const std::wstring& GetCapturePath() const;
 
+        /// Gets whether arguments were supplied without any known flag, so they were ignored instead of validated.
+        bool HasIgnoredArguments() const;
+
+        /// Gets the ignored arguments as UTF-8, joined by single spaces; only meaningful when HasIgnoredArguments() is true.
+        const std::string& GetIgnoredArguments() const;
+
     private:
+        /// Returns whether the argument is one of the regression flags (--scene, --frames, --fixed-delta, --capture).
+        static bool IsKnownFlag(const std::wstring& argument);
+
         /// Converts a UTF-16 command-line value to UTF-8 so it can be compared with engine scene ids and logged.
         static std::string ConvertToUtf8(const std::wstring& value);
 
@@ -76,5 +88,11 @@ namespace helengine::windows {
 
         /// Stores the capture file path supplied through --capture.
         std::wstring CapturePath;
+
+        /// Stores whether arguments were supplied without any known flag and were therefore ignored.
+        bool ArgumentsIgnored;
+
+        /// Stores the ignored arguments as UTF-8, joined by single spaces, for the one startup log line.
+        std::string IgnoredArguments;
     };
 }
