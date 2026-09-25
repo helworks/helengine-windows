@@ -6,9 +6,10 @@ using System.Text;
 /// <summary>
 /// Dispatches the regression tool's command-line interface: image comparison, golden recording,
 /// stability checking, blank-frame detection, TRX failing-set comparison, TRX executed-count
-/// recording and checking, and host-fingerprint checking and comparison. Every command prints
-/// one result line (plus, for compare-failing, check-fingerprint and compare-fingerprint, one line
-/// per finding) and returns the documented exit code. Any I/O or format error is reported as a
+/// recording and checking, host-fingerprint checking and comparison, and idle-scenario checking. Every
+/// command prints one result line (plus, for compare-failing, check-fingerprint and compare-fingerprint,
+/// one line per finding; check-idle prints one FAIL line per finding instead of its PASS line) and
+/// returns the documented exit code. Any I/O or format error is reported as a
 /// single "ERROR &lt;message&gt;" line with exit code 2.
 /// </summary>
 public sealed class RegressionCommandRunner {
@@ -35,6 +36,7 @@ public sealed class RegressionCommandRunner {
                 "check-executed" => RunCheckExecuted(args, output),
                 "check-fingerprint" => RunCheckFingerprint(args, output),
                 "compare-fingerprint" => RunCompareFingerprint(args, output),
+                "check-idle" => RunCheckIdle(args, output),
                 _ => PrintUsage(output)
             };
         } catch (Exception exception) {
@@ -270,6 +272,45 @@ public sealed class RegressionCommandRunner {
     }
 
     /// <summary>
+    /// Runs "check-idle line minIdleFrames minElapsedMs": checks an idle-scenario run's fingerprint (idle throttle on, no
+    /// Present failures, at least minIdleFrames idle frames, at least minElapsedMs elapsed). Prints
+    /// "PASS idleFrames=&lt;n&gt; elapsedMs=&lt;n&gt;" and returns 0, or prints one "FAIL &lt;reason&gt;" line per failed check
+    /// and returns 1.
+    /// </summary>
+    static int RunCheckIdle(string[] args, TextWriter output) {
+        if (args.Length != 4) {
+            throw new ArgumentException("check-idle requires <fingerprint line> <minIdleFrames> <minElapsedMs>");
+        }
+
+        HostFingerprint fingerprint = HostFingerprint.Parse(args[1]);
+        long minimumIdleFrames = ParseWholeNumberArgument("minIdleFrames", args[2]);
+        long minimumElapsedMilliseconds = ParseWholeNumberArgument("minElapsedMs", args[3]);
+        IReadOnlyList<string> failures = IdleScenarioChecker.Check(fingerprint, minimumIdleFrames, minimumElapsedMilliseconds);
+        if (failures.Count == 0) {
+            output.WriteLine($"PASS idleFrames={fingerprint.IdleFrames} elapsedMs={fingerprint.ElapsedMilliseconds}");
+            return 0;
+        }
+
+        foreach (string failure in failures) {
+            output.WriteLine($"FAIL {failure}");
+        }
+
+        return 1;
+    }
+
+    /// <summary>
+    /// Parses a command-line argument that must be a whole non-negative number, throwing <see cref="FormatException"/>
+    /// that names the argument otherwise.
+    /// </summary>
+    static long ParseWholeNumberArgument(string argumentName, string value) {
+        if (!long.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out long number)) {
+            throw new FormatException($"{argumentName} must be a whole number, got '{value}'.");
+        }
+
+        return number;
+    }
+
+    /// <summary>
     /// Reads non-empty test names from a failing-set file, tolerant of both "\n" and "\r\n" line
     /// endings.
     /// </summary>
@@ -281,7 +322,7 @@ public sealed class RegressionCommandRunner {
     /// Prints the CLI usage line for an empty or unrecognized command.
     /// </summary>
     static int PrintUsage(TextWriter output) {
-        output.WriteLine("USAGE regression <compare|record-golden|stable|blank-check|trx-failing|compare-failing|record-executed|check-executed|check-fingerprint|compare-fingerprint> ...");
+        output.WriteLine("USAGE regression <compare|record-golden|stable|blank-check|trx-failing|compare-failing|record-executed|check-executed|check-fingerprint|compare-fingerprint|check-idle> ...");
         return 2;
     }
 }

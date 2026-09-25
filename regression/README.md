@@ -14,6 +14,7 @@ its host layer (swap chain, window, Present) is unchanged, and that the editor-s
 | `fingerprint` | Every scene run | The run's `HOST_FINGERPRINT` line matches the recorded one field for field, `presentCount` is at least `frames` and `presentFailures` is 0 (see "Host fingerprint"). |
 | `pacing` | Every scene run | Never fails. `WARN pacing <scene> recorded=<x>ms actual=<y>ms` when the run took more than 3 times, or less than a third of, the recorded wall-clock time. |
 | `suite` | `helengine.editor.tests`, `helengine.render.validation.tests` (both from `-HelengineRoot`), `helengine.windows.builder.tests` (this checkout) | The run neither errored nor aborted, executed at least 95% of the tests recorded in `<suite>.executed.txt` (any other difference is a `WARN`), and its set of failing tests adds no test that is missing from `regression\baselines\<suite>.failing.txt`. Known failures stay tolerated; fixed ones are only reported. Tests in `<suite>.flaky.txt` only produce a `WARN` (see "Known flaky tests"). |
+| `idle` | The smoke scene, once more, with the idle throttle on (see "Idle-throttle scenario") | The manifest has an idle entry, `check-idle` passes (throttle on, no Present failures, at least 25 idle frames, at least 2400 ms elapsed) and the capture matches the smoke scene's golden. |
 | `manifest` | `regression\golden\manifest.json` | It exists and was recorded with the same run settings. |
 
 Every scene runs in a 640x360 window with `--frames 30 --fixed-delta 0.016666 --capture <bmp>`, so the captured
@@ -39,7 +40,7 @@ With `--frames`, and only then, the player writes one line to `helengine_windows
 presented and before it quits:
 
 ```
-HOST_FINGERPRINT format=87 alpha=3 swapEffect=4 buffers=2 scaling=0 style=0x14CF0000 exStyle=0x00000100 client=640x360 presentCount=30 presentFailures=0 frames=30 elapsedMs=111
+HOST_FINGERPRINT format=87 alpha=3 swapEffect=4 buffers=2 scaling=0 style=0x14CF0000 exStyle=0x00000100 client=640x360 presentCount=30 presentFailures=0 frames=30 idleThrottle=off idleFrames=0 activeFrames=30 elapsedMs=111
 ```
 
 - `format`, `alpha`, `swapEffect`, `buffers` and `scaling` come from `IDXGISwapChain1::GetDesc1`, as the numeric
@@ -50,11 +51,55 @@ HOST_FINGERPRINT format=87 alpha=3 swapEffect=4 buffers=2 scaling=0 style=0x14CF
 - `presentCount` is `IDXGISwapChain::GetLastPresentCount`. `presentFailures` counts `Present` calls that returned a
   failing HRESULT; the player logs each distinct failing HRESULT once.
 - `frames` is the number of rendered frames; `elapsedMs` is the wall-clock time from the first to the last Present.
+- `idleThrottle` is `on` when the opt-in idle throttle was enabled (profile or command line) and `off` otherwise;
+  `idleFrames` and `activeFrames` count the frames that ran while the window was idle or active. With the throttle
+  off every frame is active (`idleFrames=0 activeFrames=30`).
 
 `-Record` stores every field except `elapsedMs` under the scene's `fingerprint` entry in `manifest.json`, and
 `elapsedMs` next to it. It also requires run a to be healthy and run b to match run a. `-Verify` prints
 `FAIL fingerprint <scene> <field> recorded=<x> actual=<y>` for every differing field. Without arguments the player
 never creates the fingerprint and never writes the line.
+
+## Idle-throttle scenario
+
+The player's idle throttle is opt-in and off in every normal scene run. To prove that it still works and that it
+never changes what a frame renders, `-Record` and `-Verify` both run the smoke scene once more, after the scene loop,
+with the usual 30-frame arguments plus:
+
+```
+--idle-throttle on --idle-after-ms 1 --idle-fps 10
+```
+
+The window goes idle 1 ms after the last activity (the player requires at least 1), and idle frames are paced at
+10 fps, about 100 ms each, so the run takes about 3 s: the first one or two frames are active while the startup scene
+load is pending, the rest are idle. The capture goes to `<WorkRoot>\captures\idle\<scene>.bmp`.
+
+- The run's `HOST_FINGERPRINT` line goes through the regression tool's
+  `check-idle "<fingerprint line>" <minIdleFrames> <minElapsedMs>` command with `25` and `2400`. It prints
+  `PASS idleFrames=<n> elapsedMs=<n>`, or one `FAIL <reason>` line per failed check (`idleThrottle` is not `on`,
+  `presentFailures` is not 0, too few idle frames, or too little elapsed time, which means the throttle did not
+  sleep), and exits 0, 1, or 2 on a usage or parse error.
+- The capture is compared with the smoke scene's golden using the normal thresholds; on failure the diff is written
+  to `<WorkRoot>\captures\idle\<scene>.diff.png`.
+- The fingerprint is **not** compared field by field with a recorded one: its idle and active frame counts and its
+  elapsed time differ from a normal run by design and depend on load timing, so only the minimums above are checked.
+- `-Record` adds `{ "id": "<smoke scene>", "kind": "idle", "minIdleFrames": 25, "minElapsedMs": 2400 }` to
+  `manifest.json` (the other `-Verify` checks ignore this kind). `-Verify` against a manifest without that entry
+  prints `FAIL idle <scene> idle entry missing from manifest (re-record required)`.
+- Check lines are `PASS|FAIL|SKIP idle <scene> <detail>`.
+
+**Physics caveat.** A scene whose physics steps every update never goes idle: the throttle keeps the window awake
+while `PredictedPhysicsStepSeconds` is above 0 or while a scene transition or pending scene operation is reported. The
+idle scenario therefore needs a scene without physics. The smoke scene `axis_test` qualifies: its scene file
+(`assets\scenes\rendering\axis_test.helen`) holds only camera, light, mesh, text, sprite, viewport, FPS and DemoDisc
+rendering and menu components, with no rigid body, collider or other physics component, and its startup log has no
+physics-runtime line. Two manual idle-scenario runs on 2026-09-25 reported `idleFrames=29 activeFrames=1` with
+`elapsedMs` 3050 and 3052, and their captures matched the `axis_test` golden with 0 differing pixels. If the smoke
+scene ever gains physics, point the idle scenario at the first golden scene without physics and update this section.
+
+**Re-record once.** The fingerprint gained `idleThrottle`, `idleFrames` and `activeFrames`, and the manifest gained the
+idle entry, so goldens recorded before the idle throttle must be re-recorded once with `-Record`: an older manifest
+fails every fingerprint check (missing fields) and the idle check (`idle entry missing from manifest`).
 
 ## What this net does NOT catch
 

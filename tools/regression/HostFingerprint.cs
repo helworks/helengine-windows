@@ -69,6 +69,16 @@ public sealed class HostFingerprint {
     public long Frames => long.Parse(Fields["frames"], CultureInfo.InvariantCulture);
 
     /// <summary>
+    /// Gets whether the player's idle throttle was enabled for the run, as written by the player: "on" or "off".
+    /// </summary>
+    public string IdleThrottle => Fields["idleThrottle"];
+
+    /// <summary>
+    /// Gets the number of frames the run rendered while the idle throttle considered the window idle.
+    /// </summary>
+    public long IdleFrames => long.Parse(Fields["idleFrames"], CultureInfo.InvariantCulture);
+
+    /// <summary>
     /// Parses a fingerprint from space-separated "name=value" tokens, optionally preceded by the HOST_FINGERPRINT
     /// marker, in any order. Every compared field and the elapsed time must appear exactly once; unknown, repeated or
     /// malformed tokens and non-numeric counters throw <see cref="FormatException"/>.

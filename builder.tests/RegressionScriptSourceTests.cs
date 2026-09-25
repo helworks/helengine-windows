@@ -115,6 +115,43 @@ public sealed class RegressionScriptSourceTests {
     }
 
     /// <summary>
+    /// Ensures the script runs the opt-in idle-throttle scenario on the smoke scene with the player's idle flags, records
+    /// it in the manifest as an idle entry, checks it with the regression tool's check-idle command and compares its
+    /// capture with the smoke scene's golden, and fails a verify against a manifest that has no idle entry.
+    /// </summary>
+    [Fact]
+    public void RegressionScript_RunsAndChecksTheIdleThrottleScenario() {
+        string scriptSource = ReadRegressionScriptSource();
+
+        Assert.Contains("[string]$FrameCount = '30'", scriptSource, StringComparison.Ordinal);
+        Assert.Contains("'--frames', $FrameCount", scriptSource, StringComparison.Ordinal);
+        Assert.Contains("-ExtraArguments $script:idlePlayerArguments", scriptSource, StringComparison.Ordinal);
+        Assert.Contains("'--idle-throttle', 'on'", scriptSource, StringComparison.Ordinal);
+        Assert.Contains("'--idle-after-ms', '1'", scriptSource, StringComparison.Ordinal);
+        Assert.Contains("'--idle-fps', '10'", scriptSource, StringComparison.Ordinal);
+        Assert.Contains("'check-idle'", scriptSource, StringComparison.Ordinal);
+        Assert.Contains("'25'", scriptSource, StringComparison.Ordinal);
+        Assert.Contains("'2400'", scriptSource, StringComparison.Ordinal);
+        Assert.Contains("kind = 'idle'", scriptSource, StringComparison.Ordinal);
+        Assert.Contains("-eq 'idle'", scriptSource, StringComparison.Ordinal);
+        Assert.Contains("idle entry missing from manifest", scriptSource, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// Ensures the regression README documents the idle scenario, the physics caveat and the check-idle command.
+    /// </summary>
+    [Fact]
+    public void RegressionReadme_DocumentsTheIdleScenario() {
+        string repositoryRootPath = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", ".."));
+        string readmeSource = File.ReadAllText(Path.Combine(repositoryRootPath, "regression", "README.md"));
+
+        Assert.Contains("check-idle", readmeSource, StringComparison.Ordinal);
+        Assert.Contains("--idle-throttle on --idle-after-ms 1 --idle-fps 10", readmeSource, StringComparison.Ordinal);
+        Assert.Contains("physics", readmeSource, StringComparison.Ordinal);
+        Assert.Contains("idle entry missing from manifest", readmeSource, StringComparison.Ordinal);
+    }
+
+    /// <summary>
     /// Ensures each suite's executed-test count is recorded beside its failing baseline and checked on verify, so an
     /// aborted or truncated run cannot pass.
     /// </summary>

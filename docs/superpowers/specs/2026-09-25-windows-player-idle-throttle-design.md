@@ -74,7 +74,7 @@ Idle throttling is **off** unless it is enabled in one of these places:
 ## 5. Regression safety
 
 1. **Default path unchanged.** `run-regression.ps1 -Verify` with the existing goldens and fingerprints (idle throttling off) must pass unchanged. The fingerprint's recorded fields gain `idleThrottle=off`, `idleFrames=0` and `activeFrames=30`. Re-record deliberately once, and show the goldens are byte-identical.
-2. **New idle scenario** in `run-regression.ps1`: one scene (the smoke scene) runs with `--idle-throttle on --idle-after-ms 0 --idle-fps 10 --frames 10 --fixed-delta 0.016666 --capture ...`.
+2. **New idle scenario** in `run-regression.ps1`: one scene (the smoke scene) runs with `--idle-throttle on --idle-after-ms 1 --idle-fps 10 --frames 10 --fixed-delta 0.016666 --capture ...`.
    - The capture must equal that scene's golden.
    - The fingerprint must show `idleFrames` at least 9.
    - `elapsedMs` must be at least 800. That is 10 frames at 10 fps minus tolerance, which proves the throttle actually slept.
@@ -101,10 +101,13 @@ Idle throttling is **off** unless it is enabled in one of these places:
   - physics: `EngineCore->get_PredictedPhysicsStepSeconds() > 0`, using the previous Update's prediction;
   - scene: `get_SceneManager()` non-null and (`get_IsSceneTransitionActive()` or `get_LastTracePendingOperationCount() > 0`). This is a trace-snapshot proxy for pending operations, because the operation list is private.
   - Scenes with active physics therefore never go idle. That is expected, and it is documented.
-- **Idle regression scenario.** Goldens are frame-30 captures, so the idle scenario runs the smoke scene with `--idle-throttle on --idle-after-ms 0 --idle-fps 10 --frames 30 --fixed-delta 0.016666 --capture ...` (about 3 s). Assertions:
+  - `get_LastTracePendingOperationCount()` is a trace snapshot: it is updated only when `SceneManager` records trace state, so it can briefly be stale. That is acceptable for keep-awake (at worst a frame or two stays active, or goes idle, one frame late). Revisit it if helengine exposes a live pending-operation count.
+- **Idle regression scenario.** Goldens are frame-30 captures, so the idle scenario runs the smoke scene with `--idle-throttle on --idle-after-ms 1 --idle-fps 10 --frames 30 --fixed-delta 0.016666 --capture ...` (about 3 s). Assertions:
   - the capture equals the golden;
   - `idleFrames` is at least 25, because the first frames are active while the startup scene load is pending;
   - `elapsedMs` is at least 2400.
 
-  It uses a threshold check, not exact equality, for `idleFrames`, `activeFrames` and `elapsedMs`, because the split between active and idle frames depends on load timing. The smoke scene must have no physics; the plan verifies this for `axis_test`.
+  `--idle-after-ms` is 1, not 0, because the flag requires a value of at least 1. It uses a threshold check, not exact equality, for `idleFrames`, `activeFrames` and `elapsedMs`, because the split between active and idle frames depends on load timing. The smoke scene must have no physics; the plan verifies this for `axis_test`.
+
+  This replaces §5 item 2's "recorded idle-scenario fingerprint": the idle run's fingerprint is never compared field by field with a golden fingerprint, because its idle and active counts and its timing differ by design. The manifest records only an idle entry (`id`, `kind='idle'`, `minIdleFrames=25`, `minElapsedMs=2400`); verify fails with `idle entry missing from manifest` when an older manifest has none.
 - **No native unit-test harness exists.** The pacer decision is a pure, Win32-free class (`Decide(nowMs, lastActivityMs, lastFrameStartMs, keepAwake)` returning a small struct; no tuples). It is covered by source tests plus the behavioral idle scenario.

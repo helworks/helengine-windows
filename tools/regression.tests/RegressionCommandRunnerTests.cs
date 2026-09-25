@@ -155,6 +155,116 @@ public sealed class RegressionCommandRunnerTests {
     }
 
     /// <summary>
+    /// A fingerprint of a healthy idle-scenario run: the throttle was on, most frames ran idle and the 30 frames took
+    /// about 2.75 s.
+    /// </summary>
+    const string IdleSampleLine = "HOST_FINGERPRINT format=87 alpha=3 swapEffect=4 buffers=2 scaling=0 style=0x14CF0000 exStyle=0x00000100 client=640x360 presentCount=30 presentFailures=0 frames=30 idleThrottle=on idleFrames=28 activeFrames=2 elapsedMs=2750";
+
+    /// <summary>
+    /// Verifies check-idle prints "PASS idleFrames=&lt;n&gt; elapsedMs=&lt;n&gt;" and returns 0 when the run was throttled,
+    /// ran enough frames idle and took long enough.
+    /// </summary>
+    [Fact]
+    public void Run_check_idle_healthy_run_passes_and_returns_0() {
+        StringWriter output = new();
+
+        int exitCode = new RegressionCommandRunner().Run(new[] { "check-idle", IdleSampleLine, "25", "2400" }, output);
+
+        Assert.Equal(0, exitCode);
+        Assert.Equal("PASS idleFrames=28 elapsedMs=2750" + Environment.NewLine, output.ToString());
+    }
+
+    /// <summary>
+    /// Verifies check-idle fails a run with fewer idle frames than required.
+    /// </summary>
+    [Fact]
+    public void Run_check_idle_too_few_idle_frames_fails_and_returns_1() {
+        StringWriter output = new();
+        string line = IdleSampleLine.Replace("idleFrames=28 activeFrames=2", "idleFrames=20 activeFrames=10");
+
+        int exitCode = new RegressionCommandRunner().Run(new[] { "check-idle", line, "25", "2400" }, output);
+
+        Assert.Equal(1, exitCode);
+        Assert.Equal("FAIL idleFrames=20 is below 25" + Environment.NewLine, output.ToString());
+    }
+
+    /// <summary>
+    /// Verifies check-idle fails a run that finished faster than the minimum elapsed time, which means the throttle did
+    /// not actually sleep.
+    /// </summary>
+    [Fact]
+    public void Run_check_idle_too_fast_fails_and_returns_1() {
+        StringWriter output = new();
+        string line = IdleSampleLine.Replace("elapsedMs=2750", "elapsedMs=480");
+
+        int exitCode = new RegressionCommandRunner().Run(new[] { "check-idle", line, "25", "2400" }, output);
+
+        Assert.Equal(1, exitCode);
+        Assert.Equal("FAIL elapsedMs=480 is below 2400" + Environment.NewLine, output.ToString());
+    }
+
+    /// <summary>
+    /// Verifies check-idle fails a run whose idle throttle was off, even when its counts would pass.
+    /// </summary>
+    [Fact]
+    public void Run_check_idle_throttle_off_fails_and_returns_1() {
+        StringWriter output = new();
+        string line = IdleSampleLine.Replace("idleThrottle=on", "idleThrottle=off");
+
+        int exitCode = new RegressionCommandRunner().Run(new[] { "check-idle", line, "25", "2400" }, output);
+
+        Assert.Equal(1, exitCode);
+        Assert.Equal("FAIL idleThrottle=off must be on" + Environment.NewLine, output.ToString());
+    }
+
+    /// <summary>
+    /// Verifies check-idle fails a run with Present failures.
+    /// </summary>
+    [Fact]
+    public void Run_check_idle_present_failures_fail_and_return_1() {
+        StringWriter output = new();
+        string line = IdleSampleLine.Replace("presentFailures=0", "presentFailures=2");
+
+        int exitCode = new RegressionCommandRunner().Run(new[] { "check-idle", line, "25", "2400" }, output);
+
+        Assert.Equal(1, exitCode);
+        Assert.Equal("FAIL presentFailures=2 must be 0" + Environment.NewLine, output.ToString());
+    }
+
+    /// <summary>
+    /// Verifies check-idle prints one FAIL line per failed check, in a fixed order.
+    /// </summary>
+    [Fact]
+    public void Run_check_idle_prints_one_fail_line_per_failed_check() {
+        StringWriter output = new();
+
+        int exitCode = new RegressionCommandRunner().Run(new[] { "check-idle", HostFingerprintTests.SampleLine, "25", "2400" }, output);
+
+        Assert.Equal(1, exitCode);
+        string[] lines = output.ToString().Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries);
+        Assert.Equal(new[] { "FAIL idleThrottle=off must be on", "FAIL idleFrames=0 is below 25", "FAIL elapsedMs=483 is below 2400" }, lines);
+    }
+
+    /// <summary>
+    /// Verifies check-idle prints an ERROR line and returns 2 on a missing argument, a non-numeric threshold or a
+    /// malformed fingerprint line.
+    /// </summary>
+    [Fact]
+    public void Run_check_idle_bad_usage_returns_2() {
+        RegressionCommandRunner runner = new();
+        StringWriter missingOutput = new();
+        StringWriter thresholdOutput = new();
+        StringWriter lineOutput = new();
+
+        Assert.Equal(2, runner.Run(new[] { "check-idle", IdleSampleLine, "25" }, missingOutput));
+        Assert.Equal(2, runner.Run(new[] { "check-idle", IdleSampleLine, "many", "2400" }, thresholdOutput));
+        Assert.Equal(2, runner.Run(new[] { "check-idle", "HOST_FINGERPRINT frames=30", "25", "2400" }, lineOutput));
+        Assert.StartsWith("ERROR", missingOutput.ToString());
+        Assert.StartsWith("ERROR", thresholdOutput.ToString());
+        Assert.StartsWith("ERROR", lineOutput.ToString());
+    }
+
+    /// <summary>
     /// Verifies record-executed writes the executed count of a healthy run as a single integer.
     /// </summary>
     [Fact]

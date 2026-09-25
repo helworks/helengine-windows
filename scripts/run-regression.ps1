@@ -7,14 +7,19 @@ Modes (exactly one is required):
   -BuildOnly  Builds the player from THIS checkout (the folder above this script) into <WorkRoot>\player and prints
               PROJECT_COMMIT=<DemoDisc HEAD>, PLAYER_SOURCE_ROOT=<checkout> and PLAYER=<exe path>.
   -Record     Builds, runs every scene twice (runs a and b), records each stable scene as a golden, writes
-              manifest.json (run settings, scene status, host fingerprints and provenance hashes) and records each
-              test suite's failing-test set and executed-test count. Everything is written to
+              manifest.json (run settings, scene status, host fingerprints, the idle scenario and provenance hashes)
+              and records each test suite's failing-test set and executed-test count. Everything is written to
               <WorkRoot>\record-staging first and copied into regression\golden and regression\baselines only when
               the whole record had no FAIL.
   -Verify     Builds, runs every scene once, checks that the smoke scene is not blank, compares every stable scene
-              with its golden and every scene's host fingerprint with the recorded one, and compares each test
-              suite's failing-test set and executed-test count with its baseline. Prints one line per check, then
-              RESULT: PASS or RESULT: FAIL (<n> failing), and exits 0 only on PASS.
+              with its golden and every scene's host fingerprint with the recorded one, runs the idle-throttle
+              scenario (see below), and compares each test suite's failing-test set and executed-test count with its
+              baseline. Prints one line per check, then RESULT: PASS or RESULT: FAIL (<n> failing), and exits 0 only
+              on PASS.
+
+Record and Verify both run the opt-in idle-throttle scenario once on the smoke scene (30 frames with --idle-throttle on
+--idle-after-ms 1 --idle-fps 10): the run must pass the regression tool's check-idle command (throttle on, no Present
+failures, at least 25 idle frames, at least 2400 ms elapsed) and its capture must match the smoke scene's golden.
 
 Every scene run is limited to 120 seconds; a hung player is killed and reported as FAIL scene <id> timeout.
 The work root is marked with a .helengine-regression-workroot file; a non-empty folder without it is refused.
@@ -57,8 +62,9 @@ if ($selectedModeCount -ne 1) {
 }
 
 # The functions below read these script-level values: $RepoRoot, $WorkRoot, $utf8WithoutBom, $CheckResults,
-# $playerOutputPath, $playerExecutablePath and $regressionToolPath. Progress lines use Write-Host so that they never
-# become part of a function's return value.
+# $playerOutputPath, $playerExecutablePath, $regressionToolPath, $idlePlayerArguments, $idleMinimumIdleFrames and
+# $idleMinimumElapsedMilliseconds. Progress lines use Write-Host so that they never become part of a function's
+# return value.
 
 <#
 .SYNOPSIS
@@ -139,7 +145,9 @@ Rewrites the player's profile.json first (a profile left by an earlier run would
 window), creates the capture folder (the player's BMP writer does not create folders) and deletes any capture and
 startup log left by an earlier run so that a stale file is never checked. The launcher kills a run that takes longer
 than 120 seconds. On a timeout or a non-zero exit code it prints the tail of the startup log. After the run it reads
-the player's HOST_FINGERPRINT line from the startup log.
+the player's HOST_FINGERPRINT line from the startup log. FrameCount (default '30', the frame every golden is
+captured at) and ExtraArguments (default none; the idle scenario passes the idle-throttle flags) extend the player's
+fixed arguments.
 .OUTPUTS
 A [pscustomobject] with TimedOut (whether the launcher killed the run), ExitCode (the player's exit code; $null on a
 timeout), CaptureExists (whether the capture file was written) and Fingerprint (the HOST_FINGERPRINT line without the
@@ -151,7 +159,13 @@ function Invoke-PlayerScene {
         [string]$SceneId,
 
         [Parameter(Mandatory = $true)]
-        [string]$CapturePath
+        [string]$CapturePath,
+
+        [Parameter()]
+        [string]$FrameCount = '30',
+
+        [Parameter()]
+        [string[]]$ExtraArguments = @()
     )
 
     [System.IO.File]::WriteAllText((Join-Path $script:playerOutputPath 'profile.json'), '{"resolutionWidth":640,"resolutionHeight":360}', $script:utf8WithoutBom)
@@ -165,7 +179,7 @@ function Invoke-PlayerScene {
     }
 
     Write-Host "RUN $SceneId -> $CapturePath"
-    $playerArguments = @('--scene', $SceneId, '--frames', '30', '--fixed-delta', '0.016666', '--capture', $CapturePath)
+    $playerArguments = @('--scene', $SceneId, '--frames', $FrameCount, '--fixed-delta', '0.016666', '--capture', $CapturePath) + $ExtraArguments
     $launchLines = @(& "$script:RepoRoot\scripts\launch_in_emulator.ps1" -ArtifactPath $script:playerExecutablePath -ArgumentList $playerArguments -Wait -TimeoutSeconds 120)
     $playerExitCode = $null
     $timedOut = $false
@@ -282,6 +296,73 @@ function Invoke-FingerprintCheck {
     }
     if ($fingerprintRun.ExitCode -eq 0) {
         Add-CheckResult -Status PASS -Kind fingerprint -Name $SceneId -Detail $PassDetail
+    }
+}
+
+<#
+.SYNOPSIS
+Runs the opt-in idle-throttle scenario once on a scene and records its checks as "idle" check lines.
+.DESCRIPTION
+Launches the player with the fixed 30-frame arguments plus the idle-throttle flags ($script:idlePlayerArguments), then
+runs the regression tool's check-idle command on the run's HOST_FINGERPRINT line (idle throttle on, no Present
+failures, at least $script:idleMinimumIdleFrames idle frames and $script:idleMinimumElapsedMilliseconds elapsed) and
+compares the capture with the scene's golden, because throttling must never change what a frame renders. The
+fingerprint is deliberately not compared with a recorded one: its idle and active frame counts and its elapsed time
+differ from a normal run by design. When GoldenPath is empty the scene has no golden (it was recorded unstable), so the
+capture comparison is reported as SKIP.
+#>
+function Invoke-IdleScenario {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$SceneId,
+
+        [Parameter(Mandatory = $true)]
+        [string]$CapturePath,
+
+        [Parameter(Mandatory = $true)]
+        [string]$DiffPath,
+
+        [Parameter(Mandatory = $true)]
+        [AllowEmptyString()]
+        [string]$GoldenPath
+    )
+
+    $idleRun = Invoke-PlayerScene -SceneId $SceneId -CapturePath $CapturePath -ExtraArguments $script:idlePlayerArguments
+    if (-not (Test-PlayerRunSucceeded -PlayerRun $idleRun -Kind idle -SceneId $SceneId -CapturePath $CapturePath)) {
+        return
+    }
+
+    $checkIdleRun = Invoke-RegressionTool -ToolArguments @('check-idle', $idleRun.Fingerprint, $script:idleMinimumIdleFrames, $script:idleMinimumElapsedMilliseconds)
+    if ($checkIdleRun.ExitCode -eq 0 -and "$($checkIdleRun.Lines -join ' ')" -match '^PASS (.+)$') {
+        Add-CheckResult -Status PASS -Kind idle -Name $SceneId -Detail $Matches[1]
+    }
+    elseif ($checkIdleRun.ExitCode -eq 1) {
+        foreach ($checkIdleLine in $checkIdleRun.Lines) {
+            if ("$checkIdleLine" -notmatch '^FAIL (.+)$') {
+                throw "The regression tool printed an unexpected check-idle line for scene '$SceneId': $checkIdleLine"
+            }
+            Add-CheckResult -Status FAIL -Kind idle -Name $SceneId -Detail $Matches[1]
+        }
+    }
+    else {
+        Add-CheckResult -Status FAIL -Kind idle -Name $SceneId -Detail ($checkIdleRun.Lines -join ' ')
+    }
+
+    if ($GoldenPath.Length -eq 0) {
+        Add-CheckResult -Status SKIP -Kind idle -Name $SceneId -Detail 'capture not compared: the scene has no golden (unstable)'
+        return
+    }
+    if (-not (Test-Path -LiteralPath $GoldenPath -PathType Leaf)) {
+        Add-CheckResult -Status FAIL -Kind idle -Name $SceneId -Detail "golden missing: $GoldenPath"
+        return
+    }
+    $compareRun = Invoke-RegressionTool -ToolArguments @('compare', $CapturePath, $GoldenPath, $DiffPath)
+    $compareDetail = $compareRun.Lines -join ' '
+    if ($compareRun.ExitCode -eq 0) {
+        Add-CheckResult -Status PASS -Kind idle -Name $SceneId -Detail "capture matches golden: $compareDetail"
+    }
+    else {
+        Add-CheckResult -Status FAIL -Kind idle -Name $SceneId -Detail "capture differs from golden: $compareDetail"
     }
 }
 
@@ -751,6 +832,13 @@ $recordStagingRootPath = Join-Path $WorkRoot 'record-staging'
 $stagingGoldenRootPath = Join-Path $recordStagingRootPath 'golden'
 $stagingBaselineRootPath = Join-Path $recordStagingRootPath 'baselines'
 $capturesRootPath = Join-Path $WorkRoot 'captures'
+# The opt-in idle-throttle scenario: the smoke scene runs its usual 30 frames with the idle throttle on, going idle 1 ms
+# after the last activity and pacing idle frames at 10 fps (about 100 ms each), so the run takes about 3 s.
+$idleCapturePath = Join-Path $capturesRootPath "idle\$($smokeSceneId.Replace('/', '__')).bmp"
+$idleDiffPath = Join-Path $capturesRootPath "idle\$($smokeSceneId.Replace('/', '__')).diff.png"
+$idlePlayerArguments = @('--idle-throttle', 'on', '--idle-after-ms', '1', '--idle-fps', '10')
+$idleMinimumIdleFrames = '25'
+$idleMinimumElapsedMilliseconds = '2400'
 $testSuites = @(
     [pscustomobject]@{ Name = 'helengine.editor.tests'; ProjectPath = "$HelengineRoot\engine\helengine.editor.tests\helengine.editor.tests.csproj"; ExtraArguments = @() },
     [pscustomobject]@{ Name = 'helengine.render.validation.tests'; ProjectPath = "$HelengineRoot\engine\helengine.render.validation.tests\helengine.render.validation.tests.csproj"; ExtraArguments = @() },
@@ -822,6 +910,16 @@ if ($Record) {
         $manifestScenes.Add([ordered]@{ id = $sceneId; kind = 'golden'; status = $sceneStatus; fingerprint = $fingerprintFields; elapsedMs = $sceneElapsedMilliseconds })
     }
 
+    # 11R-idle. Run the idle-throttle scenario once on the smoke scene and compare its capture with the smoke golden
+    #           just staged. The manifest records the scenario and its minimums; its fingerprint is not recorded,
+    #           because its idle and active frame counts and elapsed time are only checked against those minimums.
+    $idleGoldenPath = Join-Path $stagingGoldenRootPath "$($smokeSceneId.Replace('/', '__')).png"
+    if ($unstableSceneIds.Contains($smokeSceneId)) {
+        $idleGoldenPath = ''
+    }
+    Invoke-IdleScenario -SceneId $smokeSceneId -CapturePath $idleCapturePath -DiffPath $idleDiffPath -GoldenPath $idleGoldenPath
+    $manifestScenes.Add([ordered]@{ id = $smokeSceneId; kind = 'idle'; minIdleFrames = [int]$idleMinimumIdleFrames; minElapsedMs = [int]$idleMinimumElapsedMilliseconds })
+
     # 12R. Write the staged manifest: run settings, each scene's check kind, status and host fingerprint, and the
     #      provenance of the record (commits and the hashes of every other input that changes the output).
     $manifestDocument = [ordered]@{
@@ -866,6 +964,7 @@ else {
     $unstableSceneIds = New-Object System.Collections.Generic.List[string]
     $recordedGoldenSceneIds = New-Object System.Collections.Generic.List[string]
     $recordedGoldenScenesById = @{}
+    $recordedIdleScene = $null
     if (-not (Test-Path -LiteralPath $manifestPath -PathType Leaf)) {
         Add-CheckResult -Status FAIL -Kind manifest -Name manifest.json -Detail "golden missing: $manifestPath"
     }
@@ -896,6 +995,9 @@ else {
                 if ($manifestScene.status -eq 'unstable') {
                     $unstableSceneIds.Add($manifestScene.id)
                 }
+            }
+            elseif ($manifestScene.kind -eq 'idle') {
+                $recordedIdleScene = $manifestScene
             }
         }
         foreach ($recordedSceneId in $recordedGoldenSceneIds) {
@@ -960,6 +1062,20 @@ else {
         else {
             Add-CheckResult -Status FAIL -Kind golden -Name $sceneId -Detail $compareDetail
         }
+    }
+
+    # 12V-idle. Run the idle-throttle scenario once on the smoke scene. A manifest without an idle entry predates the
+    #          scenario (or was recorded for another smoke scene) and must be re-recorded, so that is a FAIL rather than a
+    #          silent skip.
+    if ($null -eq $recordedIdleScene -or $recordedIdleScene.id -ne $smokeSceneId) {
+        Add-CheckResult -Status FAIL -Kind idle -Name $smokeSceneId -Detail "idle entry missing from manifest (re-record required): $manifestPath"
+    }
+    else {
+        $idleGoldenPath = Join-Path $goldenRootPath "$($smokeSceneId.Replace('/', '__')).png"
+        if ($unstableSceneIds.Contains($smokeSceneId)) {
+            $idleGoldenPath = ''
+        }
+        Invoke-IdleScenario -SceneId $smokeSceneId -CapturePath $idleCapturePath -DiffPath $idleDiffPath -GoldenPath $idleGoldenPath
     }
 
     # 13V. Check each suite run's outcome and executed-test count against the recorded count (an errored, aborted or
