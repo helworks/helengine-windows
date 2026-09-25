@@ -54,10 +54,21 @@ namespace helengine::windows {
         /// the end of the payload (rejecting values like `true_` or `falsey`).
         bool TryParseOptionalBoolean(const std::string& json, const char* propertyName, bool& value) const;
 
+        /// Parses one optional string property from the JSON profile payload, if present, requiring a JSON string
+        /// literal value (`"..."`) immediately followed by whitespace, a comma, a closing brace, or the end of the
+        /// payload. Returns whether the property was found; throws RuntimePlayerProfileConfigurationError when it
+        /// is present but is not a well-formed, cleanly-bounded string literal.
+        bool TryParseOptionalString(const std::string& json, const char* propertyName, std::string& value) const;
+
         /// Validates the idle-throttle fields resolved onto the supplied profile, throwing
         /// RuntimePlayerProfileConfigurationError when IdleAfterMilliseconds is not positive or
         /// IdleFramesPerSecond falls outside the supported 1..30 range.
         void ValidateIdleFields(const RuntimePlayerProfile& profile) const;
+
+        /// Validates the window-mode fields resolved onto the supplied profile, throwing
+        /// RuntimePlayerProfileConfigurationError when WindowMode, OverlayBounds or OverlayBackground holds
+        /// anything other than its exact, case-sensitive accepted values.
+        void ValidateWindowModeFields(const RuntimePlayerProfile& profile) const;
 
         /// Builds the persisted JSON payload for one runtime player profile.
         std::string BuildProfileJson(const RuntimePlayerProfile& profile) const;

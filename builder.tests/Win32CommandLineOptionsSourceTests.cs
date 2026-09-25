@@ -233,6 +233,87 @@ public sealed class Win32CommandLineOptionsSourceTests {
     }
 
     /// <summary>
+    /// Verifies the parser recognizes the three window-mode flags as known flags, wires them into explicit
+    /// <c>else if</c> branches placed before the trailing <c>--capture</c> branch, and enforces their exact,
+    /// case-sensitive accepted values.
+    /// </summary>
+    [Fact]
+    public void Win32CommandLineOptions_parses_window_mode_flags() {
+        string parserSource = ReadRepositoryFile("src", "platform", "windows", "win32", "win32_command_line_options.cpp");
+        string parserHeader = ReadRepositoryFile("src", "platform", "windows", "win32", "win32_command_line_options.hpp");
+
+        Assert.Contains("\"--window-mode\"", parserSource, StringComparison.Ordinal);
+        Assert.Contains("\"--overlay-bounds\"", parserSource, StringComparison.Ordinal);
+        Assert.Contains("\"--overlay-background\"", parserSource, StringComparison.Ordinal);
+
+        int isKnownFlagIndex = parserSource.IndexOf("bool Win32CommandLineOptions::IsKnownFlag", StringComparison.Ordinal);
+        Assert.True(isKnownFlagIndex >= 0, "IsKnownFlag definition was not found.");
+        int isKnownFlagEndIndex = parserSource.IndexOf("\n    }", isKnownFlagIndex, StringComparison.Ordinal);
+        string isKnownFlagBody = parserSource.Substring(isKnownFlagIndex, isKnownFlagEndIndex - isKnownFlagIndex);
+        Assert.Contains("argument == L\"--window-mode\"", isKnownFlagBody, StringComparison.Ordinal);
+        Assert.Contains("argument == L\"--overlay-bounds\"", isKnownFlagBody, StringComparison.Ordinal);
+        Assert.Contains("argument == L\"--overlay-background\"", isKnownFlagBody, StringComparison.Ordinal);
+
+        int windowModeBranchIndex = parserSource.IndexOf("flag == L\"--window-mode\"", StringComparison.Ordinal);
+        int overlayBoundsBranchIndex = parserSource.IndexOf("flag == L\"--overlay-bounds\"", StringComparison.Ordinal);
+        int overlayBackgroundBranchIndex = parserSource.IndexOf("flag == L\"--overlay-background\"", StringComparison.Ordinal);
+        int captureBranchIndex = parserSource.IndexOf("Command-line flag --capture was given more than once.", StringComparison.Ordinal);
+        Assert.True(windowModeBranchIndex >= 0, "The --window-mode branch was not found.");
+        Assert.True(overlayBoundsBranchIndex >= 0, "The --overlay-bounds branch was not found.");
+        Assert.True(overlayBackgroundBranchIndex >= 0, "The --overlay-background branch was not found.");
+        Assert.True(windowModeBranchIndex < captureBranchIndex, "The --window-mode branch must precede the --capture branch.");
+        Assert.True(overlayBoundsBranchIndex < captureBranchIndex, "The --overlay-bounds branch must precede the --capture branch.");
+        Assert.True(overlayBackgroundBranchIndex < captureBranchIndex, "The --overlay-background branch must precede the --capture branch.");
+
+        Assert.Contains("L\"normal\"", parserSource, StringComparison.Ordinal);
+        Assert.Contains("L\"overlay\"", parserSource, StringComparison.Ordinal);
+        Assert.Contains("L\"monitor\"", parserSource, StringComparison.Ordinal);
+        Assert.Contains("L\"profile\"", parserSource, StringComparison.Ordinal);
+        Assert.Contains("L\"camera\"", parserSource, StringComparison.Ordinal);
+        Assert.Contains("L\"transparent\"", parserSource, StringComparison.Ordinal);
+
+        Assert.Contains("bool HasWindowMode() const;", parserHeader, StringComparison.Ordinal);
+        Assert.Contains("Win32WindowMode GetWindowMode() const;", parserHeader, StringComparison.Ordinal);
+        Assert.Contains("bool HasOverlayBounds() const;", parserHeader, StringComparison.Ordinal);
+        Assert.Contains("Win32OverlayBounds GetOverlayBounds() const;", parserHeader, StringComparison.Ordinal);
+        Assert.Contains("bool HasOverlayBackground() const;", parserHeader, StringComparison.Ordinal);
+        Assert.Contains("Win32OverlayBackground GetOverlayBackground() const;", parserHeader, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// Verifies --hit-test-probe is recognized as a known flag, parses exactly two base-10 non-negative integers
+    /// separated by one comma with both numbers fully consumed, and does not itself require --frames: the
+    /// combination with --frames and an effective overlay window mode can only be checked once the profile is
+    /// available, so it is deferred to <c>Win32WindowModeSettings::Resolve</c> instead of being enforced here (unlike
+    /// --capture, which is checked directly in Parse since it only ever depends on other command-line flags).
+    /// </summary>
+    [Fact]
+    public void Win32CommandLineOptions_parses_hit_test_probe_flag_without_requiring_frames_here() {
+        string parserSource = ReadRepositoryFile("src", "platform", "windows", "win32", "win32_command_line_options.cpp");
+        string parserHeader = ReadRepositoryFile("src", "platform", "windows", "win32", "win32_command_line_options.hpp");
+
+        Assert.Contains("\"--hit-test-probe\"", parserSource, StringComparison.Ordinal);
+        Assert.Contains("argument == L\"--hit-test-probe\"", parserSource, StringComparison.Ordinal);
+        Assert.Contains("flag == L\"--hit-test-probe\"", parserSource, StringComparison.Ordinal);
+
+        int parseHitTestProbeIndex = parserSource.IndexOf("Win32CommandLineOptions::ParseHitTestProbe(", StringComparison.Ordinal);
+        Assert.True(parseHitTestProbeIndex >= 0, "ParseHitTestProbe definition was not found.");
+        string parseHitTestProbeBody = parserSource.Substring(parseHitTestProbeIndex, parserSource.IndexOf("\n    }", parseHitTestProbeIndex, StringComparison.Ordinal) - parseHitTestProbeIndex);
+        Assert.Contains("value.find(L',')", parseHitTestProbeBody, StringComparison.Ordinal);
+        Assert.Contains("std::wcstol(xText.c_str(), &xEnd, 10)", parseHitTestProbeBody, StringComparison.Ordinal);
+        Assert.Contains("std::wcstol(yText.c_str(), &yEnd, 10)", parseHitTestProbeBody, StringComparison.Ordinal);
+        Assert.Contains("parsedX < 0", parseHitTestProbeBody, StringComparison.Ordinal);
+        Assert.Contains("parsedY < 0", parseHitTestProbeBody, StringComparison.Ordinal);
+
+        Assert.DoesNotContain("--hit-test-probe requires --frames", parserSource, StringComparison.Ordinal);
+        Assert.DoesNotContain("CapturePathSupplied && !options.FrameLimitSupplied", parseHitTestProbeBody, StringComparison.Ordinal);
+
+        Assert.Contains("bool HasHitTestProbe() const;", parserHeader, StringComparison.Ordinal);
+        Assert.Contains("int GetHitTestProbeX() const;", parserHeader, StringComparison.Ordinal);
+        Assert.Contains("int GetHitTestProbeY() const;", parserHeader, StringComparison.Ordinal);
+    }
+
+    /// <summary>
     /// Reads a source file relative to the Windows native-player repository root.
     /// </summary>
     /// <param name="relativePathSegments">Path segments below the repository root.</param>

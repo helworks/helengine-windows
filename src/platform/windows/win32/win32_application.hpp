@@ -15,6 +15,7 @@
 #include "platform/windows/runtime/runtime_player_profile.hpp"
 #include "platform/windows/runtime/runtime_memory_diagnostics_provider.hpp"
 #include "platform/windows/win32/win32_command_line_options.hpp"
+#include "platform/windows/win32/win32_window_mode_settings.hpp"
 
 class CameraClearSettings;
 class CameraComponent;
@@ -140,6 +141,11 @@ namespace helengine::windows {
 
         /// Resolves the runtime player profile that controls initial window sizing.
         RuntimePlayerProfile ResolveRuntimePlayerProfile() const;
+
+        /// Resolves the window-mode settings that control overlay behavior, converting an invalid combination (for
+        /// example --hit-test-probe supplied without both --frames and an effective overlay window mode) into a
+        /// Win32ExitRequest with exit code 2 instead of a generic startup failure.
+        Win32WindowModeSettings ResolveWindowModeSettings(const RuntimePlayerProfile& profile) const;
 
         /// Builds the runtime scene catalog consumed by scene-loading menu actions in packaged players.
         RuntimeSceneCatalog* BuildRuntimeSceneCatalog();

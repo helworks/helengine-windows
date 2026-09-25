@@ -21,6 +21,21 @@ public sealed class RuntimePlayerProfileSourceTests {
     }
 
     /// <summary>
+    /// Verifies RuntimePlayerProfile gains the three window-mode string members and their presence flag with the
+    /// documented default values, so the existing <c>{w, h}</c> aggregate initialization in the loader keeps
+    /// compiling unchanged.
+    /// </summary>
+    [Fact]
+    public void RuntimePlayerProfile_declares_window_mode_fields_with_default_values() {
+        string profileHeader = ReadRepositoryFile("src", "platform", "windows", "runtime", "runtime_player_profile.hpp");
+
+        Assert.Contains("std::string WindowMode = \"normal\";", profileHeader, StringComparison.Ordinal);
+        Assert.Contains("std::string OverlayBounds = \"monitor\";", profileHeader, StringComparison.Ordinal);
+        Assert.Contains("std::string OverlayBackground = \"camera\";", profileHeader, StringComparison.Ordinal);
+        Assert.Contains("bool WindowModeFieldsPresent = false;", profileHeader, StringComparison.Ordinal);
+    }
+
+    /// <summary>
     /// Verifies the new RuntimePlayerProfileConfigurationError type derives from std::runtime_error with a
     /// message constructor, and that the native build compiles its source file.
     /// </summary>
@@ -47,6 +62,20 @@ public sealed class RuntimePlayerProfileSourceTests {
         Assert.Contains("bool TryParseOptionalInteger(const std::string& json, const char* propertyName, int& value) const;", loaderHeader, StringComparison.Ordinal);
         Assert.Contains("bool TryParseOptionalBoolean(const std::string& json, const char* propertyName, bool& value) const;", loaderHeader, StringComparison.Ordinal);
         Assert.Contains("void ValidateIdleFields(const RuntimePlayerProfile& profile) const;", loaderHeader, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// Verifies the loader declares the optional-string parser and the window-mode validator with the documented
+    /// signatures.
+    /// </summary>
+    [Fact]
+    public void RuntimePlayerProfileLoader_declares_window_mode_parsing_members() {
+        string loaderHeader = ReadRepositoryFile("src", "platform", "windows", "runtime", "runtime_player_profile_loader.hpp");
+
+        Assert.Contains(
+            "bool TryParseOptionalString(const std::string& json, const char* propertyName, std::string& value) const;",
+            loaderHeader, StringComparison.Ordinal);
+        Assert.Contains("void ValidateWindowModeFields(const RuntimePlayerProfile& profile) const;", loaderHeader, StringComparison.Ordinal);
     }
 
     /// <summary>
@@ -211,10 +240,10 @@ public sealed class RuntimePlayerProfileSourceTests {
         Assert.True(methodStartIndex >= 0, "ValidateIdleFields must be defined in the loader source.");
 
         int methodEndIndex = loaderSource.IndexOf(
-            "RuntimePlayerProfileLoader::BuildProfileJson(",
+            "RuntimePlayerProfileLoader::ValidateWindowModeFields(",
             methodStartIndex,
             StringComparison.Ordinal);
-        Assert.True(methodEndIndex > methodStartIndex, "BuildProfileJson must follow ValidateIdleFields in the loader source.");
+        Assert.True(methodEndIndex > methodStartIndex, "ValidateWindowModeFields must follow ValidateIdleFields in the loader source.");
 
         string methodBody = loaderSource.Substring(methodStartIndex, methodEndIndex - methodStartIndex);
         Assert.Contains("IdleAfterMilliseconds <= 0", methodBody, StringComparison.Ordinal);
@@ -242,6 +271,118 @@ public sealed class RuntimePlayerProfileSourceTests {
         Assert.Contains("\\\"idleThrottleEnabled\\\"", methodBody, StringComparison.Ordinal);
         Assert.Contains("\\\"idleAfterMilliseconds\\\"", methodBody, StringComparison.Ordinal);
         Assert.Contains("\\\"idleFramesPerSecond\\\"", methodBody, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// Verifies TryParseOptionalString requires a JSON string literal value and a clean boundary right after its
+    /// closing quote (whitespace, a comma, a closing brace, or the end of the payload), throwing the configuration
+    /// error for anything else instead of silently truncating.
+    /// </summary>
+    [Fact]
+    public void TryParseOptionalString_requires_a_json_string_literal_with_a_clean_boundary() {
+        string loaderSource = ReadRepositoryFile("src", "platform", "windows", "runtime", "runtime_player_profile_loader.cpp");
+
+        int methodStartIndex = loaderSource.IndexOf(
+            "bool RuntimePlayerProfileLoader::TryParseOptionalString(",
+            StringComparison.Ordinal);
+        Assert.True(methodStartIndex >= 0, "TryParseOptionalString must be defined in the loader source.");
+
+        int methodEndIndex = loaderSource.IndexOf(
+            "RuntimePlayerProfileLoader::ValidateIdleFields(",
+            methodStartIndex,
+            StringComparison.Ordinal);
+        Assert.True(methodEndIndex > methodStartIndex, "ValidateIdleFields must follow TryParseOptionalString in the loader source.");
+
+        string methodBody = loaderSource.Substring(methodStartIndex, methodEndIndex - methodStartIndex);
+        Assert.Contains("FindPropertyValueStartIndex(", methodBody, StringComparison.Ordinal);
+        Assert.Contains("json[valueStartIndex] != '\"'", methodBody, StringComparison.Ordinal);
+        Assert.Contains("json.find('\"', valueStartIndex + 1)", methodBody, StringComparison.Ordinal);
+        Assert.Contains("json[trailingIndex] != ','", methodBody, StringComparison.Ordinal);
+        Assert.Contains("json[trailingIndex] != '}'", methodBody, StringComparison.Ordinal);
+        Assert.Equal(3, System.Text.RegularExpressions.Regex.Matches(methodBody, "throw RuntimePlayerProfileConfigurationError\\(").Count);
+    }
+
+    /// <summary>
+    /// Verifies ValidateWindowModeFields rejects windowMode, overlayBounds and overlayBackground values outside
+    /// their exact, case-sensitive accepted sets by throwing the configuration error.
+    /// </summary>
+    [Fact]
+    public void ValidateWindowModeFields_rejects_values_outside_the_accepted_enums() {
+        string loaderSource = ReadRepositoryFile("src", "platform", "windows", "runtime", "runtime_player_profile_loader.cpp");
+
+        int methodStartIndex = loaderSource.IndexOf(
+            "void RuntimePlayerProfileLoader::ValidateWindowModeFields(",
+            StringComparison.Ordinal);
+        Assert.True(methodStartIndex >= 0, "ValidateWindowModeFields must be defined in the loader source.");
+
+        int methodEndIndex = loaderSource.IndexOf(
+            "RuntimePlayerProfileLoader::BuildProfileJson(",
+            methodStartIndex,
+            StringComparison.Ordinal);
+        Assert.True(methodEndIndex > methodStartIndex, "BuildProfileJson must follow ValidateWindowModeFields in the loader source.");
+
+        string methodBody = loaderSource.Substring(methodStartIndex, methodEndIndex - methodStartIndex);
+        Assert.Contains("profile.WindowMode != \"normal\" && profile.WindowMode != \"overlay\"", methodBody, StringComparison.Ordinal);
+        Assert.Contains("profile.OverlayBounds != \"monitor\" && profile.OverlayBounds != \"profile\"", methodBody, StringComparison.Ordinal);
+        Assert.Contains("profile.OverlayBackground != \"camera\" && profile.OverlayBackground != \"transparent\"", methodBody, StringComparison.Ordinal);
+        Assert.Equal(3, System.Text.RegularExpressions.Regex.Matches(methodBody, "throw RuntimePlayerProfileConfigurationError\\(").Count);
+    }
+
+    /// <summary>
+    /// Verifies BuildProfileJson only emits the window-mode fields when WindowModeFieldsPresent is true, which is
+    /// what keeps a seeded or repaired profile that never mentioned window mode byte-identical to the
+    /// pre-window-mode format.
+    /// </summary>
+    [Fact]
+    public void BuildProfileJson_guards_window_mode_output_with_WindowModeFieldsPresent() {
+        string loaderSource = ReadRepositoryFile("src", "platform", "windows", "runtime", "runtime_player_profile_loader.cpp");
+
+        int methodStartIndex = loaderSource.IndexOf(
+            "std::string RuntimePlayerProfileLoader::BuildProfileJson(",
+            StringComparison.Ordinal);
+        Assert.True(methodStartIndex >= 0, "BuildProfileJson must be defined in the loader source.");
+
+        string methodBody = loaderSource.Substring(methodStartIndex);
+        Assert.Contains("if (profile.WindowModeFieldsPresent) {", methodBody, StringComparison.Ordinal);
+        Assert.Contains("\\\"windowMode\\\"", methodBody, StringComparison.Ordinal);
+        Assert.Contains("\\\"overlayBounds\\\"", methodBody, StringComparison.Ordinal);
+        Assert.Contains("\\\"overlayBackground\\\"", methodBody, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// Verifies LoadOrCreateProfile parses and validates the window-mode fields before the pre-existing
+    /// resolution-repair <c>catch (const std::exception&amp;)</c> block, so a configuration error always escapes
+    /// instead of being swallowed and rewritten with defaults like a resolution problem.
+    /// </summary>
+    [Fact]
+    public void LoadOrCreateProfile_validates_window_mode_fields_before_the_resolution_repair_catch() {
+        string loaderSource = ReadRepositoryFile("src", "platform", "windows", "runtime", "runtime_player_profile_loader.cpp");
+
+        int methodStartIndex = loaderSource.IndexOf(
+            "RuntimePlayerProfileLoader::LoadOrCreateProfile(",
+            StringComparison.Ordinal);
+        Assert.True(methodStartIndex >= 0, "LoadOrCreateProfile must be defined in the loader source.");
+
+        int methodEndIndex = loaderSource.IndexOf(
+            "RuntimePlayerProfileLoader::ResolveProfilePath(",
+            methodStartIndex,
+            StringComparison.Ordinal);
+        Assert.True(methodEndIndex > methodStartIndex, "ResolveProfilePath must follow LoadOrCreateProfile in the loader source.");
+
+        string methodBody = loaderSource.Substring(methodStartIndex, methodEndIndex - methodStartIndex);
+
+        int windowModeParseIndex = methodBody.IndexOf("TryParseOptionalString(", StringComparison.Ordinal);
+        int windowModeValidateIndex = methodBody.IndexOf("ValidateWindowModeFields(", StringComparison.Ordinal);
+        int genericCatchIndex = methodBody.IndexOf("catch (const std::exception&)", StringComparison.Ordinal);
+
+        Assert.True(windowModeParseIndex >= 0, "LoadOrCreateProfile must call TryParseOptionalString directly.");
+        Assert.True(windowModeValidateIndex >= 0, "LoadOrCreateProfile must call ValidateWindowModeFields directly.");
+        Assert.True(genericCatchIndex >= 0, "LoadOrCreateProfile must keep the generic resolution-repair catch.");
+
+        Assert.True(windowModeParseIndex < genericCatchIndex, "Window-mode field parsing must appear before the resolution-repair catch.");
+        Assert.True(windowModeValidateIndex < genericCatchIndex, "Window-mode field validation must appear before the resolution-repair catch.");
+
+        Assert.Contains("if (optionalFieldsProfile.WindowModeFieldsPresent) {", methodBody, StringComparison.Ordinal);
     }
 
     /// <summary>

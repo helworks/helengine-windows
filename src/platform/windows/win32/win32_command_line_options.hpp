@@ -2,21 +2,26 @@
 
 #include <string>
 
+#include "platform/windows/win32/win32_overlay_background.hpp"
+#include "platform/windows/win32/win32_overlay_bounds.hpp"
+#include "platform/windows/win32/win32_window_mode.hpp"
+
 namespace helengine::windows {
     /// Holds the opt-in player command-line options used by regression runs (scene override, frame limit,
-    /// fixed update delta and capture path). A default-constructed instance means "no flags supplied" and keeps
-    /// the player on its normal startup path.
+    /// fixed update delta, capture path, idle-throttle overrides and window-mode overrides). A default-constructed
+    /// instance means "no flags supplied" and keeps the player on its normal startup path.
     class Win32CommandLineOptions {
     public:
         /// Creates an options set with no flags supplied, which leaves every player behavior at its default.
         Win32CommandLineOptions();
 
         /// Parses the given argument vector, skipping arguments[0] (the executable path). When no argument is a known
-        /// flag (--scene, --frames, --fixed-delta, --capture, --idle-throttle, --idle-after-ms, --idle-fps), nothing
-        /// is validated: the arguments are only kept as ignored text (see GetIgnoredArguments) so launches that pass
-        /// unrelated arguments, such as a file path split by CommandLineToArgvW, keep working exactly as before. Once
-        /// any known flag is present, validation is strict: each flag takes exactly one value, and unknown, repeated
-        /// or value-less flags and out-of-range values throw std::invalid_argument with a readable message.
+        /// flag (--scene, --frames, --fixed-delta, --capture, --idle-throttle, --idle-after-ms, --idle-fps,
+        /// --window-mode, --overlay-bounds, --overlay-background, --hit-test-probe), nothing is validated: the
+        /// arguments are only kept as ignored text (see GetIgnoredArguments) so launches that pass unrelated
+        /// arguments, such as a file path split by CommandLineToArgvW, keep working exactly as before. Once any known
+        /// flag is present, validation is strict: each flag takes exactly one value, and unknown, repeated or
+        /// value-less flags and out-of-range values throw std::invalid_argument with a readable message.
         static Win32CommandLineOptions Parse(int argumentCount, wchar_t** arguments);
 
         /// Reads the real process command line through CommandLineToArgvW and parses it with Parse.
@@ -67,6 +72,35 @@ namespace helengine::windows {
         /// HasIdleFramesPerSecond() is true.
         int GetIdleFramesPerSecond() const;
 
+        /// Gets whether --window-mode was supplied to override the profile's window presentation mode.
+        bool HasWindowMode() const;
+
+        /// Gets the window mode requested through --window-mode; only meaningful when HasWindowMode() is true.
+        Win32WindowMode GetWindowMode() const;
+
+        /// Gets whether --overlay-bounds was supplied to override the profile's overlay bounds source.
+        bool HasOverlayBounds() const;
+
+        /// Gets the overlay bounds source requested through --overlay-bounds; only meaningful when
+        /// HasOverlayBounds() is true.
+        Win32OverlayBounds GetOverlayBounds() const;
+
+        /// Gets whether --overlay-background was supplied to override the profile's overlay clear behavior.
+        bool HasOverlayBackground() const;
+
+        /// Gets the overlay background requested through --overlay-background; only meaningful when
+        /// HasOverlayBackground() is true.
+        Win32OverlayBackground GetOverlayBackground() const;
+
+        /// Gets whether --hit-test-probe was supplied to request a one-pixel alpha sample instead of a normal run.
+        bool HasHitTestProbe() const;
+
+        /// Gets the probed pixel's client-area X coordinate; only meaningful when HasHitTestProbe() is true.
+        int GetHitTestProbeX() const;
+
+        /// Gets the probed pixel's client-area Y coordinate; only meaningful when HasHitTestProbe() is true.
+        int GetHitTestProbeY() const;
+
         /// Gets whether arguments were supplied without any known flag, so they were ignored instead of validated.
         bool HasIgnoredArguments() const;
 
@@ -102,6 +136,20 @@ namespace helengine::windows {
 
         /// Parses an --idle-fps value that must be a whole number from 1 to 30, throwing std::invalid_argument otherwise.
         static int ParseIdleFramesPerSecond(const std::wstring& value);
+
+        /// Parses a --window-mode value that must be exactly "normal" or "overlay", throwing std::invalid_argument otherwise.
+        static Win32WindowMode ParseWindowMode(const std::wstring& value);
+
+        /// Parses an --overlay-bounds value that must be exactly "monitor" or "profile", throwing std::invalid_argument otherwise.
+        static Win32OverlayBounds ParseOverlayBounds(const std::wstring& value);
+
+        /// Parses an --overlay-background value that must be exactly "camera" or "transparent", throwing std::invalid_argument otherwise.
+        static Win32OverlayBackground ParseOverlayBackground(const std::wstring& value);
+
+        /// Parses a --hit-test-probe value that must be two base-10 non-negative integers separated by exactly one
+        /// comma, with both numbers fully consumed, throwing std::invalid_argument otherwise. Writes the parsed
+        /// coordinates into probeX and probeY.
+        static void ParseHitTestProbe(const std::wstring& value, int& probeX, int& probeY);
 
         /// Stores whether --scene was supplied.
         bool SceneSupplied;
@@ -144,6 +192,33 @@ namespace helengine::windows {
 
         /// Stores the frame rate, in frames per second, applied while the player is idle.
         int IdleFramesPerSecond;
+
+        /// Stores whether --window-mode was supplied.
+        bool WindowModeSupplied;
+
+        /// Stores the window mode requested through --window-mode.
+        Win32WindowMode WindowMode;
+
+        /// Stores whether --overlay-bounds was supplied.
+        bool OverlayBoundsSupplied;
+
+        /// Stores the overlay bounds source requested through --overlay-bounds.
+        Win32OverlayBounds OverlayBounds;
+
+        /// Stores whether --overlay-background was supplied.
+        bool OverlayBackgroundSupplied;
+
+        /// Stores the overlay background requested through --overlay-background.
+        Win32OverlayBackground OverlayBackground;
+
+        /// Stores whether --hit-test-probe was supplied.
+        bool HitTestProbeSupplied;
+
+        /// Stores the probed pixel's client-area X coordinate.
+        int HitTestProbeX;
+
+        /// Stores the probed pixel's client-area Y coordinate.
+        int HitTestProbeY;
 
         /// Stores whether arguments were supplied without any known flag and were therefore ignored.
         bool ArgumentsIgnored;

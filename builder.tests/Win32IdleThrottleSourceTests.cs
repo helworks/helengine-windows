@@ -74,6 +74,7 @@ public sealed class Win32IdleThrottleSourceTests {
         Assert.Matches(
             new Regex(
                 @"RuntimePlayerProfile profile = ResolveRuntimePlayerProfile\(\);\s*"
+                + @"Win32WindowModeSettings windowModeSettings = ResolveWindowModeSettings\(profile\);\s*"
                 + @"Win32IdleThrottleSettings idleThrottleSettings = Win32IdleThrottleSettings::Resolve\(profile, CommandLineOptions\);\s*"
                 + @"MainWindow = std::make_unique<Win32Window>\(.*?\);\s*"
                 + @"if \(idleThrottleSettings\.IsEnabled\(\)\) \{\s*"
@@ -82,6 +83,10 @@ public sealed class Win32IdleThrottleSourceTests {
                 + @"MainWindow->SetActivityTracker\(ActivityTracker\.get\(\)\);\s*"
                 + @"std::string idleThrottleMessage = ""Idle throttle configured: "" \+ idleThrottleSettings\.Describe\(\);\s*"
                 + @"WriteLifecycleLog\(idleThrottleMessage\.c_str\(\)\);\s*"
+                + @"\}\s*"
+                + @"if \(windowModeSettings\.GetWindowMode\(\) == Win32WindowMode::Overlay\) \{\s*"
+                + @"std::string windowModeMessage = ""Window mode configured: "" \+ windowModeSettings\.Describe\(\);\s*"
+                + @"WriteLifecycleLog\(windowModeMessage\.c_str\(\)\);\s*"
                 + @"\}\s*"
                 + @"MainWindow->Create\(\);",
                 RegexOptions.Singleline),

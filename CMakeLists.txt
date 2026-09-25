@@ -73,6 +73,7 @@ set(HELENGINE_WINDOWS_SOURCES
     src/platform/windows/win32/win32_idle_frame_pacer.cpp
     src/platform/windows/win32/win32_idle_throttle_settings.cpp
     src/platform/windows/win32/win32_window.cpp
+    src/platform/windows/win32/win32_window_mode_settings.cpp
     src/platform/windows/directx11/directx11_back_buffer_capture.cpp
     src/platform/windows/directx11/directx11_bootstrap.cpp
     src/platform/windows/directx11/directx11_host_fingerprint.cpp

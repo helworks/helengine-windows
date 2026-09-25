@@ -46,6 +46,7 @@
 #include "platform/windows/win32/win32_input_bridge.hpp"
 #include "platform/windows/win32/win32_render_bridge.hpp"
 #include "platform/windows/win32/win32_window.hpp"
+#include "platform/windows/win32/win32_window_mode_settings.hpp"
 
 #if __has_include("runtime/runtime_player_settings_manifest.hpp")
 #include "runtime/runtime_player_settings_manifest.hpp"
@@ -679,6 +680,7 @@ namespace helengine::windows {
     /// Creates the main native window for the player host.
     void Win32Application::CreateMainWindow() {
         RuntimePlayerProfile profile = ResolveRuntimePlayerProfile();
+        Win32WindowModeSettings windowModeSettings = ResolveWindowModeSettings(profile);
         Win32IdleThrottleSettings idleThrottleSettings = Win32IdleThrottleSettings::Resolve(profile, CommandLineOptions);
         MainWindow = std::make_unique<Win32Window>(L"HelEngine Windows Host", profile.ResolutionWidth, profile.ResolutionHeight);
         if (idleThrottleSettings.IsEnabled()) {
@@ -687,6 +689,10 @@ namespace helengine::windows {
             MainWindow->SetActivityTracker(ActivityTracker.get());
             std::string idleThrottleMessage = "Idle throttle configured: " + idleThrottleSettings.Describe();
             WriteLifecycleLog(idleThrottleMessage.c_str());
+        }
+        if (windowModeSettings.GetWindowMode() == Win32WindowMode::Overlay) {
+            std::string windowModeMessage = "Window mode configured: " + windowModeSettings.Describe();
+            WriteLifecycleLog(windowModeMessage.c_str());
         }
         MainWindow->Create();
         MainWindow->Show();
@@ -1297,6 +1303,18 @@ namespace helengine::windows {
 
             return profile;
         } catch (const RuntimePlayerProfileConfigurationError& configurationError) {
+            // Run()'s Win32ExitRequest handler logs the message, so it is not logged here as well.
+            throw Win32ExitRequest(2, configurationError.what());
+        }
+    }
+
+    /// Resolves the window-mode settings that control overlay behavior, converting an invalid combination (for
+    /// example --hit-test-probe supplied without both --frames and an effective overlay window mode) into a
+    /// Win32ExitRequest with exit code 2 instead of a generic startup failure.
+    Win32WindowModeSettings Win32Application::ResolveWindowModeSettings(const RuntimePlayerProfile& profile) const {
+        try {
+            return Win32WindowModeSettings::Resolve(profile, CommandLineOptions);
+        } catch (const std::invalid_argument& configurationError) {
             // Run()'s Win32ExitRequest handler logs the message, so it is not logged here as well.
             throw Win32ExitRequest(2, configurationError.what());
         }

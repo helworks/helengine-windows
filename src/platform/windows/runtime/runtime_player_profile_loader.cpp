@@ -22,21 +22,31 @@ namespace helengine::windows {
             return defaultProfile;
         }
 
-        RuntimePlayerProfile idleFieldsProfile = defaultProfile;
+        RuntimePlayerProfile optionalFieldsProfile = defaultProfile;
         try {
             std::string fileContents = ReadProfileFileContents(profilePath);
 
-            bool idleThrottleEnabledPresent = TryParseOptionalBoolean(fileContents, "idleThrottleEnabled", idleFieldsProfile.IdleThrottleEnabled);
-            bool idleAfterMillisecondsPresent = TryParseOptionalInteger(fileContents, "idleAfterMilliseconds", idleFieldsProfile.IdleAfterMilliseconds);
-            bool idleFramesPerSecondPresent = TryParseOptionalInteger(fileContents, "idleFramesPerSecond", idleFieldsProfile.IdleFramesPerSecond);
-            idleFieldsProfile.IdleFieldsPresent = idleThrottleEnabledPresent || idleAfterMillisecondsPresent || idleFramesPerSecondPresent;
-            ValidateIdleFields(idleFieldsProfile);
+            bool idleThrottleEnabledPresent = TryParseOptionalBoolean(fileContents, "idleThrottleEnabled", optionalFieldsProfile.IdleThrottleEnabled);
+            bool idleAfterMillisecondsPresent = TryParseOptionalInteger(fileContents, "idleAfterMilliseconds", optionalFieldsProfile.IdleAfterMilliseconds);
+            bool idleFramesPerSecondPresent = TryParseOptionalInteger(fileContents, "idleFramesPerSecond", optionalFieldsProfile.IdleFramesPerSecond);
+            optionalFieldsProfile.IdleFieldsPresent = idleThrottleEnabledPresent || idleAfterMillisecondsPresent || idleFramesPerSecondPresent;
+            ValidateIdleFields(optionalFieldsProfile);
+
+            bool windowModePresent = TryParseOptionalString(fileContents, "windowMode", optionalFieldsProfile.WindowMode);
+            bool overlayBoundsPresent = TryParseOptionalString(fileContents, "overlayBounds", optionalFieldsProfile.OverlayBounds);
+            bool overlayBackgroundPresent = TryParseOptionalString(fileContents, "overlayBackground", optionalFieldsProfile.OverlayBackground);
+            optionalFieldsProfile.WindowModeFieldsPresent = windowModePresent || overlayBoundsPresent || overlayBackgroundPresent;
+            ValidateWindowModeFields(optionalFieldsProfile);
 
             RuntimePlayerProfile profile = ParseProfileJson(fileContents);
-            profile.IdleThrottleEnabled = idleFieldsProfile.IdleThrottleEnabled;
-            profile.IdleAfterMilliseconds = idleFieldsProfile.IdleAfterMilliseconds;
-            profile.IdleFramesPerSecond = idleFieldsProfile.IdleFramesPerSecond;
-            profile.IdleFieldsPresent = idleFieldsProfile.IdleFieldsPresent;
+            profile.IdleThrottleEnabled = optionalFieldsProfile.IdleThrottleEnabled;
+            profile.IdleAfterMilliseconds = optionalFieldsProfile.IdleAfterMilliseconds;
+            profile.IdleFramesPerSecond = optionalFieldsProfile.IdleFramesPerSecond;
+            profile.IdleFieldsPresent = optionalFieldsProfile.IdleFieldsPresent;
+            profile.WindowMode = optionalFieldsProfile.WindowMode;
+            profile.OverlayBounds = optionalFieldsProfile.OverlayBounds;
+            profile.OverlayBackground = optionalFieldsProfile.OverlayBackground;
+            profile.WindowModeFieldsPresent = optionalFieldsProfile.WindowModeFieldsPresent;
             profile.Validate();
             lifecycleMessage = "profile.json loaded successfully.";
             return profile;
@@ -44,11 +54,18 @@ namespace helengine::windows {
             throw;
         } catch (const std::exception&) {
             RuntimePlayerProfile repairedProfile = defaultProfile;
-            if (idleFieldsProfile.IdleFieldsPresent) {
-                repairedProfile.IdleThrottleEnabled = idleFieldsProfile.IdleThrottleEnabled;
-                repairedProfile.IdleAfterMilliseconds = idleFieldsProfile.IdleAfterMilliseconds;
-                repairedProfile.IdleFramesPerSecond = idleFieldsProfile.IdleFramesPerSecond;
+            if (optionalFieldsProfile.IdleFieldsPresent) {
+                repairedProfile.IdleThrottleEnabled = optionalFieldsProfile.IdleThrottleEnabled;
+                repairedProfile.IdleAfterMilliseconds = optionalFieldsProfile.IdleAfterMilliseconds;
+                repairedProfile.IdleFramesPerSecond = optionalFieldsProfile.IdleFramesPerSecond;
                 repairedProfile.IdleFieldsPresent = true;
+            }
+
+            if (optionalFieldsProfile.WindowModeFieldsPresent) {
+                repairedProfile.WindowMode = optionalFieldsProfile.WindowMode;
+                repairedProfile.OverlayBounds = optionalFieldsProfile.OverlayBounds;
+                repairedProfile.OverlayBackground = optionalFieldsProfile.OverlayBackground;
+                repairedProfile.WindowModeFieldsPresent = true;
             }
 
             WriteProfile(profilePath, repairedProfile);
@@ -289,6 +306,43 @@ namespace helengine::windows {
             std::string("profile.json contains a non-boolean value for '") + propertyName + "'.");
     }
 
+    /// Parses one optional string property from the JSON profile payload, if present, requiring a JSON string
+    /// literal value (`"..."`) immediately followed by whitespace, a comma, a closing brace, or the end of the
+    /// payload. Returns whether the property was found; throws RuntimePlayerProfileConfigurationError when it is
+    /// present but is not a well-formed, cleanly-bounded string literal.
+    bool RuntimePlayerProfileLoader::TryParseOptionalString(const std::string& json, const char* propertyName, std::string& value) const {
+        std::size_t valueStartIndex = 0;
+        if (!FindPropertyValueStartIndex(json, propertyName, valueStartIndex)) {
+            return false;
+        }
+
+        if (json[valueStartIndex] != '"') {
+            throw RuntimePlayerProfileConfigurationError(
+                std::string("profile.json contains a non-string value for '") + propertyName + "'.");
+        }
+
+        std::size_t closingQuoteIndex = json.find('"', valueStartIndex + 1);
+        if (closingQuoteIndex == std::string::npos) {
+            throw RuntimePlayerProfileConfigurationError(
+                std::string("profile.json contains an unterminated string value for '") + propertyName + "'.");
+        }
+
+        // Reject trailing garbage after the closing quote, like `"normal"x`: only whitespace, a comma, a closing
+        // brace, or the end of the payload may follow.
+        std::size_t trailingIndex = closingQuoteIndex + 1;
+        while (trailingIndex < json.length() && std::isspace(static_cast<unsigned char>(json[trailingIndex])) != 0) {
+            trailingIndex++;
+        }
+
+        if (trailingIndex < json.length() && json[trailingIndex] != ',' && json[trailingIndex] != '}') {
+            throw RuntimePlayerProfileConfigurationError(
+                std::string("profile.json contains a non-string value for '") + propertyName + "'.");
+        }
+
+        value = json.substr(valueStartIndex + 1, closingQuoteIndex - valueStartIndex - 1);
+        return true;
+    }
+
     /// Validates the idle-throttle fields resolved onto the supplied profile, throwing
     /// RuntimePlayerProfileConfigurationError when IdleAfterMilliseconds is not positive or
     /// IdleFramesPerSecond falls outside the supported 1..30 range.
@@ -302,20 +356,45 @@ namespace helengine::windows {
         }
     }
 
+    /// Validates the window-mode fields resolved onto the supplied profile, throwing
+    /// RuntimePlayerProfileConfigurationError when WindowMode, OverlayBounds or OverlayBackground holds anything
+    /// other than its exact, case-sensitive accepted values.
+    void RuntimePlayerProfileLoader::ValidateWindowModeFields(const RuntimePlayerProfile& profile) const {
+        if (profile.WindowMode != "normal" && profile.WindowMode != "overlay") {
+            throw RuntimePlayerProfileConfigurationError(
+                "Runtime player profile windowMode must be \"normal\" or \"overlay\", got: " + profile.WindowMode);
+        }
+
+        if (profile.OverlayBounds != "monitor" && profile.OverlayBounds != "profile") {
+            throw RuntimePlayerProfileConfigurationError(
+                "Runtime player profile overlayBounds must be \"monitor\" or \"profile\", got: " + profile.OverlayBounds);
+        }
+
+        if (profile.OverlayBackground != "camera" && profile.OverlayBackground != "transparent") {
+            throw RuntimePlayerProfileConfigurationError(
+                "Runtime player profile overlayBackground must be \"camera\" or \"transparent\", got: " + profile.OverlayBackground);
+        }
+    }
+
     /// Builds the persisted JSON payload for one runtime player profile.
     std::string RuntimePlayerProfileLoader::BuildProfileJson(const RuntimePlayerProfile& profile) const {
         profile.Validate();
 
+        bool hasTrailingSections = profile.IdleFieldsPresent || profile.WindowModeFieldsPresent;
+
         std::ostringstream builder;
         builder << "{\n";
         builder << "  \"resolutionWidth\": " << profile.ResolutionWidth << ",\n";
+        builder << "  \"resolutionHeight\": " << profile.ResolutionHeight << (hasTrailingSections ? ",\n" : "\n");
         if (profile.IdleFieldsPresent) {
-            builder << "  \"resolutionHeight\": " << profile.ResolutionHeight << ",\n";
             builder << "  \"idleThrottleEnabled\": " << (profile.IdleThrottleEnabled ? "true" : "false") << ",\n";
             builder << "  \"idleAfterMilliseconds\": " << profile.IdleAfterMilliseconds << ",\n";
-            builder << "  \"idleFramesPerSecond\": " << profile.IdleFramesPerSecond << "\n";
-        } else {
-            builder << "  \"resolutionHeight\": " << profile.ResolutionHeight << "\n";
+            builder << "  \"idleFramesPerSecond\": " << profile.IdleFramesPerSecond << (profile.WindowModeFieldsPresent ? ",\n" : "\n");
+        }
+        if (profile.WindowModeFieldsPresent) {
+            builder << "  \"windowMode\": \"" << profile.WindowMode << "\",\n";
+            builder << "  \"overlayBounds\": \"" << profile.OverlayBounds << "\",\n";
+            builder << "  \"overlayBackground\": \"" << profile.OverlayBackground << "\"\n";
         }
         builder << "}\n";
         return builder.str();

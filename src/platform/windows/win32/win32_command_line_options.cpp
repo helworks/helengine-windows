@@ -27,16 +27,26 @@ namespace helengine::windows {
           IdleAfterMilliseconds(0),
           IdleFramesPerSecondSupplied(false),
           IdleFramesPerSecond(0),
+          WindowModeSupplied(false),
+          WindowMode(Win32WindowMode::Normal),
+          OverlayBoundsSupplied(false),
+          OverlayBounds(Win32OverlayBounds::Monitor),
+          OverlayBackgroundSupplied(false),
+          OverlayBackground(Win32OverlayBackground::Camera),
+          HitTestProbeSupplied(false),
+          HitTestProbeX(0),
+          HitTestProbeY(0),
           ArgumentsIgnored(false),
           IgnoredArguments() {
     }
 
     /// Parses the given argument vector, skipping arguments[0] (the executable path). When no argument is a known
-    /// flag (--scene, --frames, --fixed-delta, --capture, --idle-throttle, --idle-after-ms, --idle-fps), nothing is
-    /// validated: the arguments are only kept as ignored text (see GetIgnoredArguments) so launches that pass
-    /// unrelated arguments, such as a file path split by CommandLineToArgvW, keep working exactly as before. Once any
-    /// known flag is present, validation is strict: each flag takes exactly one value, and unknown, repeated or
-    /// value-less flags and out-of-range values throw std::invalid_argument with a readable message.
+    /// flag (--scene, --frames, --fixed-delta, --capture, --idle-throttle, --idle-after-ms, --idle-fps,
+    /// --window-mode, --overlay-bounds, --overlay-background, --hit-test-probe), nothing is validated: the arguments
+    /// are only kept as ignored text (see GetIgnoredArguments) so launches that pass unrelated arguments, such as a
+    /// file path split by CommandLineToArgvW, keep working exactly as before. Once any known flag is present,
+    /// validation is strict: each flag takes exactly one value, and unknown, repeated or value-less flags and
+    /// out-of-range values throw std::invalid_argument with a readable message.
     Win32CommandLineOptions Win32CommandLineOptions::Parse(int argumentCount, wchar_t** arguments) {
         if (argumentCount < 1 || arguments == nullptr) {
             throw std::invalid_argument("Command line must contain at least the executable path.");
@@ -121,6 +131,34 @@ namespace helengine::windows {
 
                 options.IdleFramesPerSecond = ParseIdleFramesPerSecond(value);
                 options.IdleFramesPerSecondSupplied = true;
+            } else if (flag == L"--window-mode") {
+                if (options.WindowModeSupplied) {
+                    throw std::invalid_argument("Command-line flag --window-mode was given more than once.");
+                }
+
+                options.WindowMode = ParseWindowMode(value);
+                options.WindowModeSupplied = true;
+            } else if (flag == L"--overlay-bounds") {
+                if (options.OverlayBoundsSupplied) {
+                    throw std::invalid_argument("Command-line flag --overlay-bounds was given more than once.");
+                }
+
+                options.OverlayBounds = ParseOverlayBounds(value);
+                options.OverlayBoundsSupplied = true;
+            } else if (flag == L"--overlay-background") {
+                if (options.OverlayBackgroundSupplied) {
+                    throw std::invalid_argument("Command-line flag --overlay-background was given more than once.");
+                }
+
+                options.OverlayBackground = ParseOverlayBackground(value);
+                options.OverlayBackgroundSupplied = true;
+            } else if (flag == L"--hit-test-probe") {
+                if (options.HitTestProbeSupplied) {
+                    throw std::invalid_argument("Command-line flag --hit-test-probe was given more than once.");
+                }
+
+                ParseHitTestProbe(value, options.HitTestProbeX, options.HitTestProbeY);
+                options.HitTestProbeSupplied = true;
             } else {
                 if (options.CapturePathSupplied) {
                     throw std::invalid_argument("Command-line flag --capture was given more than once.");
@@ -235,6 +273,53 @@ namespace helengine::windows {
         return IdleFramesPerSecond;
     }
 
+    /// Gets whether --window-mode was supplied to override the profile's window presentation mode.
+    bool Win32CommandLineOptions::HasWindowMode() const {
+        return WindowModeSupplied;
+    }
+
+    /// Gets the window mode requested through --window-mode; only meaningful when HasWindowMode() is true.
+    Win32WindowMode Win32CommandLineOptions::GetWindowMode() const {
+        return WindowMode;
+    }
+
+    /// Gets whether --overlay-bounds was supplied to override the profile's overlay bounds source.
+    bool Win32CommandLineOptions::HasOverlayBounds() const {
+        return OverlayBoundsSupplied;
+    }
+
+    /// Gets the overlay bounds source requested through --overlay-bounds; only meaningful when
+    /// HasOverlayBounds() is true.
+    Win32OverlayBounds Win32CommandLineOptions::GetOverlayBounds() const {
+        return OverlayBounds;
+    }
+
+    /// Gets whether --overlay-background was supplied to override the profile's overlay clear behavior.
+    bool Win32CommandLineOptions::HasOverlayBackground() const {
+        return OverlayBackgroundSupplied;
+    }
+
+    /// Gets the overlay background requested through --overlay-background; only meaningful when
+    /// HasOverlayBackground() is true.
+    Win32OverlayBackground Win32CommandLineOptions::GetOverlayBackground() const {
+        return OverlayBackground;
+    }
+
+    /// Gets whether --hit-test-probe was supplied to request a one-pixel alpha sample instead of a normal run.
+    bool Win32CommandLineOptions::HasHitTestProbe() const {
+        return HitTestProbeSupplied;
+    }
+
+    /// Gets the probed pixel's client-area X coordinate; only meaningful when HasHitTestProbe() is true.
+    int Win32CommandLineOptions::GetHitTestProbeX() const {
+        return HitTestProbeX;
+    }
+
+    /// Gets the probed pixel's client-area Y coordinate; only meaningful when HasHitTestProbe() is true.
+    int Win32CommandLineOptions::GetHitTestProbeY() const {
+        return HitTestProbeY;
+    }
+
     /// Gets whether arguments were supplied without any known flag, so they were ignored instead of validated.
     bool Win32CommandLineOptions::HasIgnoredArguments() const {
         return ArgumentsIgnored;
@@ -246,10 +331,13 @@ namespace helengine::windows {
     }
 
     /// Returns whether the argument is one of the regression flags (--scene, --frames, --fixed-delta, --capture,
-    /// --idle-throttle, --idle-after-ms, --idle-fps).
+    /// --idle-throttle, --idle-after-ms, --idle-fps, --window-mode, --overlay-bounds, --overlay-background,
+    /// --hit-test-probe).
     bool Win32CommandLineOptions::IsKnownFlag(const std::wstring& argument) {
         return argument == L"--scene" || argument == L"--frames" || argument == L"--fixed-delta" || argument == L"--capture"
-            || argument == L"--idle-throttle" || argument == L"--idle-after-ms" || argument == L"--idle-fps";
+            || argument == L"--idle-throttle" || argument == L"--idle-after-ms" || argument == L"--idle-fps"
+            || argument == L"--window-mode" || argument == L"--overlay-bounds" || argument == L"--overlay-background"
+            || argument == L"--hit-test-probe";
     }
 
     /// Converts a UTF-16 command-line value to UTF-8 so it can be compared with engine scene ids and logged.
@@ -332,5 +420,79 @@ namespace helengine::windows {
     /// Parses an --idle-fps value that must be a whole number from 1 to 30, throwing std::invalid_argument otherwise.
     int Win32CommandLineOptions::ParseIdleFramesPerSecond(const std::wstring& value) {
         return ParseBoundedInteger(value, 1, 30, "Command-line flag --idle-fps requires a whole number from 1 to 30, got: ");
+    }
+
+    /// Parses a --window-mode value that must be exactly "normal" or "overlay", throwing std::invalid_argument otherwise.
+    Win32WindowMode Win32CommandLineOptions::ParseWindowMode(const std::wstring& value) {
+        if (value == L"normal") {
+            return Win32WindowMode::Normal;
+        }
+
+        if (value == L"overlay") {
+            return Win32WindowMode::Overlay;
+        }
+
+        throw std::invalid_argument("Command-line flag --window-mode requires \"normal\" or \"overlay\", got: " + ConvertToUtf8(value));
+    }
+
+    /// Parses an --overlay-bounds value that must be exactly "monitor" or "profile", throwing std::invalid_argument otherwise.
+    Win32OverlayBounds Win32CommandLineOptions::ParseOverlayBounds(const std::wstring& value) {
+        if (value == L"monitor") {
+            return Win32OverlayBounds::Monitor;
+        }
+
+        if (value == L"profile") {
+            return Win32OverlayBounds::Profile;
+        }
+
+        throw std::invalid_argument("Command-line flag --overlay-bounds requires \"monitor\" or \"profile\", got: " + ConvertToUtf8(value));
+    }
+
+    /// Parses an --overlay-background value that must be exactly "camera" or "transparent", throwing std::invalid_argument otherwise.
+    Win32OverlayBackground Win32CommandLineOptions::ParseOverlayBackground(const std::wstring& value) {
+        if (value == L"camera") {
+            return Win32OverlayBackground::Camera;
+        }
+
+        if (value == L"transparent") {
+            return Win32OverlayBackground::Transparent;
+        }
+
+        throw std::invalid_argument("Command-line flag --overlay-background requires \"camera\" or \"transparent\", got: " + ConvertToUtf8(value));
+    }
+
+    /// Parses a --hit-test-probe value that must be two base-10 non-negative integers separated by exactly one comma,
+    /// with both numbers fully consumed, throwing std::invalid_argument otherwise. Writes the parsed coordinates into
+    /// probeX and probeY.
+    void Win32CommandLineOptions::ParseHitTestProbe(const std::wstring& value, int& probeX, int& probeY) {
+        std::string invalidMessage = "Command-line flag --hit-test-probe requires two non-negative whole numbers separated by a comma, got: " + ConvertToUtf8(value);
+
+        std::size_t commaIndex = value.find(L',');
+        if (commaIndex == std::wstring::npos || value.find(L',', commaIndex + 1) != std::wstring::npos) {
+            throw std::invalid_argument(invalidMessage);
+        }
+
+        std::wstring xText = value.substr(0, commaIndex);
+        std::wstring yText = value.substr(commaIndex + 1);
+        if (xText.empty() || yText.empty() || std::iswspace(xText[0]) || std::iswspace(yText[0])) {
+            throw std::invalid_argument(invalidMessage);
+        }
+
+        wchar_t* xEnd = nullptr;
+        errno = 0;
+        long parsedX = std::wcstol(xText.c_str(), &xEnd, 10);
+        if (xEnd != xText.c_str() + xText.size() || errno == ERANGE || parsedX < 0) {
+            throw std::invalid_argument(invalidMessage);
+        }
+
+        wchar_t* yEnd = nullptr;
+        errno = 0;
+        long parsedY = std::wcstol(yText.c_str(), &yEnd, 10);
+        if (yEnd != yText.c_str() + yText.size() || errno == ERANGE || parsedY < 0) {
+            throw std::invalid_argument(invalidMessage);
+        }
+
+        probeX = static_cast<int>(parsedX);
+        probeY = static_cast<int>(parsedY);
     }
 }
