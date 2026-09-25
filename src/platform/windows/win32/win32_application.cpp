@@ -1297,7 +1297,7 @@ namespace helengine::windows {
 
             return profile;
         } catch (const RuntimePlayerProfileConfigurationError& configurationError) {
-            WriteLifecycleLog(configurationError.what());
+            // Run()'s Win32ExitRequest handler logs the message, so it is not logged here as well.
             throw Win32ExitRequest(2, configurationError.what());
         }
     }

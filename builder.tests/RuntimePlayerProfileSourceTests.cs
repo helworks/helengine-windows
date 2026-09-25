@@ -283,7 +283,8 @@ public sealed class RuntimePlayerProfileSourceTests {
 
     /// <summary>
     /// Verifies Win32Application::ResolveRuntimePlayerProfile catches RuntimePlayerProfileConfigurationError and
-    /// converts it into a Win32ExitRequest with exit code 2, matching how other deliberate startup failures exit.
+    /// converts it into a Win32ExitRequest with exit code 2, matching how other deliberate startup failures exit. The
+    /// catch must not log the message itself: Run()'s Win32ExitRequest handler already logs it once.
     /// </summary>
     [Fact]
     public void Win32Application_converts_configuration_error_into_exit_code_two() {
@@ -302,6 +303,10 @@ public sealed class RuntimePlayerProfileSourceTests {
 
         int exitRequestIndex = applicationSource.IndexOf("Win32ExitRequest(2,", catchIndex, StringComparison.Ordinal);
         Assert.True(exitRequestIndex > catchIndex, "The configuration-error catch must throw Win32ExitRequest(2, ...).");
+        Assert.Contains("throw Win32ExitRequest(2, configurationError.what());", applicationSource, StringComparison.Ordinal);
+
+        string catchToThrowText = applicationSource.Substring(catchIndex, exitRequestIndex - catchIndex);
+        Assert.DoesNotContain("WriteLifecycleLog", catchToThrowText, StringComparison.Ordinal);
 
         Assert.Contains(
             "#include \"platform/windows/runtime/runtime_player_profile_configuration_error.hpp\"",
