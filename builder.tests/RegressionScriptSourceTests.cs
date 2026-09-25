@@ -159,6 +159,27 @@ public sealed class RegressionScriptSourceTests {
     }
 
     /// <summary>
+    /// Ensures Verify checks the idle scenario against the minimums recorded in the manifest's idle entry rather than
+    /// the script's current constants, which Record keeps writing into the entry, and fails with a re-record request when
+    /// the entry lacks either minimum.
+    /// </summary>
+    [Fact]
+    public void RegressionScript_VerifiesIdleThresholdsFromTheManifest() {
+        string scriptSource = ReadRegressionScriptSource();
+
+        Assert.Contains("[string]$MinimumIdleFrames", scriptSource, StringComparison.Ordinal);
+        Assert.Contains("[string]$MinimumElapsedMilliseconds", scriptSource, StringComparison.Ordinal);
+        Assert.Contains("@('check-idle', $idleRun.Fingerprint, $MinimumIdleFrames, $MinimumElapsedMilliseconds)", scriptSource, StringComparison.Ordinal);
+        Assert.DoesNotContain("$script:idleMinimumIdleFrames, $script:idleMinimumElapsedMilliseconds)", scriptSource, StringComparison.Ordinal);
+
+        Assert.Contains("minIdleFrames = [int]$idleMinimumIdleFrames; minElapsedMs = [int]$idleMinimumElapsedMilliseconds", scriptSource, StringComparison.Ordinal);
+        Assert.Contains("-MinimumIdleFrames $idleMinimumIdleFrames -MinimumElapsedMilliseconds $idleMinimumElapsedMilliseconds", scriptSource, StringComparison.Ordinal);
+        Assert.Contains("$null -eq $recordedIdleScene.minIdleFrames -or $null -eq $recordedIdleScene.minElapsedMs", scriptSource, StringComparison.Ordinal);
+        Assert.Contains("idle entry lacks minIdleFrames or minElapsedMs (re-record required)", scriptSource, StringComparison.Ordinal);
+        Assert.Contains("-MinimumIdleFrames \"$($recordedIdleScene.minIdleFrames)\" -MinimumElapsedMilliseconds \"$($recordedIdleScene.minElapsedMs)\"", scriptSource, StringComparison.Ordinal);
+    }
+
+    /// <summary>
     /// Ensures the regression README documents the idle scenario, the physics caveat and the check-idle command.
     /// </summary>
     [Fact]

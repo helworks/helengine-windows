@@ -20,6 +20,8 @@ Modes (exactly one is required):
 Record and Verify both run the opt-in idle-throttle scenario once on the smoke scene (30 frames with --idle-throttle on
 --idle-after-ms 1 --idle-fps 10): the run must pass the regression tool's check-idle command (throttle on, no Present
 failures, at least 25 idle frames, at least 2400 ms elapsed) and its capture must match the smoke scene's golden.
+Record writes those minimums into the manifest's idle entry, and Verify checks the minimums recorded there (an entry
+without them fails with a re-record request).
 
 Every scene run is limited to 120 seconds; a hung player is killed and reported as FAIL scene <id> timeout.
 The work root is marked with a .helengine-regression-workroot file; a non-empty folder without it is refused.
@@ -62,9 +64,8 @@ if ($selectedModeCount -ne 1) {
 }
 
 # The functions below read these script-level values: $RepoRoot, $WorkRoot, $utf8WithoutBom, $CheckResults,
-# $playerOutputPath, $playerExecutablePath, $regressionToolPath, $idlePlayerArguments, $idleMinimumIdleFrames and
-# $idleMinimumElapsedMilliseconds. Progress lines use Write-Host so that they never become part of a function's
-# return value.
+# $playerOutputPath, $playerExecutablePath, $regressionToolPath and $idlePlayerArguments. Progress lines use Write-Host
+# so that they never become part of a function's return value.
 
 <#
 .SYNOPSIS
@@ -305,7 +306,7 @@ Runs the opt-in idle-throttle scenario once on a scene and records its checks as
 .DESCRIPTION
 Launches the player with the fixed 30-frame arguments plus the idle-throttle flags ($script:idlePlayerArguments), then
 runs the regression tool's check-idle command on the run's HOST_FINGERPRINT line (idle throttle on, no Present
-failures, at least $script:idleMinimumIdleFrames idle frames and $script:idleMinimumElapsedMilliseconds elapsed) and
+failures, at least MinimumIdleFrames idle frames and MinimumElapsedMilliseconds elapsed) and
 compares the capture with the scene's golden, because throttling must never change what a frame renders. The
 fingerprint is deliberately not compared with a recorded one: its idle and active frame counts and its elapsed time
 differ from a normal run by design. When GoldenPath is empty the scene has no golden (it was recorded unstable), so the
@@ -324,7 +325,13 @@ function Invoke-IdleScenario {
 
         [Parameter(Mandatory = $true)]
         [AllowEmptyString()]
-        [string]$GoldenPath
+        [string]$GoldenPath,
+
+        [Parameter(Mandatory = $true)]
+        [string]$MinimumIdleFrames,
+
+        [Parameter(Mandatory = $true)]
+        [string]$MinimumElapsedMilliseconds
     )
 
     # A diff image left by an earlier run must never be mistaken for this run's, so it is deleted before the run.
@@ -336,7 +343,7 @@ function Invoke-IdleScenario {
         return
     }
 
-    $checkIdleRun = Invoke-RegressionTool -ToolArguments @('check-idle', $idleRun.Fingerprint, $script:idleMinimumIdleFrames, $script:idleMinimumElapsedMilliseconds)
+    $checkIdleRun = Invoke-RegressionTool -ToolArguments @('check-idle', $idleRun.Fingerprint, $MinimumIdleFrames, $MinimumElapsedMilliseconds)
     if ($checkIdleRun.ExitCode -eq 0 -and "$($checkIdleRun.Lines -join ' ')" -match '^PASS (.+)$') {
         Add-CheckResult -Status PASS -Kind idle -Name $SceneId -Detail $Matches[1]
     }
@@ -922,7 +929,7 @@ if ($Record) {
     if ($unstableSceneIds.Contains($smokeSceneId)) {
         $idleGoldenPath = ''
     }
-    Invoke-IdleScenario -SceneId $smokeSceneId -CapturePath $idleCapturePath -DiffPath $idleDiffPath -GoldenPath $idleGoldenPath
+    Invoke-IdleScenario -SceneId $smokeSceneId -CapturePath $idleCapturePath -DiffPath $idleDiffPath -GoldenPath $idleGoldenPath -MinimumIdleFrames $idleMinimumIdleFrames -MinimumElapsedMilliseconds $idleMinimumElapsedMilliseconds
     $manifestScenes.Add([ordered]@{ id = $smokeSceneId; kind = 'idle'; minIdleFrames = [int]$idleMinimumIdleFrames; minElapsedMs = [int]$idleMinimumElapsedMilliseconds })
 
     # 12R. Write the staged manifest: run settings, each scene's check kind, status and host fingerprint, and the
@@ -1075,6 +1082,9 @@ else {
     if ($null -eq $recordedIdleScene -or $recordedIdleScene.id -ne $smokeSceneId) {
         Add-CheckResult -Status FAIL -Kind idle -Name $smokeSceneId -Detail "idle entry missing from manifest (re-record required): $manifestPath"
     }
+    elseif ($null -eq $recordedIdleScene.minIdleFrames -or $null -eq $recordedIdleScene.minElapsedMs) {
+        Add-CheckResult -Status FAIL -Kind idle -Name $smokeSceneId -Detail "idle entry lacks minIdleFrames or minElapsedMs (re-record required): $manifestPath"
+    }
     else {
         # The idle diff goes into the diffs folder wiped above, beside the scene diffs.
         $idleDiffPath = Join-Path $diffsRootPath "$($smokeSceneId.Replace('/', '__')).idle.diff.png"
@@ -1082,7 +1092,9 @@ else {
         if ($unstableSceneIds.Contains($smokeSceneId)) {
             $idleGoldenPath = ''
         }
-        Invoke-IdleScenario -SceneId $smokeSceneId -CapturePath $idleCapturePath -DiffPath $idleDiffPath -GoldenPath $idleGoldenPath
+        # The minimums come from the manifest's idle entry, so a verify checks what was recorded, not the script's
+        # current constants (Record writes those constants into the entry).
+        Invoke-IdleScenario -SceneId $smokeSceneId -CapturePath $idleCapturePath -DiffPath $idleDiffPath -GoldenPath $idleGoldenPath -MinimumIdleFrames "$($recordedIdleScene.minIdleFrames)" -MinimumElapsedMilliseconds "$($recordedIdleScene.minElapsedMs)"
     }
 
     # 13V. Check each suite run's outcome and executed-test count against the recorded count (an errored, aborted or
