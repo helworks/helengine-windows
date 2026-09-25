@@ -19,13 +19,25 @@ frame does not depend on wall-clock time.
 ## Thresholds
 
 - A pixel **differs** when any of its B, G or R channels differs by more than 8 levels. Alpha is ignored because the
-  swap chain uses `ALPHA_MODE_IGNORE`.
+  swap chain uses `ALPHA_MODE_IGNORE`: the tool reads every capture as fully opaque, so goldens are opaque PNGs.
 - A golden check **fails** when more than 0.1% of the pixels differ, or when the sizes differ. On failure, a diff
   image (differing pixels magenta, the rest greyscale) is written to `<WorkRoot>\diffs\<scene>.diff.png`.
 - A frame is **blank** when one color covers at least 99.9% of its pixels.
 
 Goldens are machine-local: they are only valid on the machine, GPU and driver that recorded them, and other GPUs or
 drivers are not expected to match.
+
+## Current record
+
+The committed goldens and baselines were recorded on 2026-09-24 on the owner's development machine, from this
+branch at commit `f8a92cb` (feature/regression-safety-net), with DemoDisc at `5cc124eec06b8db729b2f9b15d99d26cb1ca8cc3`
+and helengine at `d98d00208a040dd00352a0b6417eed27d387af07` with uncommitted changes (`helengineDirty: true`).
+
+- All 11 rendering scenes were stable across the two record runs (0 differing pixels), so every scene has a golden
+  and no scene is marked `unstable`.
+- Baselines: `helengine.editor.tests` 46 failing, `helengine.render.validation.tests` 1 failing,
+  `helengine.windows.builder.tests` 0 failing.
+- After the record, `-Verify` passed with every golden at 0 differing pixels on repeated runs.
 
 ## How to run
 
@@ -88,3 +100,13 @@ helengine moved on purpose). Never re-record just to make a failing `-Verify` pa
   bin/obj output is written into that checkout as for any normal `dotnet test`.
 - The net covers the Windows player host and DemoDisc's rendering scenes only; DemoDisc's menu and gameplay scenes
   are not built.
+- **Flaky editor tests.** In the full `helengine.editor.tests` run, the keyboard-focus tests
+  `SceneHierarchyPanelKeyboardFocusTests` (the four arrow-key tests) and
+  `EditorSessionUndoRedoIntegrationTests.Keyboard_focus_update_component_routes_delete_into_the_session_handler`
+  pass in some runs and fail in others; run on their own, they always pass. When the four arrow-key tests fail,
+  `-Verify` reports `FAIL suite helengine.editor.tests 4 new failure(s)` although nothing in this checkout changed.
+  The probable cause is shared state that leaks between tests in helengine:
+  `TextBoxComponent.FocusedTextEntry` is a process-wide static, and while a text box left focused by an earlier
+  test holds it, `EditorKeyboardFocusUpdateComponent` ignores exactly the arrow keys and Delete. The fix belongs
+  in helengine. The baselines are not widened to hide these tests. Before you blame this checkout for that
+  failure, re-run `-Verify` or run the five tests on their own.

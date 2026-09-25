@@ -1,0 +1,72 @@
+{
+    "frames":  30,
+    "fixedDelta":  0.016666,
+    "width":  640,
+    "height":  360,
+    "projectSource":  "C:\\dev\\helprojs\\demodisc",
+    "projectCommit":  "5cc124eec06b8db729b2f9b15d99d26cb1ca8cc3",
+    "helengineCommit":  "d98d00208a040dd00352a0b6417eed27d387af07",
+    "helengineDirty":  true,
+    "scenes":  [
+                   {
+                       "id":  "axis_test",
+                       "kind":  "smoke",
+                       "status":  "stable"
+                   },
+                   {
+                       "id":  "axis_test",
+                       "kind":  "golden",
+                       "status":  "stable"
+                   },
+                   {
+                       "id":  "axis_test2",
+                       "kind":  "golden",
+                       "status":  "stable"
+                   },
+                   {
+                       "id":  "colored_cube_grid",
+                       "kind":  "golden",
+                       "status":  "stable"
+                   },
+                   {
+                       "id":  "cube_test",
+                       "kind":  "golden",
+                       "status":  "stable"
+                   },
+                   {
+                       "id":  "directional_shadow_plaza",
+                       "kind":  "golden",
+                       "status":  "stable"
+                   },
+                   {
+                       "id":  "pbr_material_gallery",
+                       "kind":  "golden",
+                       "status":  "stable"
+                   },
+                   {
+                       "id":  "pbr_shadow_theater",
+                       "kind":  "golden",
+                       "status":  "stable"
+                   },
+                   {
+                       "id":  "pbr_textured_showcase",
+                       "kind":  "golden",
+                       "status":  "stable"
+                   },
+                   {
+                       "id":  "software_path_tracer",
+                       "kind":  "golden",
+                       "status":  "stable"
+                   },
+                   {
+                       "id":  "test_scene_matrix_render",
+                       "kind":  "golden",
+                       "status":  "stable"
+                   },
+                   {
+                       "id":  "textured_cube_grid",
+                       "kind":  "golden",
+                       "status":  "stable"
+                   }
+               ]
+}
