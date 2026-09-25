@@ -1,20 +1,26 @@
 # Windows player regression net
 
 `scripts\run-regression.ps1` builds **this checkout's** Windows player against an isolated copy of DemoDisc's
-committed HEAD. It then checks that the player still renders what it rendered when the goldens were recorded, and
-that the editor-side test suites have no new failures.
+committed HEAD. It then checks that the player still renders what it rendered when the goldens were recorded, that
+its host layer (swap chain, window, Present) is unchanged, and that the editor-side test suites have no new failures.
 
 ## What is checked
 
 | Check | Scenes / suites | Passes when |
 |---|---|---|
+| `scene` | Every scene run | The player exits within 120 seconds. A hung player is killed and reported as `FAIL scene <id> timeout`. |
 | `smoke` | The first rendering scene in build order (currently `axis_test`) | The player exits with code 0, writes a capture, and the capture is not blank. |
 | `golden` | Every DemoDisc rendering scene in the committed windows scene package (`scenes/rendering/*.helen`), including the smoke scene | The capture matches `regression\golden\<scene>.png` within the thresholds below. |
-| `suite` | `helengine.editor.tests`, `helengine.render.validation.tests` (both from `-HelengineRoot`), `helengine.windows.builder.tests` (this checkout) | The set of failing tests adds no test that is missing from `regression\baselines\<suite>.failing.txt`. Known failures stay tolerated; fixed ones are only reported. Tests in `<suite>.flaky.txt` only produce a `WARN` (see "Known flaky tests"). |
+| `fingerprint` | Every scene run | The run's `HOST_FINGERPRINT` line matches the recorded one field for field, `presentCount` is at least `frames` and `presentFailures` is 0 (see "Host fingerprint"). |
+| `pacing` | Every scene run | Never fails. `WARN pacing <scene> recorded=<x>ms actual=<y>ms` when the run took more than 3 times, or less than a third of, the recorded wall-clock time. |
+| `suite` | `helengine.editor.tests`, `helengine.render.validation.tests` (both from `-HelengineRoot`), `helengine.windows.builder.tests` (this checkout) | The run neither errored nor aborted, executed at least 95% of the tests recorded in `<suite>.executed.txt` (any other difference is a `WARN`), and its set of failing tests adds no test that is missing from `regression\baselines\<suite>.failing.txt`. Known failures stay tolerated; fixed ones are only reported. Tests in `<suite>.flaky.txt` only produce a `WARN` (see "Known flaky tests"). |
 | `manifest` | `regression\golden\manifest.json` | It exists and was recorded with the same run settings. |
 
 Every scene runs in a 640x360 window with `--frames 30 --fixed-delta 0.016666 --capture <bmp>`, so the captured
 frame does not depend on wall-clock time.
+
+A test counts as failing when its TRX outcome is anything other than `Passed` or `NotExecuted` (so `Failed`,
+`Error`, `Timeout`, `Aborted` and unknown outcomes all count).
 
 ## Thresholds
 
@@ -27,17 +33,58 @@ frame does not depend on wall-clock time.
 Goldens are machine-local: they are only valid on the machine, GPU and driver that recorded them, and other GPUs or
 drivers are not expected to match.
 
+## Host fingerprint
+
+With `--frames`, and only then, the player writes one line to `helengine_windows.startup.log` after the last frame is
+presented and before it quits:
+
+```
+HOST_FINGERPRINT format=87 alpha=3 swapEffect=4 buffers=2 scaling=0 style=0x14CF0000 exStyle=0x00000100 client=640x360 presentCount=30 presentFailures=0 frames=30 elapsedMs=111
+```
+
+- `format`, `alpha`, `swapEffect`, `buffers` and `scaling` come from `IDXGISwapChain1::GetDesc1`, as the numeric
+  `DXGI_FORMAT`, `DXGI_ALPHA_MODE`, `DXGI_SWAP_EFFECT` and `DXGI_SCALING` values (in the line above: 87 is
+  `DXGI_FORMAT_B8G8R8A8_UNORM`, alpha 3 is `DXGI_ALPHA_MODE_IGNORE`, swap effect 4 is `DXGI_SWAP_EFFECT_FLIP_DISCARD`
+  and scaling 0 is `DXGI_SCALING_STRETCH`).
+- `style` and `exStyle` are the main window's `GWL_STYLE` and `GWL_EXSTYLE`; `client` is its client rectangle.
+- `presentCount` is `IDXGISwapChain::GetLastPresentCount`. `presentFailures` counts `Present` calls that returned a
+  failing HRESULT; the player logs each distinct failing HRESULT once.
+- `frames` is the number of rendered frames; `elapsedMs` is the wall-clock time from the first to the last Present.
+
+`-Record` stores every field except `elapsedMs` under the scene's `fingerprint` entry in `manifest.json`, and
+`elapsedMs` next to it. It also requires run a to be healthy and run b to match run a. `-Verify` prints
+`FAIL fingerprint <scene> <field> recorded=<x> actual=<y>` for every differing field. Without arguments the player
+never creates the fingerprint and never writes the line.
+
+## What this net does NOT catch
+
+- Resize and `ResizeBuffers` paths: the window is never resized during a run.
+- On-screen composition beyond the back buffer: what a DirectComposition commit or the DWM finally shows is not
+  captured, only the swap chain's back buffer before Present.
+- Exact frame pacing: `elapsedMs` only produces a coarse `WARN pacing` when it moves by more than a factor of three.
+- The Release configuration: the net builds and runs the Debug player only.
+- Different GPUs and drivers: the goldens are only valid on the machine that recorded them.
+- UI and menu flows: the smoke scene is `axis_test`, and DemoDisc's menu and gameplay scenes are not built.
+
 ## Current record
 
-The committed goldens and baselines were recorded on 2026-09-24 on the owner's development machine, from this
-branch at commit `f8a92cb` (feature/regression-safety-net), with DemoDisc at `5cc124eec06b8db729b2f9b15d99d26cb1ca8cc3`
-and helengine at `d98d00208a040dd00352a0b6417eed27d387af07` with uncommitted changes (`helengineDirty: true`).
+The goldens were first recorded on 2026-09-24 from commit `f8a92cb`. They were re-recorded on 2026-09-25 on the
+owner's development machine, from this branch at commit `d7defda` (feature/regression-safety-net), to add the host
+fingerprints, the executed-test counts and the provenance hashes to the manifest. DemoDisc was at
+`5cc124eec06b8db729b2f9b15d99d26cb1ca8cc3` and helengine at `d98d00208a040dd00352a0b6417eed27d387af07` with
+uncommitted changes (`helengineDirty: true`).
 
 - All 11 rendering scenes were stable across the two record runs (0 differing pixels), so every scene has a golden
-  and no scene is marked `unstable`.
-- Baselines: `helengine.editor.tests` 46 failing, `helengine.render.validation.tests` 1 failing,
-  `helengine.windows.builder.tests` 0 failing.
-- After the record, `-Verify` passed with every golden at 0 differing pixels on repeated runs.
+  and no scene is marked `unstable`. The re-recorded golden PNGs are byte-identical to the first record.
+- Every scene's fingerprint: `format=87 alpha=3 swapEffect=4 buffers=2 scaling=0 style=0x14CF0000
+  exStyle=0x00000100 client=640x360 presentCount=30 presentFailures=0 frames=30`, `elapsedMs` 117 to 121.
+- Baselines: `helengine.editor.tests` 45 failing of 3134 executed, `helengine.render.validation.tests` 1 failing of
+  1 executed, `helengine.windows.builder.tests` 0 failing of 91 executed. The known-flaky
+  `Keyboard_focus_update_component_routes_delete_into_the_session_handler` happened to pass during this record, so
+  it left the editor baseline (46 -> 45). It is still in the flaky list, so it only produces a `WARN` when it fails.
+- DemoDisc's `user_settings\generated_code` holds only `obj` files, which the copy leaves out, so
+  `generatedCodeHash` is the SHA-256 of an empty list.
+- After the record, `-Verify` passed twice with every golden at 0 differing pixels and every fingerprint matching.
 
 ## How to run
 
@@ -46,31 +93,51 @@ powershell -File scripts\run-regression.ps1 -Verify
 ```
 
 The run builds the player (through `helengine\scripts\build-platform.ps1`), runs every scene through
-`scripts\launch_in_emulator.ps1`, and runs the three test suites. It prints one line per check
-(`PASS|FAIL|SKIP|WARN <kind> <name> <detail>`), then `RESULT: PASS` or `RESULT: FAIL (<n> failing)`. Only `FAIL`
-lines count toward the result. It exits 0 only on PASS.
+`scripts\launch_in_emulator.ps1` (with `-Wait -TimeoutSeconds 120`), and runs the three test suites. It prints one
+line per check (`PASS|FAIL|SKIP|WARN <kind> <name> <detail>`), then `RESULT: PASS` or `RESULT: FAIL (<n> failing)`.
+Only `FAIL` lines count toward the result. It exits 0 only on PASS.
 
 Optional parameters: `-HelengineRoot` (default `C:\dev\helworks\helengine`), `-ProjectSource` (default
 `C:\dev\helprojs\demodisc`) and `-WorkRoot` (default `C:\dev\helworks\builds\helengine-windows\regression`). The
-work root must not overlap the project source, the helengine checkout or this checkout; the script refuses to run
-if it does.
+work root must not overlap the project source, the helengine checkout or this checkout. The script marks every work
+root it uses with a `.helengine-regression-workroot` file and refuses a non-empty folder without that marker,
+because it deletes and rewrites folders under the work root.
 
 Useful outputs under the work root: `captures\verify\*.bmp`, `diffs\*.diff.png`, `trx\<suite>.trx`,
-`trx\<suite>.log`, and `player\helengine_windows.startup.log`. When the player exits with a non-zero code, the
-script prints the last 20 lines of the startup log.
+`trx\<suite>.log`, `record-staging\` (the last record) and `player\helengine_windows.startup.log`. When the player
+exits with a non-zero code or times out, the script prints the last 20 lines of the startup log.
+
+While the net runs:
+
+- Do not use the keyboard or mouse on the player window; input changes what the scenes render.
+- If you run it from the main checkout (not a worktree), close the editor first: the script rebuilds
+  `builder\bin\Debug\net9.0\helengine.windows.builder.dll`, which the real `platforms.json` also points at.
+- The net builds and runs the **Debug** player only.
 
 ## Provenance warnings
 
-`manifest.json` records the provenance of the goldens and baselines: `projectSource`, `projectCommit` (DemoDisc's
-HEAD), `helengineCommit` (`git rev-parse HEAD` of `-HelengineRoot`) and `helengineDirty` (whether
-`git status --porcelain` was non-empty). `-Verify` prints:
+`manifest.json` records the provenance of the goldens and baselines:
+
+- `projectSource` and `projectCommit` (DemoDisc's HEAD);
+- `buildConfigSourceHash`: the SHA-256 of DemoDisc's own `user_settings\build_config.json`, read before the copy's
+  build config is overridden;
+- `generatedCodeHash`: the SHA-256 of DemoDisc's `user_settings\generated_code` tree (every file's relative path and
+  SHA-256, sorted, then hashed; `bin` and `obj` folders are left out as in the copy);
+- `helengineCommit` (`git rev-parse HEAD` of `-HelengineRoot`) and `helengineDirty` (whether
+  `git status --porcelain` was non-empty);
+- `helengineWorkingTreeHash`: the SHA-256 of `git diff HEAD` plus the sorted `git ls-files --others --exclude-standard`
+  list of `-HelengineRoot`, so two different uncommitted states can be told apart.
+
+`-Verify` prints:
 
 - `WARN project changed since record: <old> -> <new>` when DemoDisc's HEAD has moved;
-- `WARN helengine changed since record: ...` when the helengine commit or its dirty state differs.
+- `WARN helengine changed since record: ...` when the helengine commit or its dirty state differs;
+- `WARN <input> changed since record ...` for each of `buildConfigSourceHash`, `generatedCodeHash` and
+  `helengineWorkingTreeHash` that differs.
 
 A WARN does not fail the run, and every comparison still runs. It tells you that a failure may come from the
-project or from helengine rather than from this checkout. Two different uncommitted helengine states both read as
-`dirty=True`, so they do not produce a WARN.
+project or from helengine rather than from this checkout. The untracked-file part of `helengineWorkingTreeHash`
+covers only the file names, not their contents.
 
 ## Re-recording (deliberately)
 
@@ -78,18 +145,20 @@ project or from helengine rather than from this checkout. Two different uncommit
 powershell -File scripts\run-regression.ps1 -Record
 ```
 
-Only re-record when a rendering change is **intended**, or when the WARN lines above explain a failure (DemoDisc or
-helengine moved on purpose). Never re-record just to make a failing `-Verify` pass.
+Only re-record when a rendering or host change is **intended**, or when the WARN lines above explain a failure
+(DemoDisc or helengine moved on purpose). Never re-record just to make a failing `-Verify` pass.
 
 1. Run `-Verify` first and look at the `diffs\*.diff.png` images to confirm that the changes are the intended ones.
 2. Run `-Record`. It runs every scene twice (`captures\a` and `captures\b`). A scene whose two captures do not match
    within the thresholds is marked `unstable` in the manifest and gets no golden; `-Verify` then prints
-   `SKIP golden <scene> unstable` for it. Record writes the goldens and `manifest.json` (listing the unstable scenes)
-   before it runs the test suites, then writes each suite's baseline after that suite, and still exits 0 when every
-   build and run succeeded.
+   `SKIP golden <scene> unstable` for it. Record writes everything (goldens, `manifest.json`, and each suite's
+   `<suite>.failing.txt` and `<suite>.executed.txt`) to `<WorkRoot>\record-staging` first. Only when the whole
+   record had no `FAIL` does it replace `regression\golden\*.png` and `manifest.json` and overwrite the baseline
+   files (the hand-maintained `<suite>.flaky.txt` lists are kept). On any `FAIL` the committed files stay untouched
+   and the script prints the staging path. A suite run that errored or aborted is a `FAIL` and is never recorded.
 3. Run `-Verify` twice to confirm that the new goldens pass with no false failures.
-4. Commit `regression\golden\*.png`, `regression\golden\manifest.json` and `regression\baselines\*.failing.txt`
-   in a commit of their own, and say in the message why they changed.
+4. Commit `regression\golden\*.png`, `regression\golden\manifest.json`, `regression\baselines\*.failing.txt` and
+   `regression\baselines\*.executed.txt` in a commit of their own, and say in the message why they changed.
 
 ## Known limitations
 
@@ -98,8 +167,8 @@ helengine moved on purpose). Never re-record just to make a failing `-Verify` pa
   running.
 - The editor-side suites run against `-HelengineRoot` as it is on disk, including uncommitted work there. Their
   bin/obj output is written into that checkout as for any normal `dotnet test`.
-- The net covers the Windows player host and DemoDisc's rendering scenes only; DemoDisc's menu and gameplay scenes
-  are not built.
+- The project source must not use Git LFS: `git archive` would export pointer files, so the script stops when the
+  extracted copy's `.gitattributes` contains `filter=lfs`.
 - Known-flaky tests are tolerated only when they are listed explicitly (see below).
 
 ## Known flaky tests

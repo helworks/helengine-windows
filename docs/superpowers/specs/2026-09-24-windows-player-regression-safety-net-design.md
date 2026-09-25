@@ -31,8 +31,10 @@ A new `Win32CommandLineOptions` class parses `CommandLineToArgvW(GetCommandLineW
 | `--fixed-delta <seconds>` | Calls `EngineCore->Update(seconds)` (the existing `Core.Update(double)` overload) instead of the wall-clock `Update()`, which makes the frames deterministic. It must be greater than 0. |
 | `--capture <path>` | After the last frame's Draw and before its Present, copies the back buffer to a staging texture and writes a 32-bit BMP to `<path>`. Requires `--frames`. |
 
-- Invalid or unknown flags write a clear error to the log and exit with code 2. They are never silently ignored.
+- Strict validation applies only when at least one known flag (`--scene`, `--frames`, `--fixed-delta`, `--capture`) is present. Then invalid, repeated or unknown arguments write a clear error to the log and exit with code 2.
+- When arguments are present but none of them is a known flag (for example an unquoted path that `CommandLineToArgvW` split into pieces), the player logs `Ignoring command-line arguments: <args>` once and continues exactly as without arguments. With zero arguments nothing is logged.
 - A capture or I/O failure exits with code 3.
+- With `--frames`, and only then, the player logs one `HOST_FINGERPRINT` line after the last frame is presented (see Revision 2).
 
 ## 2. Back-buffer capture
 
@@ -124,3 +126,16 @@ Consequences:
 - **Golden scenes.** Every scene in `assets\scenes\rendering\*.helen`. Scene ids use DemoDisc's own id format; the script derives it the same way DemoDisc's existing `build_config.json` entries for other platforms spell their ids (project-relative path under `assets\`, forward slashes, original casing).
 - **Engine version.** DemoDisc's `requiredEngineVersion` already matches the main manifest. The script still enforces the equality by copying the windows entry's `engineVersion` into the copy, which is harmless when they are already equal.
 - **Manifest provenance.** `manifest.json` also records `projectSource` and `projectCommit` (the DemoDisc HEAD). `-Verify` prints a WARN line when DemoDisc's HEAD differs from the recorded commit. Goldens are then stale by design, and re-recording is a deliberate act documented in `regression\README.md`.
+
+## Revision 2 (2026-09-25): final review fixes
+
+The whole-branch review found blind spots that subprojects 1–3 would hit first. This revision closes them; `regression\README.md` is the user-facing description.
+
+- **Arguments.** Strict validation only when a known flag is present; otherwise the arguments are logged once as ignored (§1).
+- **Host fingerprint.** In `--frames` mode the player logs `HOST_FINGERPRINT format=<DXGI format> alpha=<AlphaMode> swapEffect=<SwapEffect> buffers=<BufferCount> scaling=<Scaling> style=0x<GWL_STYLE> exStyle=0x<GWL_EXSTYLE> client=<w>x<h> presentCount=<GetLastPresentCount> presentFailures=<n> frames=<N> elapsedMs=<ms>` after the last Present. `DirectX11Presenter::RenderFrame` returns the Present HRESULT; the default path ignores it. Record stores every field except `elapsedMs` per scene in `manifest.json` (and `elapsedMs` beside it); Verify fails on any field difference, on `presentCount < frames` and on `presentFailures != 0`, and only prints `WARN pacing` when `elapsedMs` moves by more than a factor of three.
+- **Hung players.** `launch_in_emulator.ps1 -Wait -TimeoutSeconds <s>` (default 0, no timeout) kills the process, prints `EXIT_CODE=timeout` and exits 124. The script uses 120 seconds per scene run and reports `FAIL scene <id> timeout`.
+- **Truncated test runs.** Every TRX outcome except `Passed` and `NotExecuted` counts as failing. Record stores `<suite>.executed.txt`; Verify fails an `Error`/`Aborted` run or one below 95% of the recorded executed count, and warns on any other difference.
+- **Provenance.** The manifest also records `buildConfigSourceHash`, `generatedCodeHash` and `helengineWorkingTreeHash` (SHA-256 of `git diff HEAD` plus the sorted untracked-file list); Verify warns when one changed.
+- **Atomic record.** Record writes to `<WorkRoot>\record-staging` and replaces the committed goldens and baselines only when it had no FAIL.
+- **Work root and LFS guards.** The work root carries a `.helengine-regression-workroot` marker and a non-empty folder without it is refused; a project copy whose `.gitattributes` contains `filter=lfs` is refused at runtime.
+- **Documented limits.** The README lists what the net does not catch: resize/`ResizeBuffers`, composition beyond the back buffer, exact pacing, Release, other GPUs/drivers, and UI/menu flows.
