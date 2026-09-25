@@ -39,7 +39,10 @@
 #if __has_include("IAudioBackend.hpp")
 #include "platform/windows/win32/win32_audio_backend.hpp"
 #endif
+#include "platform/windows/win32/win32_activity_tracker.hpp"
 #include "platform/windows/win32/win32_exit_request.hpp"
+#include "platform/windows/win32/win32_idle_frame_pacer.hpp"
+#include "platform/windows/win32/win32_idle_throttle_settings.hpp"
 #include "platform/windows/win32/win32_input_bridge.hpp"
 #include "platform/windows/win32/win32_render_bridge.hpp"
 #include "platform/windows/win32/win32_window.hpp"
@@ -520,7 +523,10 @@ namespace helengine::windows {
           PendingSteadyStateCheckpoint(false),
           BepuDebugSnapshotStatusLogCount(0),
           CommandLineOptions(),
-          RenderedFrameCount(0)
+          RenderedFrameCount(0),
+          ActivityTracker(),
+          IdleFramePacer(),
+          CurrentFrameIsIdle(false)
 #if defined(HELENGINE_WINDOWS_DEBUG_RUNTIME_DIAGNOSTICS)
           , DebugAllocationBaselineCaptured(false),
           DebugAllocationBaselineState(),
@@ -551,6 +557,11 @@ namespace helengine::windows {
         delete EngineRenderManager3D;
         delete EngineRenderManager2D;
 #endif
+        // The tracker is destroyed before MainWindow (reverse declaration order), and the window's destructor still
+        // receives messages from DestroyWindow, so the window must stop referencing the tracker first.
+        if (ActivityTracker) {
+            MainWindow->SetActivityTracker(nullptr);
+        }
     }
 
     /// Boots the Win32 window and DirectX11 loop and returns the process exit code.
@@ -581,8 +592,12 @@ namespace helengine::windows {
             InitializeEngineCore();
             WriteLifecycleLog("Entering render loop.");
 
-            while (PumpMessages()) {
-                RenderFrame();
+            if (IdleFramePacer) {
+                RunIdleThrottledLoop();
+            } else {
+                while (PumpMessages()) {
+                    RenderFrame();
+                }
             }
         } catch (Exception* exception) {
             std::ostringstream messageBuilder;
@@ -662,7 +677,15 @@ namespace helengine::windows {
     /// Creates the main native window for the player host.
     void Win32Application::CreateMainWindow() {
         RuntimePlayerProfile profile = ResolveRuntimePlayerProfile();
+        Win32IdleThrottleSettings idleThrottleSettings = Win32IdleThrottleSettings::Resolve(profile, CommandLineOptions);
         MainWindow = std::make_unique<Win32Window>(L"HelEngine Windows Host", profile.ResolutionWidth, profile.ResolutionHeight);
+        if (idleThrottleSettings.IsEnabled()) {
+            ActivityTracker = std::make_unique<Win32ActivityTracker>();
+            IdleFramePacer = std::make_unique<Win32IdleFramePacer>(idleThrottleSettings);
+            MainWindow->SetActivityTracker(ActivityTracker.get());
+            std::string idleThrottleMessage = "Idle throttle configured: " + idleThrottleSettings.Describe();
+            WriteLifecycleLog(idleThrottleMessage.c_str());
+        }
         MainWindow->Create();
         MainWindow->Show();
         {
@@ -1793,6 +1816,83 @@ namespace helengine::windows {
             CollectWindowsTracyProfilerGpu();
             throw;
         }
+    }
+
+    /// Runs the opt-in idle-throttled render loop until WM_QUIT: while the player is idle it sleeps in
+    /// MsgWaitForMultipleObjectsEx until the next idle frame is due or a message arrives, and while it is active
+    /// it renders immediately like the default loop. Each iteration decides whether to wait, pumps messages (which
+    /// lets the activity tracker see any wake-up input), decides the mode of the frame again, and renders. When a
+    /// message that is not activity ends the wait before the idle frame is due, the loop waits again for the rest of
+    /// the interval instead of rendering early. The loop never spins: an idle iteration waits until one idle interval
+    /// after the previous frame started, even when RenderFrame returned early because the window has no client area,
+    /// and an active iteration with no client area also waits one idle interval before retrying.
+    void Win32Application::RunIdleThrottledLoop() {
+        long long lastFrameStartMilliseconds = Win32IdleFramePacer::ToMilliseconds(std::chrono::steady_clock::now());
+        while (true) {
+            long long waitCheckMilliseconds = Win32IdleFramePacer::ToMilliseconds(std::chrono::steady_clock::now());
+            long long lastActivityMilliseconds = Win32IdleFramePacer::ToMilliseconds(ActivityTracker->GetLastActivity());
+            Win32IdleFrameDecision waitDecision = IdleFramePacer->Decide(
+                waitCheckMilliseconds,
+                lastActivityMilliseconds,
+                lastFrameStartMilliseconds,
+                IsEngineKeepAwake());
+            int waitMilliseconds = waitDecision.WaitMilliseconds;
+            bool windowHasNoClientArea = MainWindow->GetClientWidth() <= 0 || MainWindow->GetClientHeight() <= 0;
+            if (waitDecision.Active && windowHasNoClientArea) {
+                waitMilliseconds = IdleFramePacer->GetIdleFrameIntervalMilliseconds();
+            }
+
+            if (waitMilliseconds > 0) {
+                HELENGINE_TRACY_ZONE_N("Frame.PacingAndIdle");
+                DWORD waitResult = MsgWaitForMultipleObjectsEx(0, nullptr, static_cast<DWORD>(waitMilliseconds), QS_ALLINPUT, MWMO_INPUTAVAILABLE);
+                if (waitResult == WAIT_FAILED) {
+                    throw std::runtime_error("MsgWaitForMultipleObjectsEx failed in the idle-throttled loop with error " + std::to_string(GetLastError()) + ".");
+                }
+            }
+
+            if (!PumpMessages()) {
+                break;
+            }
+
+            long long frameStartMilliseconds = Win32IdleFramePacer::ToMilliseconds(std::chrono::steady_clock::now());
+            long long frameActivityMilliseconds = Win32IdleFramePacer::ToMilliseconds(ActivityTracker->GetLastActivity());
+            Win32IdleFrameDecision frameDecision = IdleFramePacer->Decide(
+                frameStartMilliseconds,
+                frameActivityMilliseconds,
+                lastFrameStartMilliseconds,
+                IsEngineKeepAwake());
+            if (!frameDecision.Active && frameDecision.WaitMilliseconds > 0) {
+                // A message that is not activity woke the wait before the idle frame was due: go back to waiting
+                // for the rest of the interval instead of rendering early.
+                continue;
+            }
+
+            CurrentFrameIsIdle = !frameDecision.Active;
+            lastFrameStartMilliseconds = frameStartMilliseconds;
+            RenderFrame();
+        }
+    }
+
+    /// Returns whether the engine needs full-rate frames right now: physics will step this update (the previous
+    /// update's physics-step prediction is positive), or the scene manager reports an active scene transition or
+    /// pending scene operations. Returns false before the engine core is initialized or when the build has no
+    /// generated core.
+    bool Win32Application::IsEngineKeepAwake() const {
+#if __has_include("Core.hpp")
+        if (!EngineInitialized || EngineCore == nullptr) {
+            return false;
+        }
+
+        if (EngineCore->get_PredictedPhysicsStepSeconds() > 0.0) {
+            return true;
+        }
+
+        SceneManager* sceneManager = EngineCore->get_SceneManager();
+        return sceneManager != nullptr
+            && (sceneManager->get_IsSceneTransitionActive() || sceneManager->get_LastTracePendingOperationCount() > 0);
+#else
+        return false;
+#endif
     }
 
     /// Emits profiler plots from the core-owned snapshot without inventing unavailable runtime metrics.

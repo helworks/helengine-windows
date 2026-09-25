@@ -34,7 +34,9 @@ namespace helengine::windows {
     class DirectX11Bootstrap;
     class DirectX11HostFingerprint;
     class DirectX11Presenter;
+    class Win32ActivityTracker;
     class Win32AudioBackend;
+    class Win32IdleFramePacer;
     class Win32InputBackend;
     class Win32RenderManager2D;
     class Win32RenderManager3D;
@@ -177,6 +179,15 @@ namespace helengine::windows {
 
         /// Renders and presents the current frame.
         void RenderFrame();
+
+        /// Runs the opt-in idle-throttled render loop until WM_QUIT: while the player is idle it sleeps in
+        /// MsgWaitForMultipleObjectsEx until the next idle frame is due or a message arrives, and while it is active
+        /// it renders immediately like the default loop.
+        void RunIdleThrottledLoop();
+
+        /// Returns whether the engine needs full-rate frames right now: physics will step this update, or a scene
+        /// transition or scene operation is pending.
+        bool IsEngineKeepAwake() const;
 
         /// Writes one lifecycle message to the host console.
         void WriteLifecycleLog(const char* message) const;
@@ -365,6 +376,17 @@ namespace helengine::windows {
 
         /// Counts frames that reached Presenter->RenderFrame() while --frames is active, used to honor the frame limit and pick the capture frame; never advanced without --frames.
         int RenderedFrameCount;
+
+        /// Stores the activity tracker attached to the main window; null unless the idle throttle is enabled.
+        std::unique_ptr<Win32ActivityTracker> ActivityTracker;
+
+        /// Stores the idle frame pacer that drives RunIdleThrottledLoop; null unless the idle throttle is enabled, which
+        /// keeps Run() on the default loop.
+        std::unique_ptr<Win32IdleFramePacer> IdleFramePacer;
+
+        /// Stores whether the frame about to be rendered runs in idle mode; only RunIdleThrottledLoop sets it, so it
+        /// stays false in the default loop.
+        bool CurrentFrameIsIdle;
 
 #if defined(HELENGINE_WINDOWS_DEBUG_RUNTIME_DIAGNOSTICS) && __has_include("IRuntimeDiagnosticsProvider.hpp") && __has_include("RuntimeMemoryDiagnosticsSnapshot.hpp")
         /// Stores the debug-build Windows runtime diagnostics provider exposed to the shared core service.

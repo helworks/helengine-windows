@@ -1,5 +1,7 @@
 #include "platform/windows/win32/win32_window.hpp"
 
+#include "platform/windows/win32/win32_activity_tracker.hpp"
+
 #include <stdexcept>
 
 namespace helengine::windows {
@@ -9,7 +11,8 @@ namespace helengine::windows {
         , Width(width)
         , Height(height)
         , Handle(nullptr)
-        , MouseWheelDelta(0) {
+        , MouseWheelDelta(0)
+        , ActivityTracker(nullptr) {
     }
 
     /// Releases the native window if it is still alive.
@@ -80,8 +83,21 @@ namespace helengine::windows {
         return mouseWheelDelta;
     }
 
-    /// Handles window messages for this instance.
+    /// Attaches the activity tracker that observes every message this window receives; the window does not own
+    /// it. Only the opt-in idle throttle attaches one, and it must be attached before Create() so the creation
+    /// messages are observed too.
+    /// <param name="tracker">Tracker to notify about each received message.</param>
+    void Win32Window::SetActivityTracker(Win32ActivityTracker* tracker) {
+        ActivityTracker = tracker;
+    }
+
+    /// Handles window messages for this instance, first reporting each one to the attached activity tracker when
+    /// there is one; the message handling and return values do not depend on the tracker.
     LRESULT Win32Window::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam) {
+        if (ActivityTracker != nullptr) {
+            ActivityTracker->ObserveMessage(message);
+        }
+
         switch (message) {
             case WM_SIZE:
                 RefreshClientSize();
