@@ -41,7 +41,7 @@ With `--frames`, and only then, the player writes one line to `helengine_windows
 presented and before it quits:
 
 ```
-HOST_FINGERPRINT format=87 alpha=3 swapEffect=4 buffers=2 scaling=0 style=0x14CF0000 exStyle=0x00000100 client=640x360 presentCount=30 presentFailures=0 frames=30 idleThrottle=off idleFrames=0 activeFrames=30 elapsedMs=111
+HOST_FINGERPRINT format=87 alpha=3 swapEffect=4 buffers=2 scaling=0 style=0x14CF0000 exStyle=0x00000100 client=640x360 presentCount=30 presentFailures=0 frames=30 idleThrottle=off idleFrames=0 activeFrames=30 windowMode=normal elapsedMs=111
 ```
 
 - `format`, `alpha`, `swapEffect`, `buffers` and `scaling` come from `IDXGISwapChain1::GetDesc1`, as the numeric
@@ -55,6 +55,8 @@ HOST_FINGERPRINT format=87 alpha=3 swapEffect=4 buffers=2 scaling=0 style=0x14CF
 - `idleThrottle` is `on` when the opt-in idle throttle was enabled (profile or command line) and `off` otherwise;
   `idleFrames` and `activeFrames` count the frames that ran while the window was idle or active. With the throttle
   off every frame is active (`idleFrames=0 activeFrames=30`).
+- `windowMode` is `normal` for the default window and `overlay` for the opt-in overlay window
+  (`--window-mode overlay`, see "Overlay scenario").
 
 `-Record` stores every field except `elapsedMs` under the scene's `fingerprint` entry in `manifest.json`, and
 `elapsedMs` next to it. It also requires run a to be healthy and run b to match run a. `-Verify` prints

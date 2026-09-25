@@ -146,4 +146,6 @@ In every configuration, every call returned `S_OK`, `Present` succeeded, the ove
 
 **Working style set (unchanged from §2):** `WS_POPUP`; `WS_EX_NOREDIRECTIONBITMAP | WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_LAYERED`, **without** calling `SetLayeredWindowAttributes`. Shown with `SW_SHOWNOACTIVATE`, then `SetWindowPos(HWND_TOPMOST, …, SWP_NOACTIVATE)`. The click-through toggle is `WS_EX_TRANSPARENT` via `SetWindowLongPtr` + `SetWindowPos(SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE)`. The plan's Global Constraints style line needs no change.
 
+**D3D11 device note.** The player's D3D11 device is created without `D3D11_CREATE_DEVICE_BGRA_SUPPORT`; that flag is required if DirectComposition surfaces (`IDCompositionSurface`) or Direct2D interop are added later. The overlay uses a composition swap chain, which does not need it, so the device creation (shared with normal mode) is deliberately unchanged.
+
 **Scope note.** `WindowFromPoint` is the hit-test the spike could check without moving the user's mouse. Real mouse-click routing is left to the §7 manual proofs.
