@@ -35,14 +35,23 @@ namespace helengine::windows {
         /// Parses one required integer property value from the JSON profile payload.
         int ParseRequiredInteger(const std::string& json, const char* propertyName) const;
 
+        /// Locates the start index of one optional property's value within the JSON profile payload, skipping
+        /// past its `"name"` token, the following colon, and any whitespace. Returns whether the property was
+        /// found at all; throws RuntimePlayerProfileConfigurationError when the property name is present but its
+        /// assignment is missing a colon or a value, so TryParseOptionalInteger and TryParseOptionalBoolean share
+        /// one place that locates a value instead of duplicating the token/colon/whitespace lookup.
+        bool FindPropertyValueStartIndex(const std::string& json, const char* propertyName, std::size_t& valueStartIndex) const;
+
         /// Parses one optional integer property from the JSON profile payload, if present. Returns whether the
         /// property was found; throws RuntimePlayerProfileConfigurationError when it is present but its value
-        /// cannot be parsed as an integer.
+        /// cannot be parsed as a bare integer (for example a fractional value like `12.5` or trailing garbage
+        /// like `15abc`).
         bool TryParseOptionalInteger(const std::string& json, const char* propertyName, int& value) const;
 
         /// Parses one optional boolean property from the JSON profile payload, if present. Returns whether the
         /// property was found; throws RuntimePlayerProfileConfigurationError when it is present with any value
-        /// other than exactly `true` or `false`.
+        /// other than exactly `true` or `false` immediately followed by whitespace, a comma, a closing brace, or
+        /// the end of the payload (rejecting values like `true_` or `falsey`).
         bool TryParseOptionalBoolean(const std::string& json, const char* propertyName, bool& value) const;
 
         /// Validates the idle-throttle fields resolved onto the supplied profile, throwing

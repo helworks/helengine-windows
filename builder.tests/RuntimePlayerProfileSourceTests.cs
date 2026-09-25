@@ -87,6 +87,117 @@ public sealed class RuntimePlayerProfileSourceTests {
     }
 
     /// <summary>
+    /// Verifies TryParseOptionalInteger and TryParseOptionalBoolean share one FindPropertyValueStartIndex helper
+    /// for the token/colon/whitespace lookup, and that ParseRequiredInteger (the resolution-field parser) is left
+    /// untouched by it, since resolution fields must keep their old default-path behavior unchanged.
+    /// </summary>
+    [Fact]
+    public void Optional_parsers_share_FindPropertyValueStartIndex_and_leave_ParseRequiredInteger_untouched() {
+        string loaderHeader = ReadRepositoryFile("src", "platform", "windows", "runtime", "runtime_player_profile_loader.hpp");
+        string loaderSource = ReadRepositoryFile("src", "platform", "windows", "runtime", "runtime_player_profile_loader.cpp");
+
+        Assert.Contains(
+            "bool FindPropertyValueStartIndex(const std::string& json, const char* propertyName, std::size_t& valueStartIndex) const;",
+            loaderHeader,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "bool RuntimePlayerProfileLoader::FindPropertyValueStartIndex(const std::string& json, const char* propertyName, std::size_t& valueStartIndex) const {",
+            loaderSource,
+            StringComparison.Ordinal);
+
+        int integerMethodStartIndex = loaderSource.IndexOf(
+            "bool RuntimePlayerProfileLoader::TryParseOptionalInteger(",
+            StringComparison.Ordinal);
+        Assert.True(integerMethodStartIndex >= 0, "TryParseOptionalInteger must be defined in the loader source.");
+        int integerMethodEndIndex = loaderSource.IndexOf(
+            "RuntimePlayerProfileLoader::TryParseOptionalBoolean(",
+            integerMethodStartIndex,
+            StringComparison.Ordinal);
+        Assert.True(integerMethodEndIndex > integerMethodStartIndex, "TryParseOptionalBoolean must follow TryParseOptionalInteger in the loader source.");
+        string integerMethodBody = loaderSource.Substring(integerMethodStartIndex, integerMethodEndIndex - integerMethodStartIndex);
+        Assert.Contains("FindPropertyValueStartIndex(", integerMethodBody, StringComparison.Ordinal);
+
+        int booleanMethodStartIndex = integerMethodEndIndex;
+        int booleanMethodEndIndex = loaderSource.IndexOf(
+            "RuntimePlayerProfileLoader::ValidateIdleFields(",
+            booleanMethodStartIndex,
+            StringComparison.Ordinal);
+        Assert.True(booleanMethodEndIndex > booleanMethodStartIndex, "ValidateIdleFields must follow TryParseOptionalBoolean in the loader source.");
+        string booleanMethodBody = loaderSource.Substring(booleanMethodStartIndex, booleanMethodEndIndex - booleanMethodStartIndex);
+        Assert.Contains("FindPropertyValueStartIndex(", booleanMethodBody, StringComparison.Ordinal);
+
+        int requiredMethodStartIndex = loaderSource.IndexOf(
+            "int RuntimePlayerProfileLoader::ParseRequiredInteger(",
+            StringComparison.Ordinal);
+        Assert.True(requiredMethodStartIndex >= 0, "ParseRequiredInteger must be defined in the loader source.");
+        int requiredMethodEndIndex = loaderSource.IndexOf(
+            "RuntimePlayerProfileLoader::FindPropertyValueStartIndex(",
+            requiredMethodStartIndex,
+            StringComparison.Ordinal);
+        Assert.True(requiredMethodEndIndex > requiredMethodStartIndex, "FindPropertyValueStartIndex must follow ParseRequiredInteger in the loader source.");
+        string requiredMethodBody = loaderSource.Substring(requiredMethodStartIndex, requiredMethodEndIndex - requiredMethodStartIndex);
+        Assert.DoesNotContain("FindPropertyValueStartIndex(", requiredMethodBody, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// Verifies TryParseOptionalInteger rejects a fractional value (<c>12.5</c>) and trailing garbage after the
+    /// digits (<c>15abc</c>) by requiring whitespace, a comma, a closing brace, or the end of the payload right
+    /// after the digit run, instead of silently truncating to the leading digits.
+    /// </summary>
+    [Fact]
+    public void TryParseOptionalInteger_rejects_fractional_and_trailing_garbage_values() {
+        string loaderSource = ReadRepositoryFile("src", "platform", "windows", "runtime", "runtime_player_profile_loader.cpp");
+
+        int methodStartIndex = loaderSource.IndexOf(
+            "bool RuntimePlayerProfileLoader::TryParseOptionalInteger(",
+            StringComparison.Ordinal);
+        Assert.True(methodStartIndex >= 0, "TryParseOptionalInteger must be defined in the loader source.");
+
+        int methodEndIndex = loaderSource.IndexOf(
+            "RuntimePlayerProfileLoader::TryParseOptionalBoolean(",
+            methodStartIndex,
+            StringComparison.Ordinal);
+        Assert.True(methodEndIndex > methodStartIndex, "TryParseOptionalBoolean must follow TryParseOptionalInteger in the loader source.");
+
+        string methodBody = loaderSource.Substring(methodStartIndex, methodEndIndex - methodStartIndex);
+        Assert.Contains("json[trailingIndex] != ','", methodBody, StringComparison.Ordinal);
+        Assert.Contains("json[trailingIndex] != '}'", methodBody, StringComparison.Ordinal);
+        Assert.True(
+            System.Text.RegularExpressions.Regex.Matches(methodBody, "throw RuntimePlayerProfileConfigurationError\\(").Count >= 3,
+            "TryParseOptionalInteger must throw the configuration error for the non-digit case, the trailing-garbage case, and the unparseable case.");
+    }
+
+    /// <summary>
+    /// Verifies TryParseOptionalBoolean rejects a matched literal immediately followed by anything other than
+    /// whitespace, a comma, a closing brace, or the end of the payload (for example <c>true_</c> or
+    /// <c>falsey</c>), instead of accepting any non-alphanumeric follow-on character.
+    /// </summary>
+    [Fact]
+    public void TryParseOptionalBoolean_requires_a_clean_boundary_after_the_literal() {
+        string loaderSource = ReadRepositoryFile("src", "platform", "windows", "runtime", "runtime_player_profile_loader.cpp");
+
+        int methodStartIndex = loaderSource.IndexOf(
+            "bool RuntimePlayerProfileLoader::TryParseOptionalBoolean(",
+            StringComparison.Ordinal);
+        Assert.True(methodStartIndex >= 0, "TryParseOptionalBoolean must be defined in the loader source.");
+
+        int methodEndIndex = loaderSource.IndexOf(
+            "RuntimePlayerProfileLoader::ValidateIdleFields(",
+            methodStartIndex,
+            StringComparison.Ordinal);
+        Assert.True(methodEndIndex > methodStartIndex, "ValidateIdleFields must follow TryParseOptionalBoolean in the loader source.");
+
+        string methodBody = loaderSource.Substring(methodStartIndex, methodEndIndex - methodStartIndex);
+        Assert.Contains("trueLiteralHasValidBoundary", methodBody, StringComparison.Ordinal);
+        Assert.Contains("falseLiteralHasValidBoundary", methodBody, StringComparison.Ordinal);
+        Assert.Contains("json[trueLiteralEndIndex] == ','", methodBody, StringComparison.Ordinal);
+        Assert.Contains("json[trueLiteralEndIndex] == '}'", methodBody, StringComparison.Ordinal);
+        Assert.Contains("json[falseLiteralEndIndex] == ','", methodBody, StringComparison.Ordinal);
+        Assert.Contains("json[falseLiteralEndIndex] == '}'", methodBody, StringComparison.Ordinal);
+        Assert.DoesNotContain("std::isalnum", methodBody, StringComparison.Ordinal);
+    }
+
+    /// <summary>
     /// Verifies ValidateIdleFields rejects a non-positive idle-after duration and a frame rate outside 1..30 by
     /// throwing the configuration error.
     /// </summary>

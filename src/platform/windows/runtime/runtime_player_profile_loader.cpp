@@ -168,10 +168,12 @@ namespace helengine::windows {
         }
     }
 
-    /// Parses one optional integer property from the JSON profile payload, if present. Returns whether the
-    /// property was found; throws RuntimePlayerProfileConfigurationError when it is present but its value
-    /// cannot be parsed as an integer.
-    bool RuntimePlayerProfileLoader::TryParseOptionalInteger(const std::string& json, const char* propertyName, int& value) const {
+    /// Locates the start index of one optional property's value within the JSON profile payload, skipping past
+    /// its `"name"` token, the following colon, and any whitespace. Returns whether the property was found at
+    /// all; throws RuntimePlayerProfileConfigurationError when the property name is present but its assignment
+    /// is missing a colon or a value, so TryParseOptionalInteger and TryParseOptionalBoolean share one place that
+    /// locates a value instead of duplicating the token/colon/whitespace lookup.
+    bool RuntimePlayerProfileLoader::FindPropertyValueStartIndex(const std::string& json, const char* propertyName, std::size_t& valueStartIndex) const {
         if (propertyName == nullptr || propertyName[0] == '\0') {
             throw std::runtime_error("A profile property name is required.");
         }
@@ -190,7 +192,7 @@ namespace helengine::windows {
                 std::string("profile.json contains an invalid assignment for '") + propertyName + "'.");
         }
 
-        std::size_t valueStartIndex = colonIndex + 1;
+        valueStartIndex = colonIndex + 1;
         while (valueStartIndex < json.length() && std::isspace(static_cast<unsigned char>(json[valueStartIndex])) != 0) {
             valueStartIndex++;
         }
@@ -198,6 +200,19 @@ namespace helengine::windows {
         if (valueStartIndex >= json.length()) {
             throw RuntimePlayerProfileConfigurationError(
                 std::string("profile.json ended before a value was found for '") + propertyName + "'.");
+        }
+
+        return true;
+    }
+
+    /// Parses one optional integer property from the JSON profile payload, if present. Returns whether the
+    /// property was found; throws RuntimePlayerProfileConfigurationError when it is present but its value
+    /// cannot be parsed as a bare integer (for example a fractional value like `12.5` or trailing garbage like
+    /// `15abc`).
+    bool RuntimePlayerProfileLoader::TryParseOptionalInteger(const std::string& json, const char* propertyName, int& value) const {
+        std::size_t valueStartIndex = 0;
+        if (!FindPropertyValueStartIndex(json, propertyName, valueStartIndex)) {
+            return false;
         }
 
         std::size_t valueEndIndex = valueStartIndex;
@@ -214,6 +229,18 @@ namespace helengine::windows {
                 std::string("profile.json contains a non-integer value for '") + propertyName + "'.");
         }
 
+        // Reject a fractional value like "12.5" or trailing garbage like "15abc": once the digit run ends, only
+        // whitespace, a comma, a closing brace, or the end of the payload may follow.
+        std::size_t trailingIndex = valueEndIndex;
+        while (trailingIndex < json.length() && std::isspace(static_cast<unsigned char>(json[trailingIndex])) != 0) {
+            trailingIndex++;
+        }
+
+        if (trailingIndex < json.length() && json[trailingIndex] != ',' && json[trailingIndex] != '}') {
+            throw RuntimePlayerProfileConfigurationError(
+                std::string("profile.json contains a non-integer value for '") + propertyName + "'.");
+        }
+
         std::string valueText = json.substr(valueStartIndex, valueEndIndex - valueStartIndex);
         try {
             value = std::stoi(valueText);
@@ -226,46 +253,34 @@ namespace helengine::windows {
     }
 
     /// Parses one optional boolean property from the JSON profile payload, if present. Returns whether the
-    /// property was found; throws RuntimePlayerProfileConfigurationError when it is present with any value
-    /// other than exactly `true` or `false`.
+    /// property was found; throws RuntimePlayerProfileConfigurationError when it is present with any value other
+    /// than exactly `true` or `false` immediately followed by whitespace, a comma, a closing brace, or the end of
+    /// the payload (rejecting values like `true_` or `falsey`).
     bool RuntimePlayerProfileLoader::TryParseOptionalBoolean(const std::string& json, const char* propertyName, bool& value) const {
-        if (propertyName == nullptr || propertyName[0] == '\0') {
-            throw std::runtime_error("A profile property name is required.");
-        }
-
-        std::string propertyToken = "\"";
-        propertyToken += propertyName;
-        propertyToken += "\"";
-        std::size_t propertyIndex = json.find(propertyToken);
-        if (propertyIndex == std::string::npos) {
+        std::size_t valueStartIndex = 0;
+        if (!FindPropertyValueStartIndex(json, propertyName, valueStartIndex)) {
             return false;
-        }
-
-        std::size_t colonIndex = json.find(':', propertyIndex + propertyToken.length());
-        if (colonIndex == std::string::npos) {
-            throw RuntimePlayerProfileConfigurationError(
-                std::string("profile.json contains an invalid assignment for '") + propertyName + "'.");
-        }
-
-        std::size_t valueStartIndex = colonIndex + 1;
-        while (valueStartIndex < json.length() && std::isspace(static_cast<unsigned char>(json[valueStartIndex])) != 0) {
-            valueStartIndex++;
         }
 
         const std::string trueLiteral = "true";
         const std::string falseLiteral = "false";
+
         std::size_t trueLiteralEndIndex = valueStartIndex + trueLiteral.length();
-        bool matchesTrueLiteral = json.compare(valueStartIndex, trueLiteral.length(), trueLiteral) == 0
-            && (trueLiteralEndIndex >= json.length() || std::isalnum(static_cast<unsigned char>(json[trueLiteralEndIndex])) == 0);
-        if (matchesTrueLiteral) {
+        bool trueLiteralHasValidBoundary = trueLiteralEndIndex >= json.length()
+            || std::isspace(static_cast<unsigned char>(json[trueLiteralEndIndex])) != 0
+            || json[trueLiteralEndIndex] == ','
+            || json[trueLiteralEndIndex] == '}';
+        if (json.compare(valueStartIndex, trueLiteral.length(), trueLiteral) == 0 && trueLiteralHasValidBoundary) {
             value = true;
             return true;
         }
 
         std::size_t falseLiteralEndIndex = valueStartIndex + falseLiteral.length();
-        bool matchesFalseLiteral = json.compare(valueStartIndex, falseLiteral.length(), falseLiteral) == 0
-            && (falseLiteralEndIndex >= json.length() || std::isalnum(static_cast<unsigned char>(json[falseLiteralEndIndex])) == 0);
-        if (matchesFalseLiteral) {
+        bool falseLiteralHasValidBoundary = falseLiteralEndIndex >= json.length()
+            || std::isspace(static_cast<unsigned char>(json[falseLiteralEndIndex])) != 0
+            || json[falseLiteralEndIndex] == ','
+            || json[falseLiteralEndIndex] == '}';
+        if (json.compare(valueStartIndex, falseLiteral.length(), falseLiteral) == 0 && falseLiteralHasValidBoundary) {
             value = false;
             return true;
         }
