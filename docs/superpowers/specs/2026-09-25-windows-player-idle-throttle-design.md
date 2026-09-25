@@ -90,3 +90,21 @@ Idle throttling is **off** unless it is enabled in one of these places:
 - The core invalidation API.
 - Per-window pacing (subproject 3).
 - Power-state awareness (battery).
+
+## Revision 1 (2026-09-25): facts found while planning
+
+- **Invalid idle fields.** `RuntimePlayerProfileLoader::LoadOrCreateProfile` catches any read or validation exception and **rewrites `profile.json` with defaults**, which is a silent repair. Invalid idle-throttle fields must not go through that path. The loader throws a dedicated `RuntimePlayerProfileConfigurationError` for them, outside the repair catch, and `Win32Application` turns it into `Win32ExitRequest(2, ...)`.
+- **Preserving fields when the file is rewritten.** The writer only runs on seed (file missing) and on an invalid-resolution repair.
+  - On a repair, any idle fields that were present and valid are written back.
+  - Seeded files stay byte-identical to today's, because idle fields are emitted only when they were present.
+- **Keep-awake getters** (generated core):
+  - physics: `EngineCore->get_PredictedPhysicsStepSeconds() > 0`, using the previous Update's prediction;
+  - scene: `get_SceneManager()` non-null and (`get_IsSceneTransitionActive()` or `get_LastTracePendingOperationCount() > 0`). This is a trace-snapshot proxy for pending operations, because the operation list is private.
+  - Scenes with active physics therefore never go idle. That is expected, and it is documented.
+- **Idle regression scenario.** Goldens are frame-30 captures, so the idle scenario runs the smoke scene with `--idle-throttle on --idle-after-ms 0 --idle-fps 10 --frames 30 --fixed-delta 0.016666 --capture ...` (about 3 s). Assertions:
+  - the capture equals the golden;
+  - `idleFrames` is at least 25, because the first frames are active while the startup scene load is pending;
+  - `elapsedMs` is at least 2400.
+
+  It uses a threshold check, not exact equality, for `idleFrames`, `activeFrames` and `elapsedMs`, because the split between active and idle frames depends on load timing. The smoke scene must have no physics; the plan verifies this for `axis_test`.
+- **No native unit-test harness exists.** The pacer decision is a pure, Win32-free class (`Decide(nowMs, lastActivityMs, lastFrameStartMs, keepAwake)` returning a small struct; no tuples). It is covered by source tests plus the behavioral idle scenario.
