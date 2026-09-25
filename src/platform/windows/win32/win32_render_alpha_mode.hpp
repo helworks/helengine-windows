@@ -9,8 +9,9 @@ namespace helengine::windows {
         Straight,
 
         /// The overlay window mode: DWM composes the back buffer as premultiplied alpha, so clears premultiply their
-        /// color (or clear to fully transparent), 2D draws blend into a premultiplied destination, and the 3D pass
-        /// writes its color unblended.
+        /// color (or clear to fully transparent), and both the 2D draws and each camera's 3D pass blend with the
+        /// premultiplied-destination src-over state (color SRC_ALPHA / INV_SRC_ALPHA, alpha ONE / INV_SRC_ALPHA),
+        /// which writes the material's alpha so opaque content is opaque and translucent content stays translucent.
         Premultiplied
     };
 }

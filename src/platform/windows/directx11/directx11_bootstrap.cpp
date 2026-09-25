@@ -5,6 +5,8 @@
 #include <sstream>
 #include <stdexcept>
 
+#include "platform/windows/directx11/directx11_hresult_formatter.hpp"
+
 namespace helengine::windows {
     /// Creates the DirectX11 bootstrap for one native window.
     /// <param name="windowHandle">Window the swap chain presents to.</param>
@@ -254,8 +256,7 @@ namespace helengine::windows {
     void DirectX11Bootstrap::ThrowIfCompositionFailed(HRESULT result, const char* operation) {
         if (FAILED(result)) {
             std::ostringstream messageBuilder;
-            messageBuilder << operation << " failed for the HelEngine Windows overlay with HRESULT 0x" << std::hex << std::uppercase
-                           << std::setw(8) << std::setfill('0') << static_cast<std::uint32_t>(result) << ".";
+            messageBuilder << operation << " failed for the HelEngine Windows overlay with HRESULT " << DirectX11HResultFormatter::ToHex(result) << ".";
             throw std::runtime_error(messageBuilder.str());
         }
     }

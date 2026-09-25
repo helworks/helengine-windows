@@ -115,12 +115,13 @@ namespace helengine::windows {
         SetFocus(Handle);
     }
 
-    /// Shows the overlay window without activating it and pins it topmost at its bounds with SWP_NOACTIVATE; it
-    /// never calls a foreground or focus function, so the user's foreground window keeps focus. Throws
-    /// std::runtime_error when SetWindowPos fails.
+    /// Shows the overlay window without activating it and pins it topmost with SWP_NOMOVE | SWP_NOSIZE |
+    /// SWP_NOACTIVATE: the bounds were already set when the window was created, so this call only changes the
+    /// z-order and can never shrink the client area. It never calls a foreground or focus function, so the user's
+    /// foreground window keeps focus. Throws std::runtime_error when SetWindowPos fails.
     void Win32Window::ShowOverlayWindow() const {
         ShowWindow(Handle, WindowStyle.GetShowCommand());
-        if (!SetWindowPos(Handle, HWND_TOPMOST, Left, Top, Width, Height, SWP_NOACTIVATE)) {
+        if (!SetWindowPos(Handle, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE)) {
             std::ostringstream messageBuilder;
             messageBuilder << "SetWindowPos failed for the HelEngine Windows overlay window with Win32 error " << GetLastError() << ".";
             throw std::runtime_error(messageBuilder.str());

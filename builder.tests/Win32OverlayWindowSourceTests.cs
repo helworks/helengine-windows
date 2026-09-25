@@ -75,8 +75,9 @@ public sealed class Win32OverlayWindowSourceTests {
 
     /// <summary>
     /// Verifies the overlay path uses the extended style set with <c>AdjustWindowRectEx</c>, shows without activation,
-    /// pins the window topmost at its bounds with <c>SWP_NOACTIVATE</c>, and never calls any foreground or focus
-    /// function or <c>SetLayeredWindowAttributes</c>.
+    /// pins the window topmost without moving or resizing it (<c>SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE</c>, because
+    /// the bounds were set at creation), and never calls any foreground or focus function or
+    /// <c>SetLayeredWindowAttributes</c>.
     /// </summary>
     [Fact]
     public void Win32Window_overlay_path_never_takes_the_foreground() {
@@ -97,7 +98,7 @@ public sealed class Win32OverlayWindowSourceTests {
 
         string showOverlayBody = ExtractMethodBody(windowSource, "void Win32Window::ShowOverlayWindow(");
         Assert.Contains("ShowWindow(Handle, WindowStyle.GetShowCommand());", showOverlayBody, StringComparison.Ordinal);
-        Assert.Contains("SetWindowPos(Handle, HWND_TOPMOST, Left, Top, Width, Height, SWP_NOACTIVATE)", showOverlayBody, StringComparison.Ordinal);
+        Assert.Contains("SetWindowPos(Handle, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE)", showOverlayBody, StringComparison.Ordinal);
         foreach (string foregroundCall in new[] { "BringWindowToTop", "SetActiveWindow", "SetForegroundWindow", "SetFocus", "UpdateWindow" }) {
             Assert.DoesNotContain(foregroundCall, showOverlayBody, StringComparison.Ordinal);
         }
@@ -148,7 +149,7 @@ public sealed class Win32OverlayWindowSourceTests {
 
         Assert.Contains("ThrowIfCompositionFailed(", compositionBody, StringComparison.Ordinal);
         Assert.DoesNotContain("ThrowIfFailed(", compositionBody, StringComparison.Ordinal);
-        Assert.Contains("std::hex", bootstrapSource, StringComparison.Ordinal);
+        Assert.Contains("DirectX11HResultFormatter::ToHex(result)", bootstrapSource, StringComparison.Ordinal);
 
         // Members are destroyed in reverse declaration order: the DirectComposition objects must be declared after the
         // device and the swap chain, and the visual after the target after the composition device.
@@ -212,6 +213,33 @@ public sealed class Win32OverlayWindowSourceTests {
         Match linkBlock = Regex.Match(cmakeSource, @"target_link_libraries\(helengine_windows PRIVATE\r?\n([^)]*)\)");
         Assert.True(linkBlock.Success, "The player target must declare its link libraries.");
         Assert.Matches(new Regex(@"^\s*dcomp\s*$", RegexOptions.Multiline), linkBlock.Groups[1].Value);
+    }
+
+    /// <summary>
+    /// Verifies one shared formatter writes every HRESULT in hexadecimal and that the DirectX classes use it instead of
+    /// keeping their own copies of the formatting.
+    /// </summary>
+    [Fact]
+    public void DirectX11HResultFormatter_is_the_single_hresult_formatting_point() {
+        string formatterHeader = ReadRepositoryFile("src", "platform", "windows", "directx11", "directx11_hresult_formatter.hpp");
+        string formatterSource = ReadRepositoryFile("src", "platform", "windows", "directx11", "directx11_hresult_formatter.cpp");
+
+        Assert.Contains("class DirectX11HResultFormatter {", formatterHeader, StringComparison.Ordinal);
+        Assert.Contains("static std::string ToHex(HRESULT result);", formatterHeader, StringComparison.Ordinal);
+        Assert.Contains("std::setw(8)", formatterSource, StringComparison.Ordinal);
+        Assert.Contains("src/platform/windows/directx11/directx11_hresult_formatter.cpp", ReadRepositoryFile("CMakeLists.txt"), StringComparison.Ordinal);
+
+        string[][] callers = {
+            new[] { "directx11_bootstrap.cpp", "\" failed for the HelEngine Windows overlay with HRESULT \" << DirectX11HResultFormatter::ToHex(result)" },
+            new[] { "directx11_host_fingerprint.cpp", "\"IDXGISwapChain1::Present failed with HRESULT \" << DirectX11HResultFormatter::ToHex(presentResult)" },
+            new[] { "directx11_host_fingerprint.cpp", "\" failed with HRESULT \" << DirectX11HResultFormatter::ToHex(result)" },
+            new[] { "directx11_back_buffer_capture.cpp", "\" with HRESULT \" << DirectX11HResultFormatter::ToHex(result)" }
+        };
+        foreach (string[] caller in callers) {
+            string callerSource = ReadRepositoryFile("src", "platform", "windows", "directx11", caller[0]);
+            Assert.Contains(caller[1], callerSource, StringComparison.Ordinal);
+            Assert.DoesNotContain("HRESULT 0x", callerSource, StringComparison.Ordinal);
+        }
     }
 
     /// <summary>

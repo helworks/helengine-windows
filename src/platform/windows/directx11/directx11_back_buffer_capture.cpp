@@ -11,6 +11,7 @@
 #include <wrl/client.h>
 
 #include "platform/windows/directx11/directx11_bootstrap.hpp"
+#include "platform/windows/directx11/directx11_hresult_formatter.hpp"
 #include "platform/windows/win32/bmp_image_writer.hpp"
 
 namespace helengine::windows {
@@ -87,9 +88,7 @@ namespace helengine::windows {
         }
 
         std::ostringstream messageBuilder;
-        messageBuilder << "Back-buffer capture failed in " << operation << " with HRESULT 0x"
-                       << std::hex << std::uppercase << std::setw(8) << std::setfill('0')
-                       << static_cast<uint32_t>(result) << ".";
+        messageBuilder << "Back-buffer capture failed in " << operation << " with HRESULT " << DirectX11HResultFormatter::ToHex(result) << ".";
         throw std::runtime_error(messageBuilder.str());
     }
 }

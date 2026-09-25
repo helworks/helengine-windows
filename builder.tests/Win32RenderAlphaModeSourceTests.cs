@@ -36,6 +36,8 @@ public sealed class Win32RenderAlphaModeSourceTests {
 
         Assert.Contains("enum class Win32RenderAlphaMode {", header, StringComparison.Ordinal);
         Assert.Single(Regex.Matches(header, @"\benum\s+class\s+\w+"));
+        Assert.DoesNotContain("unblended", header, StringComparison.Ordinal);
+        Assert.Contains("premultiplied-destination src-over", header, StringComparison.Ordinal);
         Assert.Matches(new Regex(@"Straight,\s*(///[^\n]*\n\s*)*Premultiplied\s*\};"), header);
     }
 

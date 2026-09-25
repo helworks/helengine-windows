@@ -9,6 +9,7 @@
 #include <dxgi1_2.h>
 
 #include "platform/windows/directx11/directx11_bootstrap.hpp"
+#include "platform/windows/directx11/directx11_hresult_formatter.hpp"
 #include "platform/windows/win32/win32_window_mode_names.hpp"
 
 namespace helengine::windows {
@@ -97,8 +98,7 @@ namespace helengine::windows {
     /// Formats a failing Present HRESULT as a readable startup-log line with the value in hexadecimal.
     std::string DirectX11HostFingerprint::DescribePresentFailure(HRESULT presentResult) {
         std::ostringstream messageBuilder;
-        messageBuilder << "IDXGISwapChain1::Present failed with HRESULT 0x" << std::hex << std::uppercase << std::setw(8)
-                       << std::setfill('0') << static_cast<std::uint32_t>(presentResult) << ".";
+        messageBuilder << "IDXGISwapChain1::Present failed with HRESULT " << DirectX11HResultFormatter::ToHex(presentResult) << ".";
         return messageBuilder.str();
     }
 
@@ -106,8 +106,7 @@ namespace helengine::windows {
     void DirectX11HostFingerprint::ThrowIfFailed(HRESULT result, const char* operation) {
         if (FAILED(result)) {
             std::ostringstream messageBuilder;
-            messageBuilder << "Host fingerprint: " << operation << " failed with HRESULT 0x" << std::hex << std::uppercase
-                           << std::setw(8) << std::setfill('0') << static_cast<std::uint32_t>(result) << ".";
+            messageBuilder << "Host fingerprint: " << operation << " failed with HRESULT " << DirectX11HResultFormatter::ToHex(result) << ".";
             throw std::runtime_error(messageBuilder.str());
         }
     }

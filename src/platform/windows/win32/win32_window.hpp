@@ -71,9 +71,10 @@ namespace helengine::windows {
         /// has always done.
         void ShowNormalWindow() const;
 
-        /// Shows the overlay window without activating it and pins it topmost at its bounds with SWP_NOACTIVATE; it
-        /// never calls a foreground or focus function, so the user's foreground window keeps focus. Throws
-        /// std::runtime_error when SetWindowPos fails.
+        /// Shows the overlay window without activating it and pins it topmost with SWP_NOMOVE | SWP_NOSIZE |
+        /// SWP_NOACTIVATE: the bounds were already set when the window was created, so this call only changes the
+        /// z-order and can never shrink the client area. It never calls a foreground or focus function, so the user's
+        /// foreground window keeps focus. Throws std::runtime_error when SetWindowPos fails.
         void ShowOverlayWindow() const;
 
         /// Updates the cached client size from the current native window state.

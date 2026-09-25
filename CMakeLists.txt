@@ -79,6 +79,7 @@ set(HELENGINE_WINDOWS_SOURCES
     src/platform/windows/directx11/directx11_back_buffer_capture.cpp
     src/platform/windows/directx11/directx11_bootstrap.cpp
     src/platform/windows/directx11/directx11_host_fingerprint.cpp
+    src/platform/windows/directx11/directx11_hresult_formatter.cpp
     src/platform/windows/directx11/directx11_presenter.cpp
 )
 
