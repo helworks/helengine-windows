@@ -203,8 +203,8 @@ public sealed class Win32RenderAlphaModeSourceTests {
 
     /// <summary>
     /// Verifies both 2D bind sites (textured quads including text, and rounded rects) keep today's AlphaBlendState bind
-    /// as the Straight arm and select the premultiplied-destination state only in Premultiplied mode, and that no other
-    /// site binds either state.
+    /// as the Straight arm and select the premultiplied-destination state only in Premultiplied mode, and that the only
+    /// other site binding the premultiplied state is the 3D-pass bind helper.
     /// </summary>
     [Fact]
     public void Two_dimensional_bind_sites_select_the_premultiplied_state_only_in_premultiplied_mode() {
@@ -215,49 +215,45 @@ public sealed class Win32RenderAlphaModeSourceTests {
         Assert.Matches(new Regex(TwoDimensionalBindBranchPattern), quad);
         Assert.Matches(new Regex(TwoDimensionalBindBranchPattern), roundedRect);
         Assert.Equal(2, Regex.Matches(source, Regex.Escape("context->OMSetBlendState(AlphaBlendState.Get(), blendFactor, 0xFFFFFFFFu);")).Count);
-        Assert.Equal(2, Regex.Matches(source, Regex.Escape("OMSetBlendState(PremultipliedDestinationBlendState.Get()")).Count);
+        Assert.Equal(3, Regex.Matches(source, Regex.Escape("OMSetBlendState(PremultipliedDestinationBlendState.Get()")).Count);
     }
 
     /// <summary>
-    /// Verifies the 3D overlay-opaque blend state writes color unchanged (ONE/ZERO) and takes alpha from the blend
-    /// factor (BLEND_FACTOR/ZERO), and that it is bound only under the Premultiplied branch at the start of each
-    /// camera's 3D pass with a blend factor of one, leaving the Straight 3D pass with its inherited state.
+    /// Verifies each camera's 3D pass binds the same premultiplied-destination src-over state as the 2D draws, only
+    /// under the Premultiplied branch (no else arm, so the Straight 3D pass keeps its inherited state), between the
+    /// per-camera state setup and the queue visit, and that the former overlay-opaque state no longer exists.
     /// </summary>
     [Fact]
-    public void Three_dimensional_pass_binds_the_overlay_opaque_state_only_in_premultiplied_mode() {
+    public void Three_dimensional_pass_binds_the_premultiplied_destination_state_only_in_premultiplied_mode() {
         string header = ReadRepositoryFile("src", "platform", "windows", "win32", "win32_render_bridge.hpp");
         string source = ReadRepositoryFile("src", "platform", "windows", "win32", "win32_render_bridge.cpp");
-        string ensure3D = ExtractMethodBody(source, "void Win32RenderManager3D::EnsurePipelineState(");
         string renderCamera = ExtractMethodBody(source, "void Win32RenderManager3D::RenderCamera(");
+        string bindHelper = ExtractMethodBody(source, "void Win32RenderManager2D::BindPremultipliedDestinationBlendState(");
 
-        Assert.Contains("Microsoft::WRL::ComPtr<ID3D11BlendState> OverlayOpaqueBlendState;", header, StringComparison.Ordinal);
+        Assert.Contains("void BindPremultipliedDestinationBlendState();", header, StringComparison.Ordinal);
         Assert.Matches(
             new Regex(
-                @"overlayOpaqueBlendDescription\.RenderTarget\[0\]\.BlendEnable = TRUE;\s*"
-                + @"overlayOpaqueBlendDescription\.RenderTarget\[0\]\.SrcBlend = D3D11_BLEND_ONE;\s*"
-                + @"overlayOpaqueBlendDescription\.RenderTarget\[0\]\.DestBlend = D3D11_BLEND_ZERO;\s*"
-                + @"overlayOpaqueBlendDescription\.RenderTarget\[0\]\.BlendOp = D3D11_BLEND_OP_ADD;\s*"
-                + @"overlayOpaqueBlendDescription\.RenderTarget\[0\]\.SrcBlendAlpha = D3D11_BLEND_BLEND_FACTOR;\s*"
-                + @"overlayOpaqueBlendDescription\.RenderTarget\[0\]\.DestBlendAlpha = D3D11_BLEND_ZERO;\s*"
-                + @"overlayOpaqueBlendDescription\.RenderTarget\[0\]\.BlendOpAlpha = D3D11_BLEND_OP_ADD;\s*"
-                + @"overlayOpaqueBlendDescription\.RenderTarget\[0\]\.RenderTargetWriteMask = D3D11_COLOR_WRITE_ENABLE_ALL;\s*"
-                + @"ThrowIfFailed\(\s*Bootstrap\.GetDevice\(\)->CreateBlendState\(&overlayOpaqueBlendDescription, OverlayOpaqueBlendState\.GetAddressOf\(\)\),"),
-            ensure3D);
+                @"if \(AlphaMode != Win32RenderAlphaMode::Premultiplied\) \{\s*throw std::logic_error\([^;]*;\s*\}\s*"
+                + @"EnsurePipelineState\(\);\s*"
+                + @"Bootstrap\.GetDeviceContext\(\)->OMSetBlendState\(PremultipliedDestinationBlendState\.Get\(\), nullptr, 0xFFFFFFFFu\);"),
+            bindHelper);
 
         Regex bind = new Regex(
             @"if \(AlphaMode == Win32RenderAlphaMode::Premultiplied\) \{\s*"
-            + @"const float overlayOpaqueBlendFactor\[\] = \{ 1\.0f, 1\.0f, 1\.0f, 1\.0f \};\s*"
-            + @"context->OMSetBlendState\(OverlayOpaqueBlendState\.Get\(\), overlayOpaqueBlendFactor, 0xFFFFFFFFu\);\s*"
+            + @"RenderManager2DBridge->BindPremultipliedDestinationBlendState\(\);\s*"
             + @"\}\s*\n");
         Match bindMatch = bind.Match(renderCamera);
-        Assert.True(bindMatch.Success, "The Premultiplied-only overlay-opaque bind was not found in RenderCamera.");
+        Assert.True(bindMatch.Success, "The Premultiplied-only premultiplied-destination bind was not found in RenderCamera.");
         Assert.DoesNotContain("} else {", renderCamera.Substring(bindMatch.Index, bindMatch.Length + 16), StringComparison.Ordinal);
         int visitIndex = renderCamera.IndexOf("renderQueue->VisitOrdered(this);", StringComparison.Ordinal);
         int prepareShadowIndex = renderCamera.IndexOf("PrepareShadowState(camera, visibleLights);", StringComparison.Ordinal);
         Assert.True(bindMatch.Index > prepareShadowIndex);
         Assert.True(bindMatch.Index < visitIndex);
-        Assert.Single(Regex.Matches(renderCamera, Regex.Escape("OMSetBlendState(")));
-        Assert.Single(Regex.Matches(source, Regex.Escape("OMSetBlendState(OverlayOpaqueBlendState.Get()")));
+        Assert.DoesNotContain("OMSetBlendState(", renderCamera, StringComparison.Ordinal);
+        Assert.Single(Regex.Matches(source, Regex.Escape("RenderManager2DBridge->BindPremultipliedDestinationBlendState();")));
+        Assert.DoesNotContain("OverlayOpaque", header, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("OverlayOpaque", source, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("D3D11_BLEND_BLEND_FACTOR", source, StringComparison.Ordinal);
     }
 
     /// <summary>

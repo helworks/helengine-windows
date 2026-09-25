@@ -64,7 +64,7 @@ This is the foundation for Gevo's "glass over everything" shell layer.
   - `overlayBackground=transparent`: clear to (0,0,0,0).
   - The fallback `ClearBackBuffer` calls follow the same rule.
 - **2D blend.** A second blend state, `PremultipliedDestinationBlendState`: color `SRC_ALPHA / INV_SRC_ALPHA`; alpha `ONE / INV_SRC_ALPHA`. It is selected wherever `AlphaBlendState` is bound today (quads, text, rounded rects). With the current straight-alpha shaders, this produces correct premultiplied src-over into a premultiplied destination.
-- **3D.** An explicit overlay-mode blend state, bound at the start of each camera's 3D pass. It writes color unchanged and forces **opaque alpha**: `SrcBlendAlpha=BLEND_FACTOR` with blend factor a=1, `DestBlendAlpha=ZERO`. Normal mode keeps today's implicit inherited state, byte for byte.
+- **3D.** In overlay mode, the same `PremultipliedDestinationBlendState` (premultiplied-destination src-over) is bound at the start of each camera's 3D pass. The material's output alpha is written: opaque materials are opaque, and materials with alpha < 1 appear translucent on the overlay. No blend state can force a constant alpha (the fixed-function blend always scales the shader's or the destination's alpha), so the 3D pass does not try to. Its color math equals what normal mode's 3D pass already gets from the inherited `AlphaBlendState`; only the alpha accumulation differs. Normal mode keeps today's implicit inherited state, byte for byte.
 - A small `Win32RenderAlphaMode` flag, set once at startup, selects these paths. All the choices live in the host render bridge.
 
 ## 5. Per-pixel click-through

@@ -1015,8 +1015,8 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
 
     /// Applies the back-buffer alpha mode and the overlay background once at startup, before the first Draw.
     /// Straight keeps today's clears and the inherited 3D blend state byte for byte; Premultiplied premultiplies the
-    /// clears (or clears to fully transparent for the transparent background) and binds the overlay-opaque blend state
-    /// at the start of each camera's 3D pass.
+    /// clears (or clears to fully transparent for the transparent background) and binds the 2D bridge's
+    /// premultiplied-destination src-over blend state at the start of each camera's 3D pass.
     void Win32RenderManager3D::ConfigureAlphaMode(Win32RenderAlphaMode alphaMode, Win32OverlayBackground overlayBackground) {
         if (IsAlphaModeConfigured) {
             throw std::logic_error("The Windows 3D render bridge alpha mode is applied once at startup and cannot be changed.");
@@ -1417,7 +1417,6 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
         ShadowTransformBuffer.Reset();
         DebugTriangleBuffer.Reset();
         RasterizerState.Reset();
-        OverlayOpaqueBlendState.Reset();
         DepthStencilState.Reset();
         ShadowRasterizerState.Reset();
         ShadowDepthStencilState.Reset();
@@ -1818,7 +1817,7 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
 
     /// Creates the shaders, input layout, and fixed pipeline state on first use.
     void Win32RenderManager3D::EnsurePipelineState() {
-        if (VertexShader && PixelShader && InputLayout && TransformBuffer && RasterizerState && OverlayOpaqueBlendState && DepthStencilState) {
+        if (VertexShader && PixelShader && InputLayout && TransformBuffer && RasterizerState && DepthStencilState) {
             EnsureShadowPipelineState();
             EnsureTextureSamplerState();
             EnsureWhiteTextureFallbackResource();
@@ -1907,20 +1906,6 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
         ThrowIfFailed(
             Bootstrap.GetDevice()->CreateRasterizerState(&rasterizerDescription, RasterizerState.GetAddressOf()),
             "ID3D11Device::CreateRasterizerState failed for the Windows bridge.");
-
-        D3D11_BLEND_DESC overlayOpaqueBlendDescription {};
-        overlayOpaqueBlendDescription.RenderTarget[0].BlendEnable = TRUE;
-        overlayOpaqueBlendDescription.RenderTarget[0].SrcBlend = D3D11_BLEND_ONE;
-        overlayOpaqueBlendDescription.RenderTarget[0].DestBlend = D3D11_BLEND_ZERO;
-        overlayOpaqueBlendDescription.RenderTarget[0].BlendOp = D3D11_BLEND_OP_ADD;
-        overlayOpaqueBlendDescription.RenderTarget[0].SrcBlendAlpha = D3D11_BLEND_BLEND_FACTOR;
-        overlayOpaqueBlendDescription.RenderTarget[0].DestBlendAlpha = D3D11_BLEND_ZERO;
-        overlayOpaqueBlendDescription.RenderTarget[0].BlendOpAlpha = D3D11_BLEND_OP_ADD;
-        overlayOpaqueBlendDescription.RenderTarget[0].RenderTargetWriteMask = D3D11_COLOR_WRITE_ENABLE_ALL;
-
-        ThrowIfFailed(
-            Bootstrap.GetDevice()->CreateBlendState(&overlayOpaqueBlendDescription, OverlayOpaqueBlendState.GetAddressOf()),
-            "ID3D11Device::CreateBlendState failed for the Windows bridge overlay-opaque blend state.");
 
         D3D11_DEPTH_STENCIL_DESC depthStencilDescription {};
         depthStencilDescription.DepthEnable = TRUE;
@@ -2275,8 +2260,7 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
         context->OMSetDepthStencilState(DepthStencilState.Get(), 0);
         context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
         if (AlphaMode == Win32RenderAlphaMode::Premultiplied) {
-            const float overlayOpaqueBlendFactor[] = { 1.0f, 1.0f, 1.0f, 1.0f };
-            context->OMSetBlendState(OverlayOpaqueBlendState.Get(), overlayOpaqueBlendFactor, 0xFFFFFFFFu);
+            RenderManager2DBridge->BindPremultipliedDestinationBlendState();
         }
 
         if (!HasWrittenRenderSnapshot) {
@@ -3298,6 +3282,19 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
 
         AlphaMode = alphaMode;
         IsAlphaModeConfigured = true;
+    }
+
+    /// Binds the premultiplied-destination src-over blend state (color SRC_ALPHA/INV_SRC_ALPHA, alpha
+    /// ONE/INV_SRC_ALPHA) for the 3D pass of one camera in Premultiplied mode, creating the 2D pipeline state first
+    /// when the 2D pass has not run yet. The shader's straight-alpha output is composited over the premultiplied back
+    /// buffer, so the result is valid premultiplied alpha for any material alpha.
+    void Win32RenderManager2D::BindPremultipliedDestinationBlendState() {
+        if (AlphaMode != Win32RenderAlphaMode::Premultiplied) {
+            throw std::logic_error("The premultiplied-destination blend state is only bound in the Premultiplied alpha mode.");
+        }
+
+        EnsurePipelineState();
+        Bootstrap.GetDeviceContext()->OMSetBlendState(PremultipliedDestinationBlendState.Get(), nullptr, 0xFFFFFFFFu);
     }
 
     /// Creates the DirectX11 shaders, buffers, and fixed pipeline state needed for 2D rendering.

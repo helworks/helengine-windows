@@ -127,8 +127,8 @@ namespace helengine::windows {
 
         /// Applies the back-buffer alpha mode and the overlay background once at startup, before the first Draw.
         /// Straight keeps today's clears and the inherited 3D blend state byte for byte; Premultiplied premultiplies
-        /// the clears (or clears to fully transparent for the transparent background) and binds the overlay-opaque
-        /// blend state at the start of each camera's 3D pass.
+        /// the clears (or clears to fully transparent for the transparent background) and binds the 2D bridge's
+        /// premultiplied-destination src-over blend state at the start of each camera's 3D pass.
         /// <param name="alphaMode">How the back buffer's alpha channel is treated.</param>
         /// <param name="overlayBackground">How premultiplied clears resolve their color; ignored in Straight mode.</param>
         /// <exception cref="std::logic_error">Thrown when the alpha mode was already configured.</exception>
@@ -354,10 +354,6 @@ namespace helengine::windows {
         /// Stores the rasterizer state for solid back-face-culled drawing.
         Microsoft::WRL::ComPtr<ID3D11RasterizerState> RasterizerState;
 
-        /// Stores the Premultiplied-mode 3D blend state: color is written unchanged (ONE/ZERO) and alpha is taken from
-        /// the blend factor (BLEND_FACTOR/ZERO), bound at the start of each camera's 3D pass only in Premultiplied mode.
-        Microsoft::WRL::ComPtr<ID3D11BlendState> OverlayOpaqueBlendState;
-
         /// Stores the depth-stencil state for normal opaque 3D drawing.
         Microsoft::WRL::ComPtr<ID3D11DepthStencilState> DepthStencilState;
 
@@ -425,6 +421,11 @@ namespace helengine::windows {
         /// <param name="alphaMode">How the back buffer's alpha channel is treated.</param>
         /// <exception cref="std::logic_error">Thrown when the alpha mode was already configured.</exception>
         void ConfigureAlphaMode(Win32RenderAlphaMode alphaMode);
+
+        /// Binds the premultiplied-destination src-over blend state for the 3D pass of one camera in Premultiplied
+        /// mode, creating the 2D pipeline state first when needed.
+        /// <exception cref="std::logic_error">Thrown when the configured alpha mode is not Premultiplied.</exception>
+        void BindPremultipliedDestinationBlendState();
 
         /// Returns the number of uploaded texture resources currently cached by the Windows bridge.
         std::size_t GetTextureResourceCount() const;
@@ -563,8 +564,9 @@ namespace helengine::windows {
         /// Stores the alpha-blend state used by 2D UI draws.
         Microsoft::WRL::ComPtr<ID3D11BlendState> AlphaBlendState;
 
-        /// Stores the Premultiplied-mode 2D blend state: straight-alpha source colors (SRC_ALPHA/INV_SRC_ALPHA) blended
-        /// over a premultiplied destination whose alpha accumulates as ONE/INV_SRC_ALPHA.
+        /// Stores the Premultiplied-mode blend state shared by the 2D draws and each camera's 3D pass: straight-alpha
+        /// source colors (SRC_ALPHA/INV_SRC_ALPHA) blended over a premultiplied destination whose alpha accumulates as
+        /// ONE/INV_SRC_ALPHA.
         Microsoft::WRL::ComPtr<ID3D11BlendState> PremultipliedDestinationBlendState;
 
         /// Stores how the back buffer's alpha channel is treated; applied once at startup through ConfigureAlphaMode.
