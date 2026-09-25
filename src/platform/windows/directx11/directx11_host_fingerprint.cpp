@@ -61,7 +61,9 @@ namespace helengine::windows {
 
         RECT clientRect = {};
         if (!GetClientRect(WindowHandle, &clientRect)) {
-            ThrowIfFailed(HRESULT_FROM_WIN32(GetLastError()), "GetClientRect");
+            std::ostringstream messageBuilder;
+            messageBuilder << "Host fingerprint: GetClientRect failed with Win32 error " << GetLastError() << ".";
+            throw std::runtime_error(messageBuilder.str());
         }
 
         long long elapsedMilliseconds = 0;
