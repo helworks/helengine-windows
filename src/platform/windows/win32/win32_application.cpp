@@ -28,6 +28,7 @@
 
 #include "platform/windows/directx11/directx11_back_buffer_capture.hpp"
 #include "platform/windows/directx11/directx11_bootstrap.hpp"
+#include "platform/windows/directx11/directx11_hit_test_sampler.hpp"
 #include "platform/windows/directx11/directx11_host_fingerprint.hpp"
 #include "platform/windows/directx11/directx11_presenter.hpp"
 #include "platform/windows/runtime/runtime_memory_snapshot.hpp"
@@ -40,6 +41,7 @@
 #include "platform/windows/win32/win32_audio_backend.hpp"
 #endif
 #include "platform/windows/win32/win32_activity_tracker.hpp"
+#include "platform/windows/win32/win32_click_through_controller.hpp"
 #include "platform/windows/win32/win32_exit_request.hpp"
 #include "platform/windows/win32/win32_idle_frame_pacer.hpp"
 #include "platform/windows/win32/win32_idle_throttle_settings.hpp"
@@ -529,7 +531,9 @@ namespace helengine::windows {
           IdleFramePacer(),
           CurrentFrameIsIdle(false),
           IdleFrameCount(0),
-          ActiveFrameCount(0)
+          ActiveFrameCount(0),
+          HitTestProbeAlpha(0),
+          HitTestProbeAlphaAvailable(false)
 #if defined(HELENGINE_WINDOWS_DEBUG_RUNTIME_DIAGNOSTICS)
           , DebugAllocationBaselineCaptured(false),
           DebugAllocationBaselineState(),
@@ -742,6 +746,10 @@ namespace helengine::windows {
         }
         if (CommandLineOptions.HasFrameLimit()) {
             HostFingerprint = std::make_unique<DirectX11HostFingerprint>(*Bootstrap, MainWindow->GetHandle());
+        }
+        if (WindowModeSettings->GetWindowMode() == Win32WindowMode::Overlay) {
+            HitTestSampler = std::make_unique<DirectX11HitTestSampler>(*Bootstrap);
+            ClickThroughController = std::make_unique<Win32ClickThroughController>(MainWindow->GetHandle());
         }
         WriteLifecycleLog("DirectX 11 bootstrap initialized.");
     }
@@ -1852,6 +1860,39 @@ namespace helengine::windows {
                 }
             }
 
+            if (HitTestSampler) {
+                frameStage = "hit_test";
+                // Overlay mode only: sample the drawn pixel under the cursor (or the fixed --hit-test-probe point)
+                // before it is presented. GetCursorPos fails while another desktop such as the lock screen is active;
+                // the cursor is then not over the overlay, so nothing is captured and the state stays unchanged, the
+                // same as a cursor outside the window.
+                POINT samplePoint {};
+                bool hasSamplePoint = false;
+                if (CommandLineOptions.HasHitTestProbe()) {
+                    samplePoint.x = CommandLineOptions.GetHitTestProbeX();
+                    samplePoint.y = CommandLineOptions.GetHitTestProbeY();
+                    hasSamplePoint = true;
+                } else if (GetCursorPos(&samplePoint)) {
+                    if (!ScreenToClient(MainWindow->GetHandle(), &samplePoint)) {
+                        throw std::runtime_error("ScreenToClient failed for the overlay hit test with error " + std::to_string(GetLastError()) + ".");
+                    }
+                    hasSamplePoint = true;
+                }
+                if (hasSamplePoint) {
+                    HitTestSampler->Capture(samplePoint.x, samplePoint.y);
+                }
+                int sampledAlpha = 0;
+                if (HitTestSampler->TryReadLatestAlpha(sampledAlpha)) {
+                    // An alpha below 8 of 255 counts as transparent: the mouse passes through to the window behind.
+                    if (CommandLineOptions.HasHitTestProbe()) {
+                        HitTestProbeAlpha = sampledAlpha;
+                        HitTestProbeAlphaAvailable = true;
+                    } else {
+                        ClickThroughController->Apply(sampledAlpha < 8);
+                    }
+                }
+            }
+
             if (shouldTraceFirstFrame) {
                 WriteLifecycleLog("First frame entering Presenter->RenderFrame().");
             }
@@ -1875,6 +1916,7 @@ namespace helengine::windows {
                 if (RenderedFrameCount >= CommandLineOptions.GetFrameLimit()) {
                     std::string fingerprintLine = HostFingerprint->Describe(RenderedFrameCount, IdleFramePacer != nullptr, IdleFrameCount, ActiveFrameCount, WindowModeSettings->GetWindowMode());
                     WriteLifecycleLog(fingerprintLine.c_str());
+                    WriteHitTestProbeResult();
                     PostQuitMessage(0);
                 }
             }
@@ -1895,6 +1937,30 @@ namespace helengine::windows {
         }
     }
 
+    /// Writes the HIT_TEST line of a --hit-test-probe run after its last frame:
+    /// `HIT_TEST x=<x> y=<y> alpha=<a> clickThrough=<on|off>`, where clickThrough is the state the alpha < 8 threshold
+    /// would select (probe runs never toggle the window style). When no readback completed during the run, it writes
+    /// `alpha=pending` instead of guessing and throws Win32ExitRequest with exit code 3. Does nothing without
+    /// --hit-test-probe.
+    void Win32Application::WriteHitTestProbeResult() {
+        if (!CommandLineOptions.HasHitTestProbe()) {
+            return;
+        }
+
+        std::ostringstream hitTestBuilder;
+        hitTestBuilder << "HIT_TEST x=" << CommandLineOptions.GetHitTestProbeX() << " y=" << CommandLineOptions.GetHitTestProbeY();
+        if (!HitTestProbeAlphaAvailable) {
+            hitTestBuilder << " alpha=pending";
+            std::string pendingLine = hitTestBuilder.str();
+            WriteLifecycleLog(pendingLine.c_str());
+            throw Win32ExitRequest(3, "The --hit-test-probe readback never completed, so the probe alpha is unknown.");
+        }
+
+        hitTestBuilder << " alpha=" << HitTestProbeAlpha << " clickThrough=" << (HitTestProbeAlpha < 8 ? "on" : "off");
+        std::string hitTestLine = hitTestBuilder.str();
+        WriteLifecycleLog(hitTestLine.c_str());
+    }
+
     /// Runs the opt-in idle-throttled render loop until WM_QUIT: while the player is idle it sleeps in
     /// MsgWaitForMultipleObjectsEx until the next idle frame is due or a message arrives, and while it is active
     /// it renders immediately like the default loop. Each iteration decides whether to wait, pumps messages (which
@@ -1906,6 +1972,9 @@ namespace helengine::windows {
     /// and an active iteration with no client area also waits one idle interval before retrying.
     void Win32Application::RunIdleThrottledLoop() {
         long long lastFrameStartMilliseconds = Win32IdleFramePacer::ToMilliseconds(std::chrono::steady_clock::now());
+        // Overlay mode only: the last cursor position the loop saw. It starts at the origin, so the first sample may
+        // count as activity, which is harmless because the player starts in active mode.
+        POINT lastCursorPosition {};
         while (true) {
             long long waitCheckMilliseconds = Win32IdleFramePacer::ToMilliseconds(std::chrono::steady_clock::now());
             long long lastActivityMilliseconds = Win32IdleFramePacer::ToMilliseconds(ActivityTracker->GetLastActivity());
@@ -1932,6 +2001,27 @@ namespace helengine::windows {
 
             if (!PumpMessages()) {
                 break;
+            }
+
+            if (WindowModeSettings->GetWindowMode() == Win32WindowMode::Overlay) {
+                // While click-through is on the overlay receives no mouse messages, so the tracker cannot see the
+                // cursor moving over transparent areas: a cursor position change counts as activity when the cursor
+                // is inside the overlay's window rectangle. GetCursorPos fails while another desktop such as the lock
+                // screen is active; the cursor is then not over the overlay, so that iteration records nothing.
+                POINT cursorPosition {};
+                if (GetCursorPos(&cursorPosition)) {
+                    bool cursorMoved = cursorPosition.x != lastCursorPosition.x || cursorPosition.y != lastCursorPosition.y;
+                    lastCursorPosition = cursorPosition;
+                    if (cursorMoved) {
+                        RECT windowRectangle {};
+                        if (!GetWindowRect(MainWindow->GetHandle(), &windowRectangle)) {
+                            throw std::runtime_error("GetWindowRect failed in the idle-throttled loop with error " + std::to_string(GetLastError()) + ".");
+                        }
+                        if (PtInRect(&windowRectangle, cursorPosition)) {
+                            ActivityTracker->MarkActivity();
+                        }
+                    }
+                }
             }
 
             long long frameStartMilliseconds = Win32IdleFramePacer::ToMilliseconds(std::chrono::steady_clock::now());

@@ -68,6 +68,7 @@ set(HELENGINE_WINDOWS_SOURCES
     src/platform/windows/win32/bmp_image_writer.cpp
     src/platform/windows/win32/win32_activity_tracker.cpp
     src/platform/windows/win32/win32_application.cpp
+    src/platform/windows/win32/win32_click_through_controller.cpp
     src/platform/windows/win32/win32_command_line_options.cpp
     src/platform/windows/win32/win32_exit_request.cpp
     src/platform/windows/win32/win32_idle_frame_pacer.cpp
@@ -78,6 +79,7 @@ set(HELENGINE_WINDOWS_SOURCES
     src/platform/windows/win32/win32_window_style.cpp
     src/platform/windows/directx11/directx11_back_buffer_capture.cpp
     src/platform/windows/directx11/directx11_bootstrap.cpp
+    src/platform/windows/directx11/directx11_hit_test_sampler.cpp
     src/platform/windows/directx11/directx11_host_fingerprint.cpp
     src/platform/windows/directx11/directx11_hresult_formatter.cpp
     src/platform/windows/directx11/directx11_presenter.cpp

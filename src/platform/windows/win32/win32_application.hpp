@@ -33,10 +33,12 @@ class float4;
 namespace helengine::windows {
     class DirectX11BackBufferCapture;
     class DirectX11Bootstrap;
+    class DirectX11HitTestSampler;
     class DirectX11HostFingerprint;
     class DirectX11Presenter;
     class Win32ActivityTracker;
     class Win32AudioBackend;
+    class Win32ClickThroughController;
     class Win32IdleFramePacer;
     class Win32InputBackend;
     class Win32RenderManager2D;
@@ -194,6 +196,13 @@ namespace helengine::windows {
         /// Renders and presents the current frame.
         void RenderFrame();
 
+        /// Writes the HIT_TEST line of a --hit-test-probe run after its last frame:
+        /// `HIT_TEST x=<x> y=<y> alpha=<a> clickThrough=<on|off>`, where clickThrough is the state the alpha < 8
+        /// threshold would select (probe runs never toggle the window style). When no readback completed during the
+        /// run, it writes `alpha=pending` instead of guessing and throws Win32ExitRequest with exit code 3. Does
+        /// nothing without --hit-test-probe.
+        void WriteHitTestProbeResult();
+
         /// Runs the opt-in idle-throttled render loop until WM_QUIT: while the player is idle it sleeps in
         /// MsgWaitForMultipleObjectsEx until the next idle frame is due or a message arrives, and while it is active
         /// it renders immediately like the default loop.
@@ -320,6 +329,14 @@ namespace helengine::windows {
         /// --frames was not supplied.
         std::unique_ptr<DirectX11HostFingerprint> HostFingerprint;
 
+        /// Stores the sampler that reads the back-buffer alpha under the cursor (or the --hit-test-probe point) each
+        /// frame; only created in overlay mode, null otherwise.
+        std::unique_ptr<DirectX11HitTestSampler> HitTestSampler;
+
+        /// Stores the controller that toggles WS_EX_TRANSPARENT on the overlay window from the sampled alpha; only
+        /// created in overlay mode, null otherwise, and never used to toggle styles in --hit-test-probe runs.
+        std::unique_ptr<Win32ClickThroughController> ClickThroughController;
+
         /// Stores the process exit code requested by the Windows message loop.
         int ExitCode;
 
@@ -413,6 +430,14 @@ namespace helengine::windows {
         /// Counts the frames of a --frames run that were rendered in active mode (every frame when the idle throttle is
         /// disabled); only advanced inside the frame-limit block of RenderFrame, so a no-argument run never touches it.
         int ActiveFrameCount;
+
+        /// Stores the most recent alpha read back at the --hit-test-probe point; only meaningful once
+        /// HitTestProbeAlphaAvailable is true, and never written without --hit-test-probe.
+        int HitTestProbeAlpha;
+
+        /// Tracks whether at least one --hit-test-probe readback completed, so the HIT_TEST line never reports a
+        /// guessed alpha; stays false without --hit-test-probe.
+        bool HitTestProbeAlphaAvailable;
 
 #if defined(HELENGINE_WINDOWS_DEBUG_RUNTIME_DIAGNOSTICS) && __has_include("IRuntimeDiagnosticsProvider.hpp") && __has_include("RuntimeMemoryDiagnosticsSnapshot.hpp")
         /// Stores the debug-build Windows runtime diagnostics provider exposed to the shared core service.
