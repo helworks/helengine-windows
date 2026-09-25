@@ -6,12 +6,18 @@ Builds this checkout's Windows player against an isolated copy of the DemoDisc p
 Modes (exactly one is required):
   -BuildOnly  Builds the player from THIS checkout (the folder above this script) into <WorkRoot>\player and prints
               PROJECT_COMMIT=<DemoDisc HEAD>, PLAYER_SOURCE_ROOT=<checkout> and PLAYER=<exe path>.
-  -Record     Builds, runs every scene twice (runs a and b) and records each stable scene as a golden under
-              regression\golden, writes regression\golden\manifest.json (run settings, scene status and provenance)
-              and records each test suite's failing-test set under regression\baselines.
+  -Record     Builds, runs every scene twice (runs a and b), records each stable scene as a golden, writes
+              manifest.json (run settings, scene status, host fingerprints and provenance hashes) and records each
+              test suite's failing-test set and executed-test count. Everything is written to
+              <WorkRoot>\record-staging first and copied into regression\golden and regression\baselines only when
+              the whole record had no FAIL.
   -Verify     Builds, runs every scene once, checks that the smoke scene is not blank, compares every stable scene
-              with its golden and compares each test suite's failing-test set with its baseline. Prints one line per
-              check, then RESULT: PASS or RESULT: FAIL (<n> failing), and exits 0 only on PASS.
+              with its golden and every scene's host fingerprint with the recorded one, and compares each test
+              suite's failing-test set and executed-test count with its baseline. Prints one line per check, then
+              RESULT: PASS or RESULT: FAIL (<n> failing), and exits 0 only on PASS.
+
+Every scene run is limited to 120 seconds; a hung player is killed and reported as FAIL scene <id> timeout.
+The work root is marked with a .helengine-regression-workroot file; a non-empty folder without it is refused.
 
 See regression\README.md for the thresholds and for when and how to re-record deliberately.
 
@@ -130,10 +136,14 @@ function Invoke-RegressionTool {
 Launches the player on one scene through the canonical launcher and waits for it to exit.
 .DESCRIPTION
 Rewrites the player's profile.json first (a profile left by an earlier run would otherwise override the 640x360
-window), creates the capture folder (the player's BMP writer does not create folders) and deletes any capture left by
-an earlier run so that a stale file is never checked. On a non-zero exit code it prints the tail of the startup log.
+window), creates the capture folder (the player's BMP writer does not create folders) and deletes any capture and
+startup log left by an earlier run so that a stale file is never checked. The launcher kills a run that takes longer
+than 120 seconds. On a timeout or a non-zero exit code it prints the tail of the startup log. After the run it reads
+the player's HOST_FINGERPRINT line from the startup log.
 .OUTPUTS
-A [pscustomobject] with ExitCode (the player's exit code) and CaptureExists (whether the capture file was written).
+A [pscustomobject] with TimedOut (whether the launcher killed the run), ExitCode (the player's exit code; $null on a
+timeout), CaptureExists (whether the capture file was written) and Fingerprint (the HOST_FINGERPRINT line without the
+log prefix, or $null when the log has none).
 #>
 function Invoke-PlayerScene {
     param(
@@ -149,23 +159,35 @@ function Invoke-PlayerScene {
     if (Test-Path -LiteralPath $CapturePath) {
         Remove-Item -LiteralPath $CapturePath -Force
     }
+    $startupLogPath = Join-Path $script:playerOutputPath 'helengine_windows.startup.log'
+    if (Test-Path -LiteralPath $startupLogPath) {
+        Remove-Item -LiteralPath $startupLogPath -Force
+    }
 
     Write-Host "RUN $SceneId -> $CapturePath"
     $playerArguments = @('--scene', $SceneId, '--frames', '30', '--fixed-delta', '0.016666', '--capture', $CapturePath)
-    $launchLines = @(& "$script:RepoRoot\scripts\launch_in_emulator.ps1" -ArtifactPath $script:playerExecutablePath -ArgumentList $playerArguments -Wait)
+    $launchLines = @(& "$script:RepoRoot\scripts\launch_in_emulator.ps1" -ArtifactPath $script:playerExecutablePath -ArgumentList $playerArguments -Wait -TimeoutSeconds 120)
     $playerExitCode = $null
+    $timedOut = $false
     foreach ($launchLine in $launchLines) {
-        if ("$launchLine" -match '^EXIT_CODE=(-?\d+)$') {
+        if ("$launchLine" -match '^EXIT_CODE=timeout$') {
+            $timedOut = $true
+        }
+        elseif ("$launchLine" -match '^EXIT_CODE=(-?\d+)$') {
             $playerExitCode = [int]$Matches[1]
         }
     }
-    if ($null -eq $playerExitCode) {
+    if (-not $timedOut -and $null -eq $playerExitCode) {
         throw "The launcher did not report EXIT_CODE= for scene '$SceneId'."
     }
 
-    if ($playerExitCode -ne 0) {
-        $startupLogPath = Join-Path $script:playerOutputPath 'helengine_windows.startup.log'
-        Write-Host "Player exited with code $playerExitCode on scene '$SceneId'. Startup log tail ($startupLogPath):"
+    if ($timedOut -or $playerExitCode -ne 0) {
+        if ($timedOut) {
+            Write-Host "Player was killed after 120 seconds on scene '$SceneId'. Startup log tail ($startupLogPath):"
+        }
+        else {
+            Write-Host "Player exited with code $playerExitCode on scene '$SceneId'. Startup log tail ($startupLogPath):"
+        }
         if (Test-Path -LiteralPath $startupLogPath -PathType Leaf) {
             Get-Content -LiteralPath $startupLogPath -Tail 20 | ForEach-Object { Write-Host "  $_" }
         }
@@ -174,14 +196,23 @@ function Invoke-PlayerScene {
         }
     }
 
-    return [pscustomobject]@{ ExitCode = $playerExitCode; CaptureExists = (Test-Path -LiteralPath $CapturePath -PathType Leaf) }
+    $fingerprintLine = $null
+    if (Test-Path -LiteralPath $startupLogPath -PathType Leaf) {
+        foreach ($startupLogLine in (Get-Content -LiteralPath $startupLogPath)) {
+            if ("$startupLogLine" -match '(HOST_FINGERPRINT .+)$') {
+                $fingerprintLine = $Matches[1]
+            }
+        }
+    }
+
+    return [pscustomobject]@{ TimedOut = $timedOut; ExitCode = $playerExitCode; CaptureExists = (Test-Path -LiteralPath $CapturePath -PathType Leaf); Fingerprint = $fingerprintLine }
 }
 
 <#
 .SYNOPSIS
-Records a FAIL for a scene run that did not exit cleanly or wrote no capture.
+Records a FAIL for a scene run that timed out, did not exit cleanly, wrote no capture or logged no host fingerprint.
 .OUTPUTS
-$true when the run succeeded and its capture can be checked; otherwise $false, after recording a FAIL.
+$true when the run succeeded and its capture and fingerprint can be checked; otherwise $false, after recording a FAIL.
 #>
 function Test-PlayerRunSucceeded {
     param(
@@ -198,6 +229,10 @@ function Test-PlayerRunSucceeded {
         [string]$CapturePath
     )
 
+    if ($PlayerRun.TimedOut) {
+        Add-CheckResult -Status FAIL -Kind scene -Name $SceneId -Detail 'timeout'
+        return $false
+    }
     if ($PlayerRun.ExitCode -ne 0) {
         Add-CheckResult -Status FAIL -Kind $Kind -Name $SceneId -Detail "player exit code $($PlayerRun.ExitCode)"
         return $false
@@ -206,7 +241,152 @@ function Test-PlayerRunSucceeded {
         Add-CheckResult -Status FAIL -Kind $Kind -Name $SceneId -Detail "capture missing: $CapturePath"
         return $false
     }
+    if ($null -eq $PlayerRun.Fingerprint) {
+        Add-CheckResult -Status FAIL -Kind fingerprint -Name $SceneId -Detail 'missing: the startup log has no HOST_FINGERPRINT line'
+        return $false
+    }
     return $true
+}
+
+<#
+.SYNOPSIS
+Runs one regression tool fingerprint command (check-fingerprint or compare-fingerprint) and records its findings.
+.DESCRIPTION
+Each "FAIL <kind> <scene> <detail>" or "WARN <kind> <scene> <detail>" line the tool prints becomes a check line as
+is (for example "FAIL fingerprint axis_test buffers recorded=2 actual=3" or "WARN pacing axis_test recorded=483ms
+actual=1600ms"). When the tool reports no failure, one PASS fingerprint line with PassDetail is recorded. A tool error
+is a FAIL.
+#>
+function Invoke-FingerprintCheck {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$SceneId,
+
+        [Parameter(Mandatory = $true)]
+        [string[]]$ToolArguments,
+
+        [Parameter(Mandatory = $true)]
+        [string]$PassDetail
+    )
+
+    $fingerprintRun = Invoke-RegressionTool -ToolArguments $ToolArguments
+    if ($fingerprintRun.ExitCode -ne 0 -and $fingerprintRun.ExitCode -ne 1) {
+        Add-CheckResult -Status FAIL -Kind fingerprint -Name $SceneId -Detail ($fingerprintRun.Lines -join ' ')
+        return
+    }
+    foreach ($findingLine in ($fingerprintRun.Lines | Select-Object -Skip 1)) {
+        if ("$findingLine" -notmatch '^(FAIL|WARN) (\S+) (\S+) (.+)$') {
+            throw "The regression tool printed an unexpected fingerprint line for scene '$SceneId': $findingLine"
+        }
+        Add-CheckResult -Status $Matches[1] -Kind $Matches[2] -Name $Matches[3] -Detail $Matches[4]
+    }
+    if ($fingerprintRun.ExitCode -eq 0) {
+        Add-CheckResult -Status PASS -Kind fingerprint -Name $SceneId -Detail $PassDetail
+    }
+}
+
+<#
+.SYNOPSIS
+Splits a HOST_FINGERPRINT line into its name=value fields, in the order the player wrote them.
+.OUTPUTS
+An ordered dictionary from field name to value (strings), without the HOST_FINGERPRINT marker.
+#>
+function ConvertTo-FingerprintFields {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$FingerprintLine
+    )
+
+    $fingerprintFields = [ordered]@{}
+    foreach ($fingerprintToken in ($FingerprintLine.Split(' ') | Select-Object -Skip 1)) {
+        $separatorIndex = $fingerprintToken.IndexOf('=')
+        if ($separatorIndex -le 0) {
+            throw "Host fingerprint token '$fingerprintToken' is not name=value in: $FingerprintLine"
+        }
+        $fingerprintFields[$fingerprintToken.Substring(0, $separatorIndex)] = $fingerprintToken.Substring($separatorIndex + 1)
+    }
+    return $fingerprintFields
+}
+
+<#
+.SYNOPSIS
+Returns the upper-case hexadecimal SHA-256 of a text's UTF-8 bytes.
+#>
+function Get-TextSha256 {
+    param(
+        [Parameter(Mandatory = $true)]
+        [AllowEmptyString()]
+        [string]$Text
+    )
+
+    $sha256 = [System.Security.Cryptography.SHA256]::Create()
+    try {
+        $hashBytes = $sha256.ComputeHash($script:utf8WithoutBom.GetBytes($Text))
+    }
+    finally {
+        $sha256.Dispose()
+    }
+    return ([System.BitConverter]::ToString($hashBytes)).Replace('-', '')
+}
+
+<#
+.SYNOPSIS
+Returns one SHA-256 for a whole folder tree: every file's forward-slash relative path and SHA-256, one per line,
+sorted ordinally and then hashed.
+.DESCRIPTION
+Files under any bin or obj folder are skipped, matching the robocopy /XD bin obj used to copy the tree.
+#>
+function Get-TreeSha256 {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$RootPath
+    )
+
+    $normalizedRootPath = [System.IO.Path]::GetFullPath($RootPath).TrimEnd('\', '/') + '\'
+    $treeEntries = New-Object System.Collections.Generic.List[string]
+    foreach ($treeFile in (Get-ChildItem -LiteralPath $RootPath -Recurse -File -Force)) {
+        $relativePath = $treeFile.FullName.Substring($normalizedRootPath.Length).Replace('\', '/')
+        if ($relativePath -match '(^|/)(bin|obj)/') {
+            continue
+        }
+        $treeEntries.Add($relativePath + ' ' + (Get-FileHash -LiteralPath $treeFile.FullName -Algorithm SHA256).Hash)
+    }
+    $treeEntries.Sort([System.StringComparer]::Ordinal)
+    return Get-TextSha256 -Text ($treeEntries -join "`n")
+}
+
+<#
+.SYNOPSIS
+Copies a passed record from the staging folder into regression\golden and regression\baselines.
+.DESCRIPTION
+The committed goldens (*.png) and manifest.json are replaced as a whole, so a scene that no longer gets a golden
+leaves no stale file behind. Baseline files are overwritten one by one; files that Record never writes (the
+hand-maintained <suite>.flaky.txt lists) are kept.
+#>
+function Publish-RecordStaging {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$StagingGoldenRootPath,
+
+        [Parameter(Mandatory = $true)]
+        [string]$StagingBaselineRootPath,
+
+        [Parameter(Mandatory = $true)]
+        [string]$GoldenRootPath,
+
+        [Parameter(Mandatory = $true)]
+        [string]$BaselineRootPath
+    )
+
+    New-Item -ItemType Directory -Path $GoldenRootPath -Force | Out-Null
+    New-Item -ItemType Directory -Path $BaselineRootPath -Force | Out-Null
+    Get-ChildItem -LiteralPath $GoldenRootPath -Filter '*.png' | Remove-Item -Force
+    $committedManifestPath = Join-Path $GoldenRootPath 'manifest.json'
+    if (Test-Path -LiteralPath $committedManifestPath) {
+        Remove-Item -LiteralPath $committedManifestPath -Force
+    }
+    Get-ChildItem -LiteralPath $StagingGoldenRootPath -File | Copy-Item -Destination $GoldenRootPath -Force
+    Get-ChildItem -LiteralPath $StagingBaselineRootPath -File | Copy-Item -Destination $BaselineRootPath -Force
 }
 
 <#
@@ -239,7 +419,8 @@ Runs one dotnet test suite with a TRX logger and writes its sorted failing-test 
 The suite's console output goes to <WorkRoot>\trx\<suite>.log. dotnet test returns non-zero whenever a test fails,
 which is expected here (known failures live in the baseline), so only a missing TRX file is treated as an error.
 .OUTPUTS
-The path of the written failing-test list.
+A [pscustomobject] with FailingListPath (the written failing-test list) and TrxPath (the suite's TRX file, whose
+ResultSummary is checked for aborted or truncated runs).
 #>
 function Invoke-TestSuite {
     param(
@@ -280,7 +461,7 @@ function Invoke-TestSuite {
     if ($trxFailingRun.ExitCode -ne 0) {
         throw "Reading the failing tests of $SuiteName failed: $($trxFailingRun.Lines -join ' ')"
     }
-    return $failingListPath
+    return [pscustomobject]@{ FailingListPath = $failingListPath; TrxPath = $trxPath }
 }
 
 $RepoRoot = (Resolve-Path "$PSScriptRoot\..").Path
@@ -289,6 +470,23 @@ $ProjectSource = [System.IO.Path]::GetFullPath($ProjectSource)
 $WorkRoot = [System.IO.Path]::GetFullPath($WorkRoot)
 Assert-WorkRootIsolated -WorkRootPath $WorkRoot -ProtectedRootPaths @($ProjectSource, $HelengineRoot, $RepoRoot)
 $utf8WithoutBom = New-Object System.Text.UTF8Encoding($false)
+
+# The build stage deletes and rewrites folders under the work root, so only a folder this script created (it carries
+# the marker file) or an empty or missing one may be used.
+$workRootMarkerPath = Join-Path $WorkRoot '.helengine-regression-workroot'
+if (Test-Path -LiteralPath $WorkRoot) {
+    if (-not (Test-Path -LiteralPath $WorkRoot -PathType Container)) {
+        throw "The work root '$WorkRoot' is a file, not a folder."
+    }
+    $workRootHasEntries = @(Get-ChildItem -LiteralPath $WorkRoot -Force | Select-Object -First 1).Count -gt 0
+    if ($workRootHasEntries -and -not (Test-Path -LiteralPath $workRootMarkerPath -PathType Leaf)) {
+        throw "The work root '$WorkRoot': refusing to use a non-empty folder that was not created by run-regression.ps1 (it has no .helengine-regression-workroot marker)."
+    }
+}
+New-Item -ItemType Directory -Path $WorkRoot -Force | Out-Null
+if (-not (Test-Path -LiteralPath $workRootMarkerPath -PathType Leaf)) {
+    [System.IO.File]::WriteAllText($workRootMarkerPath, "Work root of scripts\run-regression.ps1 (helengine-windows). Its contents are rebuilt on every run.`n", $utf8WithoutBom)
+}
 $CheckResults = New-Object System.Collections.Generic.List[string]
 $tarExecutablePath = Join-Path $env:SystemRoot 'System32\tar.exe'
 
@@ -330,6 +528,22 @@ if ($LASTEXITCODE -ne 0) {
     throw "Extracting the project archive failed with exit code $LASTEXITCODE."
 }
 Remove-Item -LiteralPath $projectArchivePath -Force
+
+# git archive exports Git LFS pointer files instead of the real content, so a project that uses LFS cannot be built
+# from the archive.
+$copiedGitAttributesPath = Join-Path $projectRootPath '.gitattributes'
+if ((Test-Path -LiteralPath $copiedGitAttributesPath -PathType Leaf) -and ([System.IO.File]::ReadAllText($copiedGitAttributesPath) -match 'filter=lfs')) {
+    throw "The project's .gitattributes uses Git LFS (filter=lfs); git archive would export LFS pointer files instead of the assets: $copiedGitAttributesPath"
+}
+
+# Hash the project's own user_settings inputs before the copy's build_config.json is overridden below. The copy leaves
+# out bin and obj folders, and so does the generated code hash.
+$sourceGeneratedCodeRootPath = Join-Path $ProjectSource 'user_settings\generated_code'
+if (-not (Test-Path -LiteralPath $sourceGeneratedCodeRootPath -PathType Container)) {
+    throw "The project source has no user_settings\generated_code folder: $ProjectSource"
+}
+$buildConfigSourceHash = (Get-FileHash -LiteralPath (Join-Path $ProjectSource 'user_settings\build_config.json') -Algorithm SHA256).Hash
+$generatedCodeHash = Get-TreeSha256 -RootPath $sourceGeneratedCodeRootPath
 
 & robocopy (Join-Path $ProjectSource 'user_settings') (Join-Path $projectRootPath 'user_settings') /E /XD bin obj /NFL /NDL /NJH /NJS
 if ($LASTEXITCODE -ge 8) {
@@ -512,12 +726,30 @@ if ($LASTEXITCODE -ne 0) {
     throw "Reading the helengine checkout's status failed with exit code $LASTEXITCODE."
 }
 $helengineDirty = ($helengineStatusLines.Count -gt 0)
+# The dirty flag cannot tell two different uncommitted states apart, so the uncommitted work itself is hashed too: the
+# tracked changes against HEAD plus the sorted list of untracked (not ignored) files.
+$helengineDiffLines = @(& git -C $HelengineRoot diff HEAD --no-ext-diff --no-color)
+if ($LASTEXITCODE -ne 0) {
+    throw "Reading the helengine checkout's diff against HEAD failed with exit code $LASTEXITCODE."
+}
+$helengineUntrackedPaths = New-Object System.Collections.Generic.List[string]
+foreach ($untrackedPath in @(& git -C $HelengineRoot ls-files --others --exclude-standard)) {
+    $helengineUntrackedPaths.Add("$untrackedPath")
+}
+if ($LASTEXITCODE -ne 0) {
+    throw "Listing the helengine checkout's untracked files failed with exit code $LASTEXITCODE."
+}
+$helengineUntrackedPaths.Sort([System.StringComparer]::Ordinal)
+$helengineWorkingTreeHash = Get-TextSha256 -Text (($helengineDiffLines -join "`n") + "`n--untracked--`n" + ($helengineUntrackedPaths -join "`n"))
 Write-Output ("HELENGINE_COMMIT=" + $helengineCommit)
 Write-Output ("HELENGINE_DIRTY=" + $helengineDirty)
 
 $goldenRootPath = Join-Path $RepoRoot 'regression\golden'
 $baselineRootPath = Join-Path $RepoRoot 'regression\baselines'
 $manifestPath = Join-Path $goldenRootPath 'manifest.json'
+$recordStagingRootPath = Join-Path $WorkRoot 'record-staging'
+$stagingGoldenRootPath = Join-Path $recordStagingRootPath 'golden'
+$stagingBaselineRootPath = Join-Path $recordStagingRootPath 'baselines'
 $capturesRootPath = Join-Path $WorkRoot 'captures'
 $testSuites = @(
     [pscustomobject]@{ Name = 'helengine.editor.tests'; ProjectPath = "$HelengineRoot\engine\helengine.editor.tests\helengine.editor.tests.csproj"; ExtraArguments = @() },
@@ -526,11 +758,16 @@ $testSuites = @(
 )
 
 if ($Record) {
-    # 11R. Run every scene twice; a scene whose two captures are not stable is marked unstable and never becomes a
-    #      golden. Old goldens are removed first so that a scene that turned unstable leaves no stale golden behind.
-    New-Item -ItemType Directory -Path $goldenRootPath -Force | Out-Null
-    New-Item -ItemType Directory -Path $baselineRootPath -Force | Out-Null
-    Get-ChildItem -LiteralPath $goldenRootPath -Filter '*.png' | Remove-Item -Force
+    # 11R. Record into <WorkRoot>\record-staging; the committed goldens and baselines are only replaced at the end,
+    #      when the whole record had no FAIL. Run every scene twice; a scene whose two captures are not stable is
+    #      marked unstable and never becomes a golden. Each scene's host fingerprint (run a) goes into the manifest;
+    #      run a must be healthy and run b must match it.
+    if (Test-Path -LiteralPath $recordStagingRootPath) {
+        Remove-Item -LiteralPath $recordStagingRootPath -Recurse -Force
+    }
+    New-Item -ItemType Directory -Path $stagingGoldenRootPath -Force | Out-Null
+    New-Item -ItemType Directory -Path $stagingBaselineRootPath -Force | Out-Null
+    Write-Output ("RECORD_STAGING=" + $recordStagingRootPath)
 
     $manifestScenes = New-Object System.Collections.Generic.List[object]
     $unstableSceneIds = New-Object System.Collections.Generic.List[string]
@@ -546,6 +783,9 @@ if ($Record) {
             continue
         }
 
+        Invoke-FingerprintCheck -SceneId $sceneId -ToolArguments @('check-fingerprint', $sceneId, $runA.Fingerprint) -PassDetail 'run a healthy'
+        Invoke-FingerprintCheck -SceneId $sceneId -ToolArguments @('compare-fingerprint', $sceneId, $runA.Fingerprint, $runB.Fingerprint) -PassDetail 'run b matches run a'
+
         if ($sceneId -eq $smokeSceneId) {
             Test-SmokeCapture -SceneId $sceneId -CapturePath $captureAPath
         }
@@ -554,7 +794,7 @@ if ($Record) {
         $stableDetail = $stableRun.Lines -join ' '
         $sceneStatus = $null
         if ($stableRun.ExitCode -eq 0) {
-            $goldenPath = Join-Path $goldenRootPath "$sanitizedSceneId.png"
+            $goldenPath = Join-Path $stagingGoldenRootPath "$sanitizedSceneId.png"
             $recordRun = Invoke-RegressionTool -ToolArguments @('record-golden', $captureAPath, $goldenPath)
             if ($recordRun.ExitCode -ne 0) {
                 Add-CheckResult -Status FAIL -Kind golden -Name $sceneId -Detail ($recordRun.Lines -join ' ')
@@ -573,15 +813,17 @@ if ($Record) {
             continue
         }
 
+        $fingerprintFields = ConvertTo-FingerprintFields -FingerprintLine $runA.Fingerprint
+        $sceneElapsedMilliseconds = [long]$fingerprintFields['elapsedMs']
+        $fingerprintFields.Remove('elapsedMs')
         if ($sceneId -eq $smokeSceneId) {
             $manifestScenes.Add([ordered]@{ id = $sceneId; kind = 'smoke'; status = $sceneStatus })
         }
-        $manifestScenes.Add([ordered]@{ id = $sceneId; kind = 'golden'; status = $sceneStatus })
+        $manifestScenes.Add([ordered]@{ id = $sceneId; kind = 'golden'; status = $sceneStatus; fingerprint = $fingerprintFields; elapsedMs = $sceneElapsedMilliseconds })
     }
 
-    # 12R. Write the manifest right after the goldens and before any test suite runs, so that the goldens and the
-    #      manifest always describe the same record even when a suite step throws: run settings, each scene's check
-    #      kind and status, and the provenance of the record.
+    # 12R. Write the staged manifest: run settings, each scene's check kind, status and host fingerprint, and the
+    #      provenance of the record (commits and the hashes of every other input that changes the output).
     $manifestDocument = [ordered]@{
         frames = 30
         fixedDelta = 0.016666
@@ -589,23 +831,33 @@ if ($Record) {
         height = 360
         projectSource = $ProjectSource
         projectCommit = $projectCommit
+        buildConfigSourceHash = $buildConfigSourceHash
+        generatedCodeHash = $generatedCodeHash
         helengineCommit = $helengineCommit
         helengineDirty = $helengineDirty
+        helengineWorkingTreeHash = $helengineWorkingTreeHash
         scenes = $manifestScenes.ToArray()
     }
-    [System.IO.File]::WriteAllText($manifestPath, ($manifestDocument | ConvertTo-Json -Depth 10), $utf8WithoutBom)
-    Write-Output ("MANIFEST=" + $manifestPath)
+    [System.IO.File]::WriteAllText((Join-Path $stagingGoldenRootPath 'manifest.json'), ($manifestDocument | ConvertTo-Json -Depth 10), $utf8WithoutBom)
     if ($unstableSceneIds.Count -gt 0) {
         Write-Output ("UNSTABLE scenes (no golden recorded): " + ($unstableSceneIds -join ', '))
     }
 
-    # 13R. Record each test suite's failing-test set as its baseline, each one written right after its suite runs.
+    # 13R. Stage each test suite's failing-test set and executed-test count. A suite run that errored or aborted is a
+    #      FAIL and is never staged as a baseline.
     foreach ($testSuite in $testSuites) {
-        $failingListPath = Invoke-TestSuite -SuiteName $testSuite.Name -ProjectPath $testSuite.ProjectPath -ExtraArguments $testSuite.ExtraArguments
-        $baselinePath = Join-Path $baselineRootPath "$($testSuite.Name).failing.txt"
-        Copy-Item -LiteralPath $failingListPath -Destination $baselinePath -Force
+        $suiteRun = Invoke-TestSuite -SuiteName $testSuite.Name -ProjectPath $testSuite.ProjectPath -ExtraArguments $testSuite.ExtraArguments
+        $executedBaselinePath = Join-Path $stagingBaselineRootPath "$($testSuite.Name).executed.txt"
+        $recordExecutedRun = Invoke-RegressionTool -ToolArguments @('record-executed', $suiteRun.TrxPath, $executedBaselinePath)
+        if ($recordExecutedRun.ExitCode -ne 0) {
+            Add-CheckResult -Status FAIL -Kind suite -Name $testSuite.Name -Detail ($recordExecutedRun.Lines -join ' ')
+            continue
+        }
+        $baselinePath = Join-Path $stagingBaselineRootPath "$($testSuite.Name).failing.txt"
+        Copy-Item -LiteralPath $suiteRun.FailingListPath -Destination $baselinePath -Force
         $failingCount = @(Get-Content -LiteralPath $baselinePath | Where-Object { $_.Length -gt 0 }).Count
-        Add-CheckResult -Status PASS -Kind suite -Name $testSuite.Name -Detail "baseline recorded ($failingCount failing): $baselinePath"
+        $executedCount = [System.IO.File]::ReadAllText($executedBaselinePath).Trim()
+        Add-CheckResult -Status PASS -Kind suite -Name $testSuite.Name -Detail "baseline staged ($failingCount failing of $executedCount executed): $baselinePath"
     }
 }
 else {
@@ -613,6 +865,7 @@ else {
     #      recorded with the same run settings this script uses.
     $unstableSceneIds = New-Object System.Collections.Generic.List[string]
     $recordedGoldenSceneIds = New-Object System.Collections.Generic.List[string]
+    $recordedGoldenScenesById = @{}
     if (-not (Test-Path -LiteralPath $manifestPath -PathType Leaf)) {
         Add-CheckResult -Status FAIL -Kind manifest -Name manifest.json -Detail "golden missing: $manifestPath"
     }
@@ -624,12 +877,22 @@ else {
         if ($manifest.helengineCommit -ne $helengineCommit -or [bool]$manifest.helengineDirty -ne $helengineDirty) {
             Write-Output "WARN helengine changed since record: $($manifest.helengineCommit) (dirty=$($manifest.helengineDirty)) -> $helengineCommit (dirty=$helengineDirty)"
         }
+        if ($manifest.buildConfigSourceHash -ne $buildConfigSourceHash) {
+            Write-Output "WARN buildConfigSourceHash changed since record (the project's user_settings\build_config.json): $($manifest.buildConfigSourceHash) -> $buildConfigSourceHash"
+        }
+        if ($manifest.generatedCodeHash -ne $generatedCodeHash) {
+            Write-Output "WARN generatedCodeHash changed since record (the project's user_settings\generated_code): $($manifest.generatedCodeHash) -> $generatedCodeHash"
+        }
+        if ($manifest.helengineWorkingTreeHash -ne $helengineWorkingTreeHash) {
+            Write-Output "WARN helengineWorkingTreeHash changed since record (helengine's uncommitted changes and untracked files): $($manifest.helengineWorkingTreeHash) -> $helengineWorkingTreeHash"
+        }
         if ($manifest.frames -ne 30 -or [double]$manifest.fixedDelta -ne 0.016666 -or $manifest.width -ne 640 -or $manifest.height -ne 360) {
             Add-CheckResult -Status FAIL -Kind manifest -Name manifest.json -Detail "recorded with frames=$($manifest.frames) fixedDelta=$($manifest.fixedDelta) size=$($manifest.width)x$($manifest.height); expected frames=30 fixedDelta=0.016666 size=640x360"
         }
         foreach ($manifestScene in $manifest.scenes) {
             if ($manifestScene.kind -eq 'golden') {
                 $recordedGoldenSceneIds.Add($manifestScene.id)
+                $recordedGoldenScenesById[$manifestScene.id] = $manifestScene
                 if ($manifestScene.status -eq 'unstable') {
                     $unstableSceneIds.Add($manifestScene.id)
                 }
@@ -642,7 +905,8 @@ else {
         }
     }
 
-    # 12V. Run every scene once: smoke check on the first scene, golden comparison on every stable scene.
+    # 12V. Run every scene once: host fingerprint comparison on every scene, smoke check on the first scene, golden
+    #      comparison on every stable scene.
     $diffsRootPath = Join-Path $WorkRoot 'diffs'
     if (Test-Path -LiteralPath $diffsRootPath) {
         Remove-Item -LiteralPath $diffsRootPath -Recurse -Force
@@ -658,6 +922,20 @@ else {
         $verifyRun = Invoke-PlayerScene -SceneId $sceneId -CapturePath $capturePath
         if (-not (Test-PlayerRunSucceeded -PlayerRun $verifyRun -Kind $checkKind -SceneId $sceneId -CapturePath $capturePath)) {
             continue
+        }
+
+        # The recorded fingerprint line is rebuilt from the manifest's fields (in their recorded order) plus elapsedMs.
+        $recordedScene = $recordedGoldenScenesById[$sceneId]
+        if ($null -eq $recordedScene -or $null -eq $recordedScene.fingerprint -or $null -eq $recordedScene.elapsedMs) {
+            Add-CheckResult -Status FAIL -Kind fingerprint -Name $sceneId -Detail "not recorded in the manifest: $manifestPath"
+        }
+        else {
+            $recordedFingerprintTokens = New-Object System.Collections.Generic.List[string]
+            foreach ($recordedFingerprintField in $recordedScene.fingerprint.PSObject.Properties) {
+                $recordedFingerprintTokens.Add("$($recordedFingerprintField.Name)=$($recordedFingerprintField.Value)")
+            }
+            $recordedFingerprintTokens.Add("elapsedMs=$($recordedScene.elapsedMs)")
+            Invoke-FingerprintCheck -SceneId $sceneId -ToolArguments @('compare-fingerprint', $sceneId, ($recordedFingerprintTokens -join ' '), $verifyRun.Fingerprint) -PassDetail 'matches record'
         }
 
         if ($sceneId -eq $smokeSceneId) {
@@ -684,10 +962,27 @@ else {
         }
     }
 
-    # 13V. Compare each test suite's failing-test set with its recorded baseline. When the suite has a committed
-    #      known-flaky list (regression\baselines\<suite>.flaky.txt), a new failure on that list is only a WARN.
+    # 13V. Check each suite run's outcome and executed-test count against the recorded count (an errored, aborted or
+    #      truncated run fails), then compare its failing-test set with its recorded baseline. When the suite has a
+    #      committed known-flaky list (regression\baselines\<suite>.flaky.txt), a new failure on that list is only a
+    #      WARN.
     foreach ($testSuite in $testSuites) {
-        $failingListPath = Invoke-TestSuite -SuiteName $testSuite.Name -ProjectPath $testSuite.ProjectPath -ExtraArguments $testSuite.ExtraArguments
+        $suiteRun = Invoke-TestSuite -SuiteName $testSuite.Name -ProjectPath $testSuite.ProjectPath -ExtraArguments $testSuite.ExtraArguments
+        $failingListPath = $suiteRun.FailingListPath
+        $executedBaselinePath = Join-Path $baselineRootPath "$($testSuite.Name).executed.txt"
+        if (-not (Test-Path -LiteralPath $executedBaselinePath -PathType Leaf)) {
+            Add-CheckResult -Status FAIL -Kind suite -Name $testSuite.Name -Detail "executed-count baseline missing: $executedBaselinePath"
+        }
+        else {
+            $checkExecutedRun = Invoke-RegressionTool -ToolArguments @('check-executed', $suiteRun.TrxPath, $executedBaselinePath)
+            $checkExecutedLine = $checkExecutedRun.Lines -join ' '
+            if ($checkExecutedRun.ExitCode -le 1 -and $checkExecutedLine -match '^(PASS|WARN|FAIL) (.+)$') {
+                Add-CheckResult -Status $Matches[1] -Kind suite -Name $testSuite.Name -Detail $Matches[2]
+            }
+            else {
+                Add-CheckResult -Status FAIL -Kind suite -Name $testSuite.Name -Detail $checkExecutedLine
+            }
+        }
         $baselinePath = Join-Path $baselineRootPath "$($testSuite.Name).failing.txt"
         if (-not (Test-Path -LiteralPath $baselinePath -PathType Leaf)) {
             Add-CheckResult -Status FAIL -Kind suite -Name $testSuite.Name -Detail "baseline missing: $baselinePath"
@@ -719,13 +1014,26 @@ else {
     }
 }
 
-# 14. Summary: one line per check, then the overall result.
+# 14. Record only: publish the staged record into regression\golden and regression\baselines when no check failed;
+#     otherwise leave the committed files untouched and point at the staged output.
+$failingCheckCount = @($CheckResults | Where-Object { $_.StartsWith('FAIL ') }).Count
+if ($Record) {
+    if ($failingCheckCount -eq 0) {
+        Publish-RecordStaging -StagingGoldenRootPath $stagingGoldenRootPath -StagingBaselineRootPath $stagingBaselineRootPath -GoldenRootPath $goldenRootPath -BaselineRootPath $baselineRootPath
+        Write-Output ("MANIFEST=" + $manifestPath)
+        Write-Output "Record published into $goldenRootPath and $baselineRootPath."
+    }
+    else {
+        Write-Output "Record had $failingCheckCount FAIL check(s): the committed goldens and baselines were left untouched. Staged output: $recordStagingRootPath"
+    }
+}
+
+# 15. Summary: one line per check, then the overall result.
 Write-Output ""
 Write-Output "SUMMARY"
 foreach ($checkLine in $CheckResults) {
     Write-Output $checkLine
 }
-$failingCheckCount = @($CheckResults | Where-Object { $_.StartsWith('FAIL ') }).Count
 if ($failingCheckCount -eq 0) {
     Write-Output "RESULT: PASS"
     exit 0
