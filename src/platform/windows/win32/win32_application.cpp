@@ -28,6 +28,7 @@
 
 #include "platform/windows/directx11/directx11_back_buffer_capture.hpp"
 #include "platform/windows/directx11/directx11_bootstrap.hpp"
+#include "platform/windows/directx11/directx11_host_fingerprint.hpp"
 #include "platform/windows/directx11/directx11_presenter.hpp"
 #include "platform/windows/runtime/runtime_memory_snapshot.hpp"
 #include "platform/windows/runtime/runtime_memory_diagnostics_provider.hpp"
@@ -685,6 +686,9 @@ namespace helengine::windows {
         Presenter = std::make_unique<DirectX11Presenter>(*Bootstrap);
         if (CommandLineOptions.HasCapturePath()) {
             BackBufferCapture = std::make_unique<DirectX11BackBufferCapture>(*Bootstrap);
+        }
+        if (CommandLineOptions.HasFrameLimit()) {
+            HostFingerprint = std::make_unique<DirectX11HostFingerprint>(*Bootstrap, MainWindow->GetHandle());
         }
         WriteLifecycleLog("DirectX 11 bootstrap initialized.");
     }
@@ -1751,13 +1755,20 @@ namespace helengine::windows {
                 WriteLifecycleLog("First frame entering Presenter->RenderFrame().");
             }
             frameStage = "present";
+            HRESULT presentResult = S_OK;
             {
                 HELENGINE_TRACY_ZONE_N("Frame.PacingAndIdle");
-                Presenter->RenderFrame();
+                presentResult = Presenter->RenderFrame();
             }
             if (CommandLineOptions.HasFrameLimit()) {
+                if (HostFingerprint->RecordPresent(presentResult)) {
+                    std::string presentFailureMessage = DirectX11HostFingerprint::DescribePresentFailure(presentResult);
+                    WriteLifecycleLog(presentFailureMessage.c_str());
+                }
                 RenderedFrameCount++;
                 if (RenderedFrameCount >= CommandLineOptions.GetFrameLimit()) {
+                    std::string fingerprintLine = HostFingerprint->Describe(RenderedFrameCount);
+                    WriteLifecycleLog(fingerprintLine.c_str());
                     PostQuitMessage(0);
                 }
             }

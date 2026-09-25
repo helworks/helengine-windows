@@ -12,10 +12,11 @@ namespace helengine::windows {
     /// Releases the presenter without owning the bootstrap resources.
     DirectX11Presenter::~DirectX11Presenter() = default;
 
-    /// Presents the current swap-chain back buffer.
-    void DirectX11Presenter::RenderFrame() {
+    /// Presents the current swap-chain back buffer and returns the Present HRESULT. The default player path
+    /// ignores it; --frames runs count failures for the host fingerprint.
+    HRESULT DirectX11Presenter::RenderFrame() {
         HELENGINE_TRACY_ZONE_N("D3D11.Present");
         HELENGINE_TRACY_GPU_ZONE_N("D3D11.Present");
-        Bootstrap.GetSwapChain()->Present(1, 0);
+        return Bootstrap.GetSwapChain()->Present(1, 0);
     }
 }

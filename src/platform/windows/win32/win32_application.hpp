@@ -32,6 +32,7 @@ class float4;
 namespace helengine::windows {
     class DirectX11BackBufferCapture;
     class DirectX11Bootstrap;
+    class DirectX11HostFingerprint;
     class DirectX11Presenter;
     class Win32AudioBackend;
     class Win32InputBackend;
@@ -285,6 +286,10 @@ namespace helengine::windows {
 
         /// Stores the back-buffer capture used by --capture to save the final frame; null when --capture was not supplied.
         std::unique_ptr<DirectX11BackBufferCapture> BackBufferCapture;
+
+        /// Stores the host fingerprint that --frames runs log as one HOST_FINGERPRINT line before quitting; null when
+        /// --frames was not supplied.
+        std::unique_ptr<DirectX11HostFingerprint> HostFingerprint;
 
         /// Stores the process exit code requested by the Windows message loop.
         int ExitCode;

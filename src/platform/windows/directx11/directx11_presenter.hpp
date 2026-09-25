@@ -1,5 +1,7 @@
 #pragma once
 
+#include <Windows.h>
+
 namespace helengine::windows {
     class DirectX11Bootstrap;
 
@@ -12,8 +14,9 @@ namespace helengine::windows {
         /// Releases the presenter without owning the bootstrap resources.
         ~DirectX11Presenter();
 
-        /// Presents the current swap-chain back buffer.
-        void RenderFrame();
+        /// Presents the current swap-chain back buffer and returns the Present HRESULT. The default player path
+        /// ignores it; --frames runs count failures for the host fingerprint.
+        HRESULT RenderFrame();
 
     private:
         /// Stores the DirectX11 bootstrap used for rendering and presentation.

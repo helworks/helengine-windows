@@ -101,7 +101,7 @@ public sealed class Win32CommandLineOptionsSourceTests {
 
         Assert.Single(Regex.Matches(applicationSource, @"RenderedFrameCount\+\+"));
         Assert.Matches(
-            new Regex(@"if \(CommandLineOptions\.HasFrameLimit\(\)\) \{\s*RenderedFrameCount\+\+;\s*if \(RenderedFrameCount >= CommandLineOptions\.GetFrameLimit\(\)\) \{\s*PostQuitMessage\(0\);\s*\}\s*\}"),
+            new Regex(@"if \(CommandLineOptions\.HasFrameLimit\(\)\) \{\s*if \(HostFingerprint->RecordPresent\(presentResult\)\) \{[^}]*\}\s*RenderedFrameCount\+\+;\s*if \(RenderedFrameCount >= CommandLineOptions\.GetFrameLimit\(\)\) \{[^}]*PostQuitMessage\(0\);\s*\}\s*\}"),
             applicationSource);
     }
 
