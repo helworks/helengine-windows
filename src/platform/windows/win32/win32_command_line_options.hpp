@@ -12,11 +12,11 @@ namespace helengine::windows {
         Win32CommandLineOptions();
 
         /// Parses the given argument vector, skipping arguments[0] (the executable path). When no argument is a known
-        /// flag (--scene, --frames, --fixed-delta, --capture), nothing is validated: the arguments are only kept as
-        /// ignored text (see GetIgnoredArguments) so launches that pass unrelated arguments, such as a file path split by
-        /// CommandLineToArgvW, keep working exactly as before. Once any known flag is present, validation is strict:
-        /// each flag takes exactly one value, and unknown, repeated or value-less flags and out-of-range values throw
-        /// std::invalid_argument with a readable message.
+        /// flag (--scene, --frames, --fixed-delta, --capture, --idle-throttle, --idle-after-ms, --idle-fps), nothing
+        /// is validated: the arguments are only kept as ignored text (see GetIgnoredArguments) so launches that pass
+        /// unrelated arguments, such as a file path split by CommandLineToArgvW, keep working exactly as before. Once
+        /// any known flag is present, validation is strict: each flag takes exactly one value, and unknown, repeated
+        /// or value-less flags and out-of-range values throw std::invalid_argument with a readable message.
         static Win32CommandLineOptions Parse(int argumentCount, wchar_t** arguments);
 
         /// Reads the real process command line through CommandLineToArgvW and parses it with Parse.
@@ -46,6 +46,27 @@ namespace helengine::windows {
         /// Gets the capture file path requested through --capture; only meaningful when HasCapturePath() is true.
         const std::wstring& GetCapturePath() const;
 
+        /// Gets whether --idle-throttle was supplied to opt into throttling the frame rate while the player is idle.
+        bool HasIdleThrottle() const;
+
+        /// Gets whether the idle throttle was requested "on" or "off" through --idle-throttle; only meaningful when
+        /// HasIdleThrottle() is true.
+        bool GetIdleThrottleEnabled() const;
+
+        /// Gets whether --idle-after-ms was supplied to override the idle-detection delay.
+        bool HasIdleAfterMilliseconds() const;
+
+        /// Gets the number of milliseconds of inactivity after which the player is considered idle; only meaningful
+        /// when HasIdleAfterMilliseconds() is true.
+        int GetIdleAfterMilliseconds() const;
+
+        /// Gets whether --idle-fps was supplied to override the throttled frame rate used while idle.
+        bool HasIdleFramesPerSecond() const;
+
+        /// Gets the frame rate, in frames per second, applied while the player is idle; only meaningful when
+        /// HasIdleFramesPerSecond() is true.
+        int GetIdleFramesPerSecond() const;
+
         /// Gets whether arguments were supplied without any known flag, so they were ignored instead of validated.
         bool HasIgnoredArguments() const;
 
@@ -53,7 +74,8 @@ namespace helengine::windows {
         const std::string& GetIgnoredArguments() const;
 
     private:
-        /// Returns whether the argument is one of the regression flags (--scene, --frames, --fixed-delta, --capture).
+        /// Returns whether the argument is one of the regression flags (--scene, --frames, --fixed-delta, --capture,
+        /// --idle-throttle, --idle-after-ms, --idle-fps).
         static bool IsKnownFlag(const std::wstring& argument);
 
         /// Converts a UTF-16 command-line value to UTF-8 so it can be compared with engine scene ids and logged.
@@ -64,6 +86,15 @@ namespace helengine::windows {
 
         /// Parses a --fixed-delta value that must be a finite double greater than zero, throwing std::invalid_argument otherwise.
         static double ParseFixedDeltaSeconds(const std::wstring& value);
+
+        /// Parses an --idle-throttle value that must be exactly "on" or "off", throwing std::invalid_argument otherwise.
+        static bool ParseIdleThrottleEnabled(const std::wstring& value);
+
+        /// Parses an --idle-after-ms value that must be a whole number of at least one, throwing std::invalid_argument otherwise.
+        static int ParseIdleAfterMilliseconds(const std::wstring& value);
+
+        /// Parses an --idle-fps value that must be a whole number from 1 to 30, throwing std::invalid_argument otherwise.
+        static int ParseIdleFramesPerSecond(const std::wstring& value);
 
         /// Stores whether --scene was supplied.
         bool SceneSupplied;
@@ -88,6 +119,24 @@ namespace helengine::windows {
 
         /// Stores the capture file path supplied through --capture.
         std::wstring CapturePath;
+
+        /// Stores whether --idle-throttle was supplied.
+        bool IdleThrottleSupplied;
+
+        /// Stores whether the idle throttle was requested "on" or "off" through --idle-throttle.
+        bool IdleThrottleEnabled;
+
+        /// Stores whether --idle-after-ms was supplied.
+        bool IdleAfterMillisecondsSupplied;
+
+        /// Stores the number of milliseconds of inactivity after which the player is considered idle.
+        int IdleAfterMilliseconds;
+
+        /// Stores whether --idle-fps was supplied.
+        bool IdleFramesPerSecondSupplied;
+
+        /// Stores the frame rate, in frames per second, applied while the player is idle.
+        int IdleFramesPerSecond;
 
         /// Stores whether arguments were supplied without any known flag and were therefore ignored.
         bool ArgumentsIgnored;

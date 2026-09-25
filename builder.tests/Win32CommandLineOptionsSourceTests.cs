@@ -135,6 +135,63 @@ public sealed class Win32CommandLineOptionsSourceTests {
     }
 
     /// <summary>
+    /// Verifies the parser recognizes the three idle-throttle flags as known flags, wires them into explicit
+    /// <c>else if</c> branches placed before the trailing <c>--capture</c> branch, and enforces their value rules
+    /// (<c>on</c>/<c>off</c> for <c>--idle-throttle</c>, a positive whole number for <c>--idle-after-ms</c>, and a
+    /// 1-30 whole number for <c>--idle-fps</c>).
+    /// </summary>
+    [Fact]
+    public void Win32CommandLineOptions_parses_idle_throttle_flags() {
+        string parserSource = ReadRepositoryFile("src", "platform", "windows", "win32", "win32_command_line_options.cpp");
+        string parserHeader = ReadRepositoryFile("src", "platform", "windows", "win32", "win32_command_line_options.hpp");
+
+        Assert.Contains("\"--idle-throttle\"", parserSource, StringComparison.Ordinal);
+        Assert.Contains("\"--idle-after-ms\"", parserSource, StringComparison.Ordinal);
+        Assert.Contains("\"--idle-fps\"", parserSource, StringComparison.Ordinal);
+
+        int isKnownFlagIndex = parserSource.IndexOf("bool Win32CommandLineOptions::IsKnownFlag", StringComparison.Ordinal);
+        Assert.True(isKnownFlagIndex >= 0, "IsKnownFlag definition was not found.");
+        int isKnownFlagEndIndex = parserSource.IndexOf("\n    }", isKnownFlagIndex, StringComparison.Ordinal);
+        string isKnownFlagBody = parserSource.Substring(isKnownFlagIndex, isKnownFlagEndIndex - isKnownFlagIndex);
+        Assert.Contains("argument == L\"--idle-throttle\"", isKnownFlagBody, StringComparison.Ordinal);
+        Assert.Contains("argument == L\"--idle-after-ms\"", isKnownFlagBody, StringComparison.Ordinal);
+        Assert.Contains("argument == L\"--idle-fps\"", isKnownFlagBody, StringComparison.Ordinal);
+
+        int idleThrottleBranchIndex = parserSource.IndexOf("flag == L\"--idle-throttle\"", StringComparison.Ordinal);
+        int idleAfterMsBranchIndex = parserSource.IndexOf("flag == L\"--idle-after-ms\"", StringComparison.Ordinal);
+        int idleFpsBranchIndex = parserSource.IndexOf("flag == L\"--idle-fps\"", StringComparison.Ordinal);
+        int captureBranchIndex = parserSource.IndexOf("Command-line flag --capture was given more than once.", StringComparison.Ordinal);
+        Assert.True(idleThrottleBranchIndex >= 0, "The --idle-throttle branch was not found.");
+        Assert.True(idleAfterMsBranchIndex >= 0, "The --idle-after-ms branch was not found.");
+        Assert.True(idleFpsBranchIndex >= 0, "The --idle-fps branch was not found.");
+        Assert.True(captureBranchIndex >= 0, "The --capture branch was not found.");
+        Assert.True(idleThrottleBranchIndex < captureBranchIndex, "The --idle-throttle branch must precede the --capture branch.");
+        Assert.True(idleAfterMsBranchIndex < captureBranchIndex, "The --idle-after-ms branch must precede the --capture branch.");
+        Assert.True(idleFpsBranchIndex < captureBranchIndex, "The --idle-fps branch must precede the --capture branch.");
+
+        Assert.Contains("L\"on\"", parserSource, StringComparison.Ordinal);
+        Assert.Contains("L\"off\"", parserSource, StringComparison.Ordinal);
+
+        int idleAfterMsParseIndex = parserSource.IndexOf("Win32CommandLineOptions::ParseIdleAfterMilliseconds", StringComparison.Ordinal);
+        Assert.True(idleAfterMsParseIndex >= 0, "ParseIdleAfterMilliseconds definition was not found.");
+        string idleAfterMsParseBody = parserSource.Substring(idleAfterMsParseIndex, parserSource.IndexOf("\n    }", idleAfterMsParseIndex, StringComparison.Ordinal) - idleAfterMsParseIndex);
+        Assert.Contains("parsed < 1", idleAfterMsParseBody, StringComparison.Ordinal);
+
+        int idleFpsParseIndex = parserSource.IndexOf("Win32CommandLineOptions::ParseIdleFramesPerSecond", StringComparison.Ordinal);
+        Assert.True(idleFpsParseIndex >= 0, "ParseIdleFramesPerSecond definition was not found.");
+        string idleFpsParseBody = parserSource.Substring(idleFpsParseIndex, parserSource.IndexOf("\n    }", idleFpsParseIndex, StringComparison.Ordinal) - idleFpsParseIndex);
+        Assert.Contains("parsed < 1", idleFpsParseBody, StringComparison.Ordinal);
+        Assert.Contains("parsed > 30", idleFpsParseBody, StringComparison.Ordinal);
+
+        Assert.Contains("bool HasIdleThrottle() const;", parserHeader, StringComparison.Ordinal);
+        Assert.Contains("bool GetIdleThrottleEnabled() const;", parserHeader, StringComparison.Ordinal);
+        Assert.Contains("bool HasIdleAfterMilliseconds() const;", parserHeader, StringComparison.Ordinal);
+        Assert.Contains("int GetIdleAfterMilliseconds() const;", parserHeader, StringComparison.Ordinal);
+        Assert.Contains("bool HasIdleFramesPerSecond() const;", parserHeader, StringComparison.Ordinal);
+        Assert.Contains("int GetIdleFramesPerSecond() const;", parserHeader, StringComparison.Ordinal);
+    }
+
+    /// <summary>
     /// Reads a source file relative to the Windows native-player repository root.
     /// </summary>
     /// <param name="relativePathSegments">Path segments below the repository root.</param>
