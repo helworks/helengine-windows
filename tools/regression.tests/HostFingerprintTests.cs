@@ -8,7 +8,7 @@ public sealed class HostFingerprintTests {
     /// <summary>
     /// A complete fingerprint line exactly as the player writes it (after the "[Host] " log prefix).
     /// </summary>
-    public const string SampleLine = "HOST_FINGERPRINT format=87 alpha=3 swapEffect=4 buffers=2 scaling=0 style=0x16CF0000 exStyle=0x00000100 client=640x360 presentCount=30 presentFailures=0 frames=30 idleThrottle=off idleFrames=0 activeFrames=30 windowMode=normal elapsedMs=483";
+    public const string SampleLine = "HOST_FINGERPRINT format=87 alpha=3 swapEffect=4 buffers=2 scaling=0 style=0x16CF0000 exStyle=0x00000100 client=640x360 presentCount=30 presentFailures=0 frames=30 idleThrottle=off idleFrames=0 activeFrames=30 windowMode=normal window=main dpi=96 dpiAwareness=permonitorv2 windowRect=default elapsedMs=483";
 
     /// <summary>
     /// Verifies every compared field and the elapsed time are read from a complete line.
@@ -26,6 +26,10 @@ public sealed class HostFingerprintTests {
         Assert.Equal("30", fingerprint.Fields["activeFrames"]);
         Assert.Equal("normal", fingerprint.Fields["windowMode"]);
         Assert.Equal("normal", fingerprint.WindowMode);
+        Assert.Equal("main", fingerprint.Fields["window"]);
+        Assert.Equal("96", fingerprint.Fields["dpi"]);
+        Assert.Equal("permonitorv2", fingerprint.Fields["dpiAwareness"]);
+        Assert.Equal("default", fingerprint.Fields["windowRect"]);
         Assert.Equal(HostFingerprint.ComparedFieldNames.Count, fingerprint.Fields.Count);
         Assert.False(fingerprint.Fields.ContainsKey("elapsedMs"));
         Assert.Equal(483, fingerprint.ElapsedMilliseconds);
@@ -37,11 +41,15 @@ public sealed class HostFingerprintTests {
     /// </summary>
     [Fact]
     public void Parse_accepts_fields_without_the_marker_in_any_order() {
-        HostFingerprint fingerprint = HostFingerprint.Parse("elapsedMs=10 windowMode=overlay activeFrames=30 idleFrames=0 idleThrottle=off frames=30 presentFailures=0 presentCount=30 client=640x360 exStyle=0x00000100 style=0x16CF0000 scaling=0 buffers=2 swapEffect=4 alpha=3 format=87");
+        HostFingerprint fingerprint = HostFingerprint.Parse("elapsedMs=10 windowRect=100,50,740,410 dpiAwareness=permonitor dpi=120 window=main windowMode=overlay activeFrames=30 idleFrames=0 idleThrottle=off frames=30 presentFailures=0 presentCount=30 client=640x360 exStyle=0x00000100 style=0x16CF0000 scaling=0 buffers=2 swapEffect=4 alpha=3 format=87");
 
         Assert.Equal("4", fingerprint.Fields["swapEffect"]);
         Assert.Equal("off", fingerprint.Fields["idleThrottle"]);
         Assert.Equal("overlay", fingerprint.WindowMode);
+        Assert.Equal("main", fingerprint.Fields["window"]);
+        Assert.Equal("120", fingerprint.Fields["dpi"]);
+        Assert.Equal("permonitor", fingerprint.Fields["dpiAwareness"]);
+        Assert.Equal("100,50,740,410", fingerprint.Fields["windowRect"]);
         Assert.Equal(10, fingerprint.ElapsedMilliseconds);
     }
 
@@ -76,6 +84,18 @@ public sealed class HostFingerprintTests {
     }
 
     /// <summary>
+    /// Verifies a line written before window, dpi, dpiAwareness and windowRect existed, which ends at windowMode, is
+    /// rejected instead of being read with those fields missing; manifests recorded before the fields existed must be
+    /// re-recorded.
+    /// </summary>
+    [Fact]
+    public void Parse_rejects_an_old_line_without_the_window_fingerprint_fields() {
+        string oldLine = "HOST_FINGERPRINT format=87 alpha=3 swapEffect=4 buffers=2 scaling=0 style=0x16CF0000 exStyle=0x00000100 client=640x360 presentCount=30 presentFailures=0 frames=30 idleThrottle=off idleFrames=0 activeFrames=30 windowMode=normal elapsedMs=483";
+
+        Assert.Throws<FormatException>(() => HostFingerprint.Parse(oldLine));
+    }
+
+    /// <summary>
     /// Verifies a line missing the elapsed time is rejected.
     /// </summary>
     [Fact]
@@ -103,5 +123,14 @@ public sealed class HostFingerprintTests {
         Assert.Throws<FormatException>(() => HostFingerprint.Parse(SampleLine.Replace("elapsedMs=483", "elapsedMs=")));
         Assert.Throws<FormatException>(() => HostFingerprint.Parse(SampleLine.Replace("idleFrames=0", "idleFrames=some")));
         Assert.Throws<FormatException>(() => HostFingerprint.Parse(SampleLine.Replace("activeFrames=30", "activeFrames=-1")));
+    }
+
+    /// <summary>
+    /// Verifies a non-numeric dpi is rejected even though dpi is compared as text, because it must still be a whole
+    /// number.
+    /// </summary>
+    [Fact]
+    public void Parse_rejects_a_non_numeric_dpi() {
+        Assert.Throws<FormatException>(() => HostFingerprint.Parse(SampleLine.Replace("dpi=96", "dpi=high")));
     }
 }

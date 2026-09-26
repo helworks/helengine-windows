@@ -6,7 +6,8 @@ using System.Globalization;
 /// The host-layer facts of one player run, as written by the player's HOST_FINGERPRINT startup-log line in --frames
 /// mode: the swap-chain description, the window styles, the client size, the Present count and failures, the frame
 /// count, whether the idle throttle was enabled and how many frames ran idle and active, the window mode (normal or
-/// overlay), and the wall-clock time from the first to the last Present. Every field except the elapsed time is compared
+/// overlay), the window tag, the window's DPI and DPI awareness, the window rectangle (or "default" in normal mode),
+/// and the wall-clock time from the first to the last Present. Every field except the elapsed time is compared
 /// exactly between a record and a verify run; the elapsed time is only a coarse pacing signal.
 /// </summary>
 public sealed class HostFingerprint {
@@ -25,13 +26,14 @@ public sealed class HostFingerprint {
     /// </summary>
     public static readonly IReadOnlyList<string> ComparedFieldNames = new[] {
         "format", "alpha", "swapEffect", "buffers", "scaling", "style", "exStyle", "client", "presentCount", "presentFailures", "frames",
-        "idleThrottle", "idleFrames", "activeFrames", "windowMode"
+        "idleThrottle", "idleFrames", "activeFrames", "windowMode", "window", "dpi", "dpiAwareness", "windowRect"
     };
 
     /// <summary>
-    /// The compared fields whose values must be whole non-negative numbers, because rules compare them numerically.
+    /// The compared fields whose values must be whole non-negative numbers: the frame and Present counters, which
+    /// rules also compare numerically, and the window's DPI, which is otherwise compared as plain text.
     /// </summary>
-    static readonly IReadOnlyList<string> CounterFieldNames = new[] { "presentCount", "presentFailures", "frames", "idleFrames", "activeFrames" };
+    static readonly IReadOnlyList<string> WholeNumberFieldNames = new[] { "presentCount", "presentFailures", "frames", "idleFrames", "activeFrames", "dpi" };
 
     /// <summary>
     /// Initializes a fingerprint from its compared fields and its elapsed time.
@@ -86,7 +88,7 @@ public sealed class HostFingerprint {
     /// <summary>
     /// Parses a fingerprint from space-separated "name=value" tokens, optionally preceded by the HOST_FINGERPRINT
     /// marker, in any order. Every compared field and the elapsed time must appear exactly once; unknown, repeated or
-    /// malformed tokens and non-numeric counters throw <see cref="FormatException"/>.
+    /// malformed tokens and non-numeric counters or DPI throw <see cref="FormatException"/>.
     /// </summary>
     /// <param name="line">The fingerprint line, as the player logged it or as rebuilt from a manifest.</param>
     /// <returns>The parsed fingerprint.</returns>
@@ -130,8 +132,8 @@ public sealed class HostFingerprint {
             throw new FormatException($"Host fingerprint field '{ElapsedFieldName}' is missing.");
         }
 
-        foreach (string counterFieldName in CounterFieldNames) {
-            RequireWholeNumber(counterFieldName, fields[counterFieldName]);
+        foreach (string wholeNumberFieldName in WholeNumberFieldNames) {
+            RequireWholeNumber(wholeNumberFieldName, fields[wholeNumberFieldName]);
         }
 
         return new HostFingerprint(fields, RequireWholeNumber(ElapsedFieldName, elapsedText));

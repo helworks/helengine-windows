@@ -8,7 +8,7 @@ public sealed class IdleScenarioCheckerTests {
     /// <summary>
     /// A healthy idle-scenario fingerprint line: throttle on, no Present failures, 28 idle frames and about 3 s elapsed.
     /// </summary>
-    const string IdleSampleLine = "HOST_FINGERPRINT format=87 alpha=3 swapEffect=4 buffers=2 scaling=0 style=0x16CF0000 exStyle=0x00000100 client=640x360 presentCount=30 presentFailures=0 frames=30 idleThrottle=on idleFrames=28 activeFrames=2 windowMode=normal elapsedMs=2900";
+    const string IdleSampleLine = "HOST_FINGERPRINT format=87 alpha=3 swapEffect=4 buffers=2 scaling=0 style=0x16CF0000 exStyle=0x00000100 client=640x360 presentCount=30 presentFailures=0 frames=30 idleThrottle=on idleFrames=28 activeFrames=2 windowMode=normal window=main dpi=96 dpiAwareness=permonitorv2 windowRect=default elapsedMs=2900";
 
     /// <summary>
     /// The fewest idle frames the regression script requires of the idle scenario.
