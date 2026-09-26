@@ -5,9 +5,11 @@ namespace helengine.windows.builder.tests;
 /// <summary>
 /// Verifies the overlay window's per-pixel click-through: <c>DirectX11HitTestSampler</c> reads one back-buffer pixel
 /// through a ring of three 1×1 staging textures without ever stalling, <c>Win32ClickThroughController</c> toggles
-/// <c>WS_EX_TRANSPARENT</c> only when the state changes, and <c>Win32Application</c> creates both only in overlay mode,
-/// applies the alpha &lt; 8 threshold, logs the <c>HIT_TEST</c> line only for <c>--hit-test-probe</c> runs and feeds
-/// cursor movement over the overlay into the idle throttle's activity tracker.
+/// <c>WS_EX_TRANSPARENT</c> only when the state changes, <c>Win32OverlayHitTestController</c> owns both, applies the
+/// alpha &lt; 8 threshold, remembers the probe alpha and watches the cursor for the idle throttle, and
+/// <c>Win32Application</c> creates that controller only in overlay mode, calls it between Draw and Present, logs the
+/// <c>HIT_TEST</c> line only for <c>--hit-test-probe</c> runs and feeds cursor movement over the overlay into the idle
+/// throttle's activity tracker.
 /// </summary>
 public sealed class Win32ClickThroughSourceTests {
     /// <summary>
@@ -95,109 +97,168 @@ public sealed class Win32ClickThroughSourceTests {
     }
 
     /// <summary>
-    /// Verifies the sampler and the controller are created only in overlay mode and the native build compiles both.
+    /// Verifies the overlay hit-test logic lives in its own controller class, which owns the sampler and the
+    /// click-through controller, keeps the alpha &lt; 8 threshold as a named constant and is compiled by the native build.
+    /// </summary>
+    [Fact]
+    public void Win32OverlayHitTestController_owns_the_sampler_the_toggle_and_the_threshold() {
+        string hitTestHeader = ReadRepositoryFile("src", "platform", "windows", "win32", "win32_overlay_hit_test_controller.hpp");
+        string cmakeSource = ReadRepositoryFile("CMakeLists.txt");
+
+        Assert.Contains("class Win32OverlayHitTestController {", hitTestHeader, StringComparison.Ordinal);
+        Assert.Single(Regex.Matches(hitTestHeader, @"\bclass\s+\w+\s*\{"));
+        Assert.Contains(
+            "Win32OverlayHitTestController(DirectX11Bootstrap& bootstrap, HWND windowHandle, const Win32CommandLineOptions& commandLineOptions);",
+            hitTestHeader, StringComparison.Ordinal);
+        Assert.Contains("void SampleFrame();", hitTestHeader, StringComparison.Ordinal);
+        Assert.Contains("bool ObserveCursorForActivity();", hitTestHeader, StringComparison.Ordinal);
+        Assert.Contains("bool HasProbeAlpha() const;", hitTestHeader, StringComparison.Ordinal);
+        Assert.Contains("std::string DescribeProbeResult() const;", hitTestHeader, StringComparison.Ordinal);
+        Assert.Contains("static constexpr int ClickThroughAlphaThreshold = 8;", hitTestHeader, StringComparison.Ordinal);
+        Assert.Contains("DirectX11HitTestSampler HitTestSampler;", hitTestHeader, StringComparison.Ordinal);
+        Assert.Contains("Win32ClickThroughController ClickThroughController;", hitTestHeader, StringComparison.Ordinal);
+        Assert.Contains("POINT LastCursorPosition;", hitTestHeader, StringComparison.Ordinal);
+
+        Assert.Contains("src/platform/windows/directx11/directx11_hit_test_sampler.cpp", cmakeSource, StringComparison.Ordinal);
+        Assert.Contains("src/platform/windows/win32/win32_click_through_controller.cpp", cmakeSource, StringComparison.Ordinal);
+        Assert.Contains("src/platform/windows/win32/win32_overlay_hit_test_controller.cpp", cmakeSource, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// Verifies the hit-test controller is created only in overlay mode, after the bootstrap it samples, and that the
+    /// application no longer holds the sampler or the click-through controller itself.
     /// </summary>
     [Fact]
     public void Win32Application_constructs_hit_test_objects_only_in_overlay_mode() {
         string applicationSource = ReadRepositoryFile("src", "platform", "windows", "win32", "win32_application.cpp");
         string applicationHeader = ReadRepositoryFile("src", "platform", "windows", "win32", "win32_application.hpp");
-        string cmakeSource = ReadRepositoryFile("CMakeLists.txt");
+        string hitTestSource = ReadRepositoryFile("src", "platform", "windows", "win32", "win32_overlay_hit_test_controller.cpp");
 
-        Assert.Contains("std::unique_ptr<DirectX11HitTestSampler> HitTestSampler;", applicationHeader, StringComparison.Ordinal);
-        Assert.Contains("std::unique_ptr<Win32ClickThroughController> ClickThroughController;", applicationHeader, StringComparison.Ordinal);
+        Assert.Contains("std::unique_ptr<Win32OverlayHitTestController> OverlayHitTestController;", applicationHeader, StringComparison.Ordinal);
+        Assert.DoesNotContain("std::unique_ptr<DirectX11HitTestSampler>", applicationHeader, StringComparison.Ordinal);
+        Assert.DoesNotContain("std::unique_ptr<Win32ClickThroughController>", applicationHeader, StringComparison.Ordinal);
+        Assert.DoesNotContain("HitTestProbeAlpha", applicationHeader, StringComparison.Ordinal);
 
         string bootstrapBody = ExtractMethodBody(applicationSource, "Win32Application::CreateGraphicsBootstrap(");
         Assert.Matches(
             new Regex(
                 @"if \(WindowModeSettings->GetWindowMode\(\) == Win32WindowMode::Overlay\) \{\s*"
-                + @"HitTestSampler = std::make_unique<DirectX11HitTestSampler>\(\*Bootstrap\);\s*"
-                + @"ClickThroughController = std::make_unique<Win32ClickThroughController>\(MainWindow->GetHandle\(\)\);\s*\}"),
+                + @"OverlayHitTestController = std::make_unique<Win32OverlayHitTestController>\(\*Bootstrap, MainWindow->GetHandle\(\), CommandLineOptions\);\s*\}"),
             bootstrapBody);
-        Assert.Single(Regex.Matches(applicationSource, @"std::make_unique<DirectX11HitTestSampler>"));
-        Assert.Single(Regex.Matches(applicationSource, @"std::make_unique<Win32ClickThroughController>"));
+        Assert.Single(Regex.Matches(applicationSource, @"std::make_unique<Win32OverlayHitTestController>"));
+        Assert.DoesNotContain("DirectX11HitTestSampler", applicationSource, StringComparison.Ordinal);
+        Assert.DoesNotContain("Win32ClickThroughController", applicationSource, StringComparison.Ordinal);
 
-        Assert.Contains("src/platform/windows/directx11/directx11_hit_test_sampler.cpp", cmakeSource, StringComparison.Ordinal);
-        Assert.Contains("src/platform/windows/win32/win32_click_through_controller.cpp", cmakeSource, StringComparison.Ordinal);
+        string constructorBody = ExtractMethodBody(hitTestSource, "Win32OverlayHitTestController::Win32OverlayHitTestController(");
+        Assert.Contains("HitTestSampler(bootstrap)", constructorBody, StringComparison.Ordinal);
+        Assert.Contains("ClickThroughController(windowHandle)", constructorBody, StringComparison.Ordinal);
     }
 
     /// <summary>
-    /// Verifies RenderFrame samples between Draw and Present, samples the probe point instead of the cursor when
-    /// probing, applies the alpha &lt; 8 threshold only when not probing, and never toggles styles in probe mode.
+    /// Verifies RenderFrame hands the hit test to the controller between Draw and Present, and that the controller
+    /// samples the probe point instead of the cursor when probing, captures before it reads back, applies the alpha
+    /// &lt; 8 threshold only when not probing, and never toggles styles in probe mode.
     /// </summary>
     [Fact]
     public void Win32Application_samples_between_draw_and_present_with_the_threshold() {
         string applicationSource = ReadRepositoryFile("src", "platform", "windows", "win32", "win32_application.cpp");
+        string hitTestSource = ReadRepositoryFile("src", "platform", "windows", "win32", "win32_overlay_hit_test_controller.cpp");
         string renderFrameBody = ExtractMethodBody(applicationSource, "void Win32Application::RenderFrame(");
 
         int drawIndex = renderFrameBody.IndexOf("EngineCore->Draw();", StringComparison.Ordinal);
-        int captureIndex = renderFrameBody.IndexOf("HitTestSampler->Capture(", StringComparison.Ordinal);
-        int readIndex = renderFrameBody.IndexOf("HitTestSampler->TryReadLatestAlpha(", StringComparison.Ordinal);
+        int sampleIndex = renderFrameBody.IndexOf("OverlayHitTestController->SampleFrame();", StringComparison.Ordinal);
         int presentIndex = renderFrameBody.IndexOf("Presenter->RenderFrame();", StringComparison.Ordinal);
         Assert.True(drawIndex >= 0, "EngineCore->Draw(); was not found.");
-        Assert.True(captureIndex > drawIndex, "The hit-test capture must follow EngineCore->Draw();.");
+        Assert.True(sampleIndex > drawIndex, "The hit-test sample must follow EngineCore->Draw();.");
+        Assert.True(presentIndex > sampleIndex, "Presenter->RenderFrame(); must follow the hit-test sample.");
+        Assert.Matches(new Regex(@"if \(OverlayHitTestController\) \{\s*frameStage = ""hit_test"";\s*OverlayHitTestController->SampleFrame\(\);\s*\}"), renderFrameBody);
+        Assert.DoesNotContain("GetCursorPos(", renderFrameBody, StringComparison.Ordinal);
+        Assert.DoesNotContain("Apply(", applicationSource, StringComparison.Ordinal);
+
+        string sampleBody = ExtractMethodBody(hitTestSource, "void Win32OverlayHitTestController::SampleFrame(");
+        int captureIndex = sampleBody.IndexOf("HitTestSampler.Capture(samplePoint.x, samplePoint.y);", StringComparison.Ordinal);
+        int readIndex = sampleBody.IndexOf("HitTestSampler.TryReadLatestAlpha(sampledAlpha)", StringComparison.Ordinal);
+        Assert.True(captureIndex >= 0, "SampleFrame must capture the sample point.");
         Assert.True(readIndex > captureIndex, "The alpha readback must follow the hit-test capture.");
-        Assert.True(presentIndex > readIndex, "Presenter->RenderFrame(); must follow the alpha readback.");
+        Assert.Contains("samplePoint.x = CommandLineOptions.GetHitTestProbeX();", sampleBody, StringComparison.Ordinal);
+        Assert.Contains("samplePoint.y = CommandLineOptions.GetHitTestProbeY();", sampleBody, StringComparison.Ordinal);
+        Assert.Contains("GetCursorPos(&samplePoint)", sampleBody, StringComparison.Ordinal);
+        Assert.Contains("ScreenToClient(WindowHandle, &samplePoint)", sampleBody, StringComparison.Ordinal);
 
-        Assert.Contains("if (HitTestSampler) {", renderFrameBody, StringComparison.Ordinal);
-        Assert.Contains("samplePoint.x = CommandLineOptions.GetHitTestProbeX();", renderFrameBody, StringComparison.Ordinal);
-        Assert.Contains("samplePoint.y = CommandLineOptions.GetHitTestProbeY();", renderFrameBody, StringComparison.Ordinal);
-        Assert.Contains("GetCursorPos(&samplePoint)", renderFrameBody, StringComparison.Ordinal);
-        Assert.Contains("ScreenToClient(MainWindow->GetHandle(), &samplePoint)", renderFrameBody, StringComparison.Ordinal);
-
-        Assert.Single(Regex.Matches(applicationSource, @"ClickThroughController->Apply\("));
-        Assert.Contains("ClickThroughController->Apply(sampledAlpha < 8);", renderFrameBody, StringComparison.Ordinal);
+        Assert.Single(Regex.Matches(hitTestSource, @"ClickThroughController\.Apply\("));
         Assert.Matches(
             new Regex(
-                @"if \(CommandLineOptions\.HasHitTestProbe\(\)\) \{\s*HitTestProbeAlpha = sampledAlpha;\s*HitTestProbeAlphaAvailable = true;\s*\} else \{\s*"
-                + @"ClickThroughController->Apply\(sampledAlpha < 8\);\s*\}"),
-            renderFrameBody);
+                @"if \(CommandLineOptions\.HasHitTestProbe\(\)\) \{\s*ProbeAlpha = sampledAlpha;\s*ProbeAlphaAvailable = true;\s*\} else \{\s*"
+                + @"ClickThroughController\.Apply\(sampledAlpha < ClickThroughAlphaThreshold\);\s*\}"),
+            sampleBody);
     }
 
     /// <summary>
-    /// Verifies the HIT_TEST line is written only for probe runs, after the fingerprint of the last frame, and that a
-    /// probe whose readback never completed logs <c>alpha=pending</c> and exits with code 3 instead of guessing.
+    /// Verifies the HIT_TEST line is written only for probe runs, after the fingerprint of the last frame, that the
+    /// controller composes it from the remembered probe alpha with the same threshold, and that a probe whose readback
+    /// never completed logs <c>alpha=pending</c> and exits with code 3 instead of guessing.
     /// </summary>
     [Fact]
     public void Win32Application_logs_hit_test_only_for_probe_runs() {
         string applicationSource = ReadRepositoryFile("src", "platform", "windows", "win32", "win32_application.cpp");
+        string hitTestSource = ReadRepositoryFile("src", "platform", "windows", "win32", "win32_overlay_hit_test_controller.cpp");
         string renderFrameBody = ExtractMethodBody(applicationSource, "void Win32Application::RenderFrame(");
         string probeResultBody = ExtractMethodBody(applicationSource, "void Win32Application::WriteHitTestProbeResult(");
+        string describeBody = ExtractMethodBody(hitTestSource, "std::string Win32OverlayHitTestController::DescribeProbeResult(");
 
-        Assert.Single(Regex.Matches(applicationSource, Regex.Escape("\"HIT_TEST x=\"")));
+        Assert.Single(Regex.Matches(hitTestSource, Regex.Escape("\"HIT_TEST x=\"")));
+        Assert.DoesNotContain("\"HIT_TEST x=\"", applicationSource, StringComparison.Ordinal);
         Assert.Single(Regex.Matches(applicationSource, @"WriteHitTestProbeResult\(\);"));
         Assert.Matches(
             new Regex(@"if \(RenderedFrameCount >= CommandLineOptions\.GetFrameLimit\(\)\) \{[^}]*WriteLifecycleLog\(fingerprintLine\.c_str\(\)\);\s*WriteHitTestProbeResult\(\);\s*PostQuitMessage\(0\);"),
             renderFrameBody);
 
         Assert.Matches(new Regex(@"^[^{]*\{\s*if \(!CommandLineOptions\.HasHitTestProbe\(\)\) \{\s*return;\s*\}"), probeResultBody);
-        Assert.Contains("\"HIT_TEST x=\" << CommandLineOptions.GetHitTestProbeX() << \" y=\" << CommandLineOptions.GetHitTestProbeY()", probeResultBody, StringComparison.Ordinal);
-        Assert.Contains("\" alpha=pending\"", probeResultBody, StringComparison.Ordinal);
-        Assert.Contains("\" alpha=\" << HitTestProbeAlpha << \" clickThrough=\" << (HitTestProbeAlpha < 8 ? \"on\" : \"off\")", probeResultBody, StringComparison.Ordinal);
-        Assert.Matches(new Regex(@"if \(!HitTestProbeAlphaAvailable\) \{[^}]*throw Win32ExitRequest\(3,"), probeResultBody);
+        Assert.Matches(
+            new Regex(
+                @"std::string hitTestLine = OverlayHitTestController->DescribeProbeResult\(\);\s*WriteLifecycleLog\(hitTestLine\.c_str\(\)\);\s*"
+                + @"if \(!OverlayHitTestController->HasProbeAlpha\(\)\) \{\s*throw Win32ExitRequest\(3,"),
+            probeResultBody);
+
+        Assert.Contains("\"HIT_TEST x=\" << CommandLineOptions.GetHitTestProbeX() << \" y=\" << CommandLineOptions.GetHitTestProbeY()", describeBody, StringComparison.Ordinal);
+        Assert.Matches(new Regex(@"if \(!ProbeAlphaAvailable\) \{\s*hitTestBuilder << "" alpha=pending"";"), describeBody);
+        Assert.Contains("\" alpha=\" << ProbeAlpha << \" clickThrough=\" << (ProbeAlpha < ClickThroughAlphaThreshold ? \"on\" : \"off\")", describeBody, StringComparison.Ordinal);
     }
 
     /// <summary>
-    /// Verifies the idle-throttled loop samples the cursor only in overlay mode and marks activity only when the
-    /// cursor moved while inside the window rectangle.
+    /// Verifies the idle-throttled loop asks the controller about the cursor only in overlay mode, after the message
+    /// pump and before the frame decision, and that the controller reports activity only when the cursor moved while
+    /// inside the window rectangle.
     /// </summary>
     [Fact]
     public void Win32Application_idle_loop_samples_the_cursor_only_in_overlay_mode() {
         string applicationSource = ReadRepositoryFile("src", "platform", "windows", "win32", "win32_application.cpp");
+        string hitTestSource = ReadRepositoryFile("src", "platform", "windows", "win32", "win32_overlay_hit_test_controller.cpp");
         string idleLoopBody = ExtractMethodBody(applicationSource, "void Win32Application::RunIdleThrottledLoop(");
 
         int pumpIndex = idleLoopBody.IndexOf("if (!PumpMessages()) {", StringComparison.Ordinal);
         int overlayIndex = idleLoopBody.IndexOf("if (WindowModeSettings->GetWindowMode() == Win32WindowMode::Overlay) {", StringComparison.Ordinal);
-        int cursorIndex = idleLoopBody.IndexOf("GetCursorPos(&cursorPosition)", StringComparison.Ordinal);
+        int observeIndex = idleLoopBody.IndexOf("OverlayHitTestController->ObserveCursorForActivity()", StringComparison.Ordinal);
         int markIndex = idleLoopBody.IndexOf("ActivityTracker->MarkActivity();", StringComparison.Ordinal);
         int frameDecisionIndex = idleLoopBody.IndexOf("Win32IdleFrameDecision frameDecision", StringComparison.Ordinal);
         Assert.True(pumpIndex >= 0, "The message pump was not found.");
         Assert.True(overlayIndex > pumpIndex, "The overlay cursor sampling must follow the message pump.");
-        Assert.True(cursorIndex > overlayIndex, "GetCursorPos must be inside the overlay-mode block.");
-        Assert.True(markIndex > cursorIndex, "MarkActivity must follow the cursor sample.");
+        Assert.True(observeIndex > overlayIndex, "The cursor observation must be inside the overlay-mode block.");
+        Assert.True(markIndex > observeIndex, "MarkActivity must follow the cursor observation.");
         Assert.True(frameDecisionIndex > markIndex, "The frame decision must see the cursor activity.");
-        Assert.Single(Regex.Matches(idleLoopBody, Regex.Escape("GetCursorPos(")));
-        Assert.Contains("PtInRect(&windowRectangle, cursorPosition)", idleLoopBody, StringComparison.Ordinal);
-        Assert.Contains("GetWindowRect(MainWindow->GetHandle(), &windowRectangle)", idleLoopBody, StringComparison.Ordinal);
+        Assert.DoesNotContain("GetCursorPos(", idleLoopBody, StringComparison.Ordinal);
+
+        string observeBody = ExtractMethodBody(hitTestSource, "bool Win32OverlayHitTestController::ObserveCursorForActivity(");
+        int cursorIndex = observeBody.IndexOf("GetCursorPos(&cursorPosition)", StringComparison.Ordinal);
+        int rememberIndex = observeBody.IndexOf("LastCursorPosition = cursorPosition;", StringComparison.Ordinal);
+        int windowRectIndex = observeBody.IndexOf("GetWindowRect(WindowHandle, &windowRectangle)", StringComparison.Ordinal);
+        int insideIndex = observeBody.IndexOf("PtInRect(&windowRectangle, cursorPosition)", StringComparison.Ordinal);
+        Assert.True(cursorIndex >= 0, "ObserveCursorForActivity must sample the cursor.");
+        Assert.True(rememberIndex > cursorIndex, "The cursor position must be remembered after it is sampled.");
+        Assert.True(windowRectIndex > rememberIndex, "The window rectangle must be read only after a sampled move.");
+        Assert.True(insideIndex > windowRectIndex, "The inside-the-window test must use the window rectangle.");
+        Assert.Single(Regex.Matches(observeBody, Regex.Escape("GetCursorPos(")));
+        Assert.Contains("bool cursorMoved = cursorPosition.x != LastCursorPosition.x || cursorPosition.y != LastCursorPosition.y;", observeBody, StringComparison.Ordinal);
     }
 
     /// <summary>
