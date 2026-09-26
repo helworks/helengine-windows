@@ -159,3 +159,17 @@ Date: 2026-09-25. Changes from the whole-branch review. They amend §2, §5 and 
 - `Win32ClickThroughController` starts in the click-through-on state (`ClickThrough(true)`), matching the window.
 - Before the first frame is presented, and for the 1–3 frames until the first readback completes, a topmost overlay therefore never blocks the mouse. The first sample over opaque content turns click-through off.
 - Probe runs never toggle the style, so every `--hit-test-probe` run now reports `exStyle=0x002800A8` (the §7 mask `0x00280088` plus `WS_EX_TRANSPARENT`). The overlay manifest entry was re-recorded for this; the overlay golden and every normal golden and fingerprint are unchanged.
+
+**Hit-test structure and readback (amends §5).**
+- The per-frame hit test and the idle loop's cursor sampling live in `Win32OverlayHitTestController` (overlay mode only), which owns the `DirectX11HitTestSampler` and the `Win32ClickThroughController`, applies the alpha < 8 threshold and remembers the probe alpha. `Win32Application` only constructs it and calls `SampleFrame` (between Draw and Present), `ObserveCursorForActivity` (idle loop) and `DescribeProbeResult`/`HasProbeAlpha` (the `HIT_TEST` line).
+- `TryReadLatestAlpha` drains the ring: it maps the unread slots from oldest to newest, each with `D3D11_MAP_FLAG_DO_NOT_WAIT`, stops at the first `DXGI_ERROR_WAS_STILL_DRAWING` and returns the newest alpha it read, so a backlog of completed samples cannot add permanent latency.
+- In overlay mode the startup line reports the overlay's actual client size (`Main window configured to overlay client size WxH.`). The normal-mode line is unchanged.
+- The regression script validates every probe against `^\d+,\d+$` before it is passed to the player or embedded in a regex; a malformed probe is a FAIL that asks for a re-record.
+
+**Known limitations (not fixed in this subproject).**
+- Sampling runs on the render thread, so the click-through state freezes during slow or hung frames: it keeps whatever the last completed sample decided.
+- With the idle throttle on, a move from a transparent to an opaque pixel is only noticed at the next idle tick (at most 1/idleFps later). Until then click-through is still on, so a quick click there can go to the window behind.
+- With `overlayBounds=monitor`, any mouse motion anywhere on the primary monitor is inside the overlay's rectangle, so it keeps idle mode at the full rate.
+- The default `overlayBackground=camera` with an opaque camera clear gives a full-monitor window that blocks clicks everywhere and has no taskbar button. Use `overlayBackground=transparent`, or scenes whose cameras clear with alpha 0.
+- Display, resolution and DPI changes are not handled; this is planned for subproject 3.
+- The regression net cannot see the `Apply` toggle (probe runs never toggle), the monitor-bounds resolution, or the idle+overlay cursor path. Subproject 3's first task adds them: a per-probe exStyle read after `Apply`, `dpi` and `windowRect` fingerprint fields, per-window fingerprints and an overlay+idle scenario.

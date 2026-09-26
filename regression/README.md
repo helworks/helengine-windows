@@ -191,6 +191,23 @@ behind, clicks on opaque content activate the overlay, and a no-argument boot is
 
 The overlay window is topmost while it runs; do not click over it or move the mouse across it during Record/Verify.
 
+**Known limitations of the overlay window** (recorded in the spec's Revision 2; not fixed yet):
+
+- The window is created click-through (`WS_EX_TRANSPARENT`, so every probe run reports `exStyle=0x002800A8`) and
+  fails open: it never blocks the mouse before its first hit-test sample over opaque content.
+- The click-through state freezes during slow or hung frames, because sampling runs on the render thread.
+- With the idle throttle, a move from a transparent to an opaque pixel is only noticed at the next idle tick (at most
+  1/idleFps later), so a quick click there can still go to the window behind.
+- With `--overlay-bounds monitor`, any mouse motion anywhere on the primary monitor keeps idle mode at the full rate.
+- The default `--overlay-background camera` with an opaque camera clear gives a full-monitor window that blocks clicks
+  and has no taskbar button. Use `transparent`, or scenes that clear with alpha 0.
+- Display, resolution and DPI changes are not handled until subproject 3.
+- This net cannot see the `Apply` toggle (probe runs never toggle), the monitor-bounds resolution or the idle+overlay
+  cursor path. Subproject 3's first task adds a per-probe exStyle after `Apply`, `dpi` and `windowRect` fingerprint
+  fields, per-window fingerprints and an overlay+idle scenario.
+- A probe in the manifest that is not `x,y` with base-10 coordinates is a `FAIL` (re-record required); the player is
+  not launched with it.
+
 ## What this net does NOT catch
 
 - Resize and `ResizeBuffers` paths: the window is never resized during a run.
