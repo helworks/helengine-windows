@@ -228,7 +228,11 @@ hashes. They were re-recorded again on 2026-09-25 on the owner's development mac
 (feature/idle-throttle), because the fingerprint gained `idleThrottle`, `idleFrames` and `activeFrames` and the
 manifest gained the idle entry. They were re-recorded once more on 2026-09-25 on the same machine, from commit
 `7089c4d` (feature/overlay-window), because the fingerprint gained `windowMode` and the manifest gained the overlay
-entry and the overlay golden `axis_test.overlay.png`. DemoDisc was at `5cc124eec06b8db729b2f9b15d99d26cb1ca8cc3` and
+entry and the overlay golden `axis_test.overlay.png`. They were re-recorded a last time on 2026-09-26 on the same
+machine, from commit `f807ee6` (feature/overlay-window), because the overlay window is now created click-through
+(`WS_EX_TRANSPARENT`), which changed only the overlay entry's `exStyle` from `0x00280088` to `0x002800A8`: every golden
+PNG (including `axis_test.overlay.png`) was byte-identical, every normal fingerprint differed only in `elapsedMs`, and
+the probes stayed `2,2` and `393,2`. DemoDisc was at `5cc124eec06b8db729b2f9b15d99d26cb1ca8cc3` and
 helengine at `dd9ca693403d91b5e2fc52860a3511e6358ed776` with uncommitted changes (`helengineDirty: true`); the
 provenance hashes are unchanged from the idle-throttle record.
 
@@ -243,13 +247,14 @@ provenance hashes are unchanged from the idle-throttle record.
 - The idle scenario on `axis_test` passed with `idleFrames=29 elapsedMs=3053`, and its capture matched the golden
   with 0 differing pixels.
 - The overlay scenario on `axis_test`: fingerprint `format=87 alpha=1 swapEffect=4 buffers=2 scaling=0
-  style=0x94000000 exStyle=0x00280088 client=640x360 presentCount=30 presentFailures=0 frames=30 idleThrottle=off
-  idleFrames=0 activeFrames=30 windowMode=overlay`, `elapsedMs` 120; `check-premultiplied` reported 65.4% fully
+  style=0x94000000 exStyle=0x002800A8 client=640x360 presentCount=30 presentFailures=0 frames=30 idleThrottle=off
+  idleFrames=0 activeFrames=30 windowMode=overlay`, `elapsedMs` 119 (`exStyle` was `0x00280088` before the
+  click-through-at-creation change); `check-premultiplied` reported 65.4% fully
   transparent and 29.8% fully opaque pixels; `find-probes` chose `transparentProbe` `2,2` and `opaqueProbe` `393,2`,
   which logged `alpha=0 clickThrough=on` and `alpha=255 clickThrough=off`, and both probe runs matched the overlay
   golden with 0 differing pixels.
 - Baselines: `helengine.editor.tests` 50 failing of 3134 executed, `helengine.render.validation.tests` 1 failing of
-  1 executed, `helengine.windows.builder.tests` 0 failing of 161 executed. All five known-flaky keyboard-focus tests
+  1 executed, `helengine.windows.builder.tests` 0 failing of 164 executed (161 before the final-review source tests). All five known-flaky keyboard-focus tests
   (the four `SceneHierarchyPanelKeyboardFocusTests` arrow-key tests and
   `EditorSessionUndoRedoIntegrationTests.Keyboard_focus_update_component_routes_delete_into_the_session_handler`)
   happened to fail during this record, so they are all in the editor baseline (49 -> 50); they are also in the

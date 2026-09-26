@@ -37,7 +37,7 @@
                                            "activeFrames":  "30",
                                            "windowMode":  "normal"
                                        },
-                       "elapsedMs":  118
+                       "elapsedMs":  121
                    },
                    {
                        "id":  "axis_test2",
@@ -60,7 +60,7 @@
                                            "activeFrames":  "30",
                                            "windowMode":  "normal"
                                        },
-                       "elapsedMs":  119
+                       "elapsedMs":  117
                    },
                    {
                        "id":  "colored_cube_grid",
@@ -83,7 +83,7 @@
                                            "activeFrames":  "30",
                                            "windowMode":  "normal"
                                        },
-                       "elapsedMs":  123
+                       "elapsedMs":  118
                    },
                    {
                        "id":  "cube_test",
@@ -106,7 +106,7 @@
                                            "activeFrames":  "30",
                                            "windowMode":  "normal"
                                        },
-                       "elapsedMs":  120
+                       "elapsedMs":  119
                    },
                    {
                        "id":  "directional_shadow_plaza",
@@ -129,7 +129,7 @@
                                            "activeFrames":  "30",
                                            "windowMode":  "normal"
                                        },
-                       "elapsedMs":  122
+                       "elapsedMs":  118
                    },
                    {
                        "id":  "pbr_material_gallery",
@@ -152,7 +152,7 @@
                                            "activeFrames":  "30",
                                            "windowMode":  "normal"
                                        },
-                       "elapsedMs":  118
+                       "elapsedMs":  120
                    },
                    {
                        "id":  "pbr_shadow_theater",
@@ -175,7 +175,7 @@
                                            "activeFrames":  "30",
                                            "windowMode":  "normal"
                                        },
-                       "elapsedMs":  127
+                       "elapsedMs":  119
                    },
                    {
                        "id":  "pbr_textured_showcase",
@@ -198,7 +198,7 @@
                                            "activeFrames":  "30",
                                            "windowMode":  "normal"
                                        },
-                       "elapsedMs":  127
+                       "elapsedMs":  119
                    },
                    {
                        "id":  "software_path_tracer",
@@ -221,7 +221,7 @@
                                            "activeFrames":  "30",
                                            "windowMode":  "normal"
                                        },
-                       "elapsedMs":  119
+                       "elapsedMs":  121
                    },
                    {
                        "id":  "test_scene_matrix_render",
@@ -244,7 +244,7 @@
                                            "activeFrames":  "30",
                                            "windowMode":  "normal"
                                        },
-                       "elapsedMs":  121
+                       "elapsedMs":  120
                    },
                    {
                        "id":  "textured_cube_grid",
@@ -287,7 +287,7 @@
                                            "buffers":  "2",
                                            "scaling":  "0",
                                            "style":  "0x94000000",
-                                           "exStyle":  "0x00280088",
+                                           "exStyle":  "0x002800A8",
                                            "client":  "640x360",
                                            "presentCount":  "30",
                                            "presentFailures":  "0",
@@ -297,7 +297,7 @@
                                            "activeFrames":  "30",
                                            "windowMode":  "overlay"
                                        },
-                       "elapsedMs":  120
+                       "elapsedMs":  119
                    }
                ]
 }
