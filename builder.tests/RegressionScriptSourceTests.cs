@@ -222,6 +222,33 @@ public sealed class RegressionScriptSourceTests {
     }
 
     /// <summary>
+    /// Ensures a probe value is validated as <c>x,y</c> before it is passed to the player or used in a regex: a malformed
+    /// value (for example a hand-edited manifest) is a FAIL asking for a re-record, and the HIT_TEST pattern escapes the
+    /// probe coordinates it embeds.
+    /// </summary>
+    [Fact]
+    public void RegressionScript_ValidatesOverlayProbesBeforeUsingThem() {
+        string scriptSource = ReadRegressionScriptSource();
+
+        string overlayScenarioSource = ReadFunctionSource(scriptSource, "Invoke-OverlayScenario");
+        int validationIndex = overlayScenarioSource.IndexOf("if ($Probe -notmatch '^\\d+,\\d+$') {", StringComparison.Ordinal);
+        int overlayRunIndex = overlayScenarioSource.IndexOf("$overlayRun = Invoke-PlayerScene", StringComparison.Ordinal);
+        Assert.True(validationIndex >= 0, "Invoke-OverlayScenario must validate the probe with ^\\d+,\\d+$.");
+        Assert.True(overlayRunIndex > validationIndex, "The probe must be validated before it is passed to the player.");
+        string validationBlock = overlayScenarioSource.Substring(validationIndex, overlayRunIndex - validationIndex);
+        Assert.Contains("Add-CheckResult -Status FAIL -Kind overlay", validationBlock, StringComparison.Ordinal);
+        Assert.Contains("(re-record required)", validationBlock, StringComparison.Ordinal);
+        Assert.Contains("return", validationBlock, StringComparison.Ordinal);
+
+        string hitTestSource = ReadFunctionSource(scriptSource, "Test-OverlayHitTest");
+        int hitTestValidationIndex = hitTestSource.IndexOf("if ($Probe -notmatch '^\\d+,\\d+$') {", StringComparison.Ordinal);
+        int patternIndex = hitTestSource.IndexOf("$expectedHitTestPattern = ", StringComparison.Ordinal);
+        Assert.True(hitTestValidationIndex >= 0 && patternIndex > hitTestValidationIndex, "Test-OverlayHitTest must validate the probe before building its regex.");
+        Assert.Contains("[regex]::Escape($probeCoordinates[0])", hitTestSource, StringComparison.Ordinal);
+        Assert.Contains("[regex]::Escape($probeCoordinates[1])", hitTestSource, StringComparison.Ordinal);
+    }
+
+    /// <summary>
     /// Ensures Record runs the overlay scenario in the ruled order: one run to record the alpha-preserving overlay golden
     /// into the staging folder, find-probes on that golden, then a transparent-probe run that must report clickThrough=on
     /// and an opaque-probe run that must report clickThrough=off, each compared with the first run's fingerprint, and only

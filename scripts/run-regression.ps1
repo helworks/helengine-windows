@@ -504,7 +504,9 @@ Checks an overlay probe run's HIT_TEST line and records one "overlay" check line
 .DESCRIPTION
 The player logs "HIT_TEST x=<x> y=<y> alpha=<a> clickThrough=<on|off>" after the last frame of a --hit-test-probe run.
 The line must name the probe's coordinates and report the expected click-through state: on for the transparent probe
-(the sampled alpha is below 8) and off for the opaque probe. A missing line (an empty HitTestLine) is a FAIL.
+(the sampled alpha is below 8) and off for the opaque probe. A missing line (an empty HitTestLine) is a FAIL, and so
+is a Probe that is not "x,y" with base-10 coordinates (re-record required); the coordinates are regex-escaped in the
+expected pattern.
 #>
 function Test-OverlayHitTest {
     param(
@@ -530,8 +532,14 @@ function Test-OverlayHitTest {
         Add-CheckResult -Status FAIL -Kind overlay -Name $SceneId -Detail "$ProbeName probe ${Probe}: the startup log has no HIT_TEST line"
         return
     }
+    # The probe text goes into the expected pattern, so it must be two base-10 coordinates; the coordinates are also
+    # escaped so that the pattern can only ever match them literally.
+    if ($Probe -notmatch '^\d+,\d+$') {
+        Add-CheckResult -Status FAIL -Kind overlay -Name $SceneId -Detail "$ProbeName probe '$Probe' is not x,y (re-record required)"
+        return
+    }
     $probeCoordinates = $Probe.Split(',')
-    $expectedHitTestPattern = "^HIT_TEST x=$($probeCoordinates[0]) y=$($probeCoordinates[1]) alpha=\d+ clickThrough=$ExpectedClickThrough$"
+    $expectedHitTestPattern = "^HIT_TEST x=$([regex]::Escape($probeCoordinates[0])) y=$([regex]::Escape($probeCoordinates[1])) alpha=\d+ clickThrough=$ExpectedClickThrough$"
     if ($HitTestLine -cmatch $expectedHitTestPattern) {
         Add-CheckResult -Status PASS -Kind overlay -Name $SceneId -Detail "$ProbeName probe: $HitTestLine"
     }
@@ -549,7 +557,8 @@ and --hit-test-probe <Probe>. The run must exit 0; its HIT_TEST line must report
 capture, read with alpha, must pass check-premultiplied and match the overlay golden with compare-rgba (the
 four-channel comparison; the opaque-forcing compare is never used on an overlay capture); and its fingerprint must
 match RecordedFingerprintLine field for field through compare-fingerprint. Fingerprint lines are reported under the
-name <scene>.overlay.<probe name>, so that they are never confused with the scene's normal-run fingerprint lines.
+name <scene>.overlay.<probe name>, so that they are never confused with the scene's normal-run fingerprint lines. A
+Probe that is not "x,y" with base-10 coordinates is a FAIL (re-record required) and the player is not launched.
 #>
 function Invoke-OverlayScenario {
     param(
@@ -583,6 +592,12 @@ function Invoke-OverlayScenario {
     # A diff image left by an earlier run must never be mistaken for this run's, so it is deleted before the run.
     if (Test-Path -LiteralPath $DiffPath -PathType Leaf) {
         Remove-Item -LiteralPath $DiffPath -Force
+    }
+    # The probe comes from the manifest (Verify) or find-probes (Record) and is passed to the player as
+    # --hit-test-probe, so anything but two base-10 coordinates means the record is damaged: a FAIL, never a launch.
+    if ($Probe -notmatch '^\d+,\d+$') {
+        Add-CheckResult -Status FAIL -Kind overlay -Name $SceneId -Detail "$ProbeName probe '$Probe' is not x,y (re-record required)"
+        return
     }
     $overlayRun = Invoke-PlayerScene -SceneId $SceneId -CapturePath $CapturePath -ExtraArguments ($script:overlayPlayerArguments + @('--hit-test-probe', $Probe))
     if (-not (Test-PlayerRunSucceeded -PlayerRun $overlayRun -Kind overlay -SceneId $SceneId -CapturePath $CapturePath)) {
