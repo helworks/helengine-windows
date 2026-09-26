@@ -12,7 +12,8 @@ namespace helengine.windows.builder.tests;
 public sealed class Win32OverlayWindowSourceTests {
     /// <summary>
     /// Verifies the style value type lives in its own files and declares exactly today's normal values and the overlay
-    /// values confirmed by the spike (Revision 1 of the design).
+    /// values confirmed by the spike (Revision 1 of the design), created click-through with WS_EX_TRANSPARENT so the
+    /// overlay fails open until its first hit-test sample (Revision 2).
     /// </summary>
     [Fact]
     public void Win32WindowStyle_declares_normal_and_overlay_style_sets() {
@@ -31,7 +32,7 @@ public sealed class Win32OverlayWindowSourceTests {
             "return Win32WindowStyle(Win32WindowMode::Normal, WS_OVERLAPPEDWINDOW, 0, SW_SHOWDEFAULT);",
             styleSource, StringComparison.Ordinal);
         Assert.Contains(
-            "return Win32WindowStyle(Win32WindowMode::Overlay, WS_POPUP, WS_EX_NOREDIRECTIONBITMAP | WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_LAYERED, SW_SHOWNOACTIVATE);",
+            "return Win32WindowStyle(Win32WindowMode::Overlay, WS_POPUP, WS_EX_NOREDIRECTIONBITMAP | WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_LAYERED | WS_EX_TRANSPARENT, SW_SHOWNOACTIVATE);",
             styleSource, StringComparison.Ordinal);
     }
 

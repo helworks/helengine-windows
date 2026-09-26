@@ -6,12 +6,12 @@ namespace helengine::windows {
     /// Switches the overlay window between catching the mouse and letting it pass through to the windows behind, by
     /// toggling WS_EX_TRANSPARENT on the layered overlay window. DWM does not hit-test by pixel alpha on its own, so
     /// the application decides the state from the sampled alpha under the cursor and this class applies it. The window
-    /// is created without WS_EX_TRANSPARENT, so the initial state is click-through off. Only constructed in overlay
-    /// mode.
+    /// is created with WS_EX_TRANSPARENT (Win32WindowStyle::Overlay), so the initial state is click-through on: the
+    /// overlay fails open until the first sample over opaque content turns it off. Only constructed in overlay mode.
     class Win32ClickThroughController {
     public:
-        /// Creates a controller for the overlay window, starting in the click-through-off state the window was created
-        /// with.
+        /// Creates a controller for the overlay window, starting in the click-through-on state the window was created
+        /// with (WS_EX_TRANSPARENT is part of the overlay style set).
         /// <param name="windowHandle">The overlay window whose extended style is toggled; not owned.</param>
         explicit Win32ClickThroughController(HWND windowHandle);
 

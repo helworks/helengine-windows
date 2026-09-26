@@ -20,11 +20,13 @@ namespace helengine::windows {
     }
 
     /// Returns the borderless overlay window: WS_POPUP with WS_EX_NOREDIRECTIONBITMAP (DirectComposition supplies
-    /// the content), WS_EX_TOPMOST (always on top), WS_EX_TOOLWINDOW (no taskbar button) and WS_EX_LAYERED
-    /// (required for the WS_EX_TRANSPARENT click-through toggle), shown with SW_SHOWNOACTIVATE so it never takes
-    /// the foreground.
+    /// the content), WS_EX_TOPMOST (always on top), WS_EX_TOOLWINDOW (no taskbar button), WS_EX_LAYERED (required for
+    /// the WS_EX_TRANSPARENT click-through toggle) and WS_EX_TRANSPARENT itself, so the window is created
+    /// click-through and fails open: until the first hit-test sample over opaque content turns click-through off, an
+    /// overlay that has not rendered anything yet never blocks the mouse. Shown with SW_SHOWNOACTIVATE so it never
+    /// takes the foreground.
     Win32WindowStyle Win32WindowStyle::Overlay() {
-        return Win32WindowStyle(Win32WindowMode::Overlay, WS_POPUP, WS_EX_NOREDIRECTIONBITMAP | WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_LAYERED, SW_SHOWNOACTIVATE);
+        return Win32WindowStyle(Win32WindowMode::Overlay, WS_POPUP, WS_EX_NOREDIRECTIONBITMAP | WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_LAYERED | WS_EX_TRANSPARENT, SW_SHOWNOACTIVATE);
     }
 
     /// Gets the window mode this style set belongs to, which selects Win32Window's creation and show path.

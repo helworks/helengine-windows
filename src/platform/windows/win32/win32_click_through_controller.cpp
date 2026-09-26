@@ -4,11 +4,11 @@
 #include <stdexcept>
 
 namespace helengine::windows {
-    /// Creates a controller for the overlay window, starting in the click-through-off state the window was created
-    /// with.
+    /// Creates a controller for the overlay window, starting in the click-through-on state the window was created with
+    /// (WS_EX_TRANSPARENT is part of the overlay style set).
     Win32ClickThroughController::Win32ClickThroughController(HWND windowHandle)
         : WindowHandle(windowHandle),
-          ClickThrough(false) {
+          ClickThrough(true) {
     }
 
     /// Applies the requested state: sets or clears WS_EX_TRANSPARENT with SetWindowLongPtrW and makes the change take

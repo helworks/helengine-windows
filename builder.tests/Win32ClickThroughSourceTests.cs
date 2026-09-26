@@ -74,7 +74,8 @@ public sealed class Win32ClickThroughSourceTests {
 
     /// <summary>
     /// Verifies the controller toggles <c>WS_EX_TRANSPARENT</c> with <c>SetWindowLongPtrW</c> and a frame-changed,
-    /// non-moving, non-activating <c>SetWindowPos</c>, and returns early when the requested state is already applied.
+    /// non-moving, non-activating <c>SetWindowPos</c>, returns early when the requested state is already applied, and
+    /// starts in the click-through-on state the overlay window is created with, so the first opaque sample turns it off.
     /// </summary>
     [Fact]
     public void Win32ClickThroughController_toggles_transparent_only_on_change() {
@@ -94,6 +95,10 @@ public sealed class Win32ClickThroughSourceTests {
             "SetWindowPos(WindowHandle, nullptr, 0, 0, 0, 0, SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE)",
             applyBody, StringComparison.Ordinal);
         Assert.Contains("ClickThrough = clickThrough;", applyBody, StringComparison.Ordinal);
+
+        string constructorBody = ExtractMethodBody(controllerSource, "Win32ClickThroughController::Win32ClickThroughController(");
+        Assert.Contains("ClickThrough(true)", constructorBody, StringComparison.Ordinal);
+        Assert.DoesNotContain("ClickThrough(false)", constructorBody, StringComparison.Ordinal);
     }
 
     /// <summary>

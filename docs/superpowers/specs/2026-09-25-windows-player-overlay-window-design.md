@@ -149,3 +149,13 @@ In every configuration, every call returned `S_OK`, `Present` succeeded, the ove
 **D3D11 device note.** The player's D3D11 device is created without `D3D11_CREATE_DEVICE_BGRA_SUPPORT`; that flag is required if DirectComposition surfaces (`IDCompositionSurface`) or Direct2D interop are added later. The overlay uses a composition swap chain, which does not need it, so the device creation (shared with normal mode) is deliberately unchanged.
 
 **Scope note.** `WindowFromPoint` is the hit-test the spike could check without moving the user's mouse. Real mouse-click routing is left to the §7 manual proofs.
+
+## Revision 2 (final review)
+
+Date: 2026-09-25. Changes from the whole-branch review. They amend §2, §5 and §7 where noted; normal mode is unaffected.
+
+**Fail open while nothing has rendered yet (amends §2 and §5).**
+- `Win32WindowStyle::Overlay()` now also sets `WS_EX_TRANSPARENT`: `WS_EX_NOREDIRECTIONBITMAP | WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_LAYERED | WS_EX_TRANSPARENT`. The overlay is created click-through.
+- `Win32ClickThroughController` starts in the click-through-on state (`ClickThrough(true)`), matching the window.
+- Before the first frame is presented, and for the 1–3 frames until the first readback completes, a topmost overlay therefore never blocks the mouse. The first sample over opaque content turns click-through off.
+- Probe runs never toggle the style, so every `--hit-test-probe` run now reports `exStyle=0x002800A8` (the §7 mask `0x00280088` plus `WS_EX_TRANSPARENT`). The overlay manifest entry was re-recorded for this; the overlay golden and every normal golden and fingerprint are unchanged.
