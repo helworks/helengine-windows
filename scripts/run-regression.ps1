@@ -669,12 +669,14 @@ function ConvertTo-RecordedFingerprintsByWindow {
 
 <#
 .SYNOPSIS
-Checks that an overlay run's HOST_FINGERPRINT line describes the overlay window and records one "overlay" check line.
+Checks that one window's HOST_FINGERPRINT line of an overlay run describes the overlay window and records one check
+line of Kind (overlay or overlayIdle).
 .DESCRIPTION
 The overlay window must report windowMode=overlay, alpha=1 (DXGI_ALPHA_MODE_PREMULTIPLIED) and an exStyle that holds
 WS_EX_NOREDIRECTIONBITMAP (0x00200000), WS_EX_LAYERED (0x00080000), WS_EX_TOOLWINDOW (0x00000080) and WS_EX_TOPMOST
-(0x00000008). Record runs this on the record run before it stores the fingerprint; Verify then compares every field
-exactly with the stored one, so a verify run holds the same shape.
+(0x00000008). Record runs this on the record run and on every probe run before it stores their fingerprints (Verify
+then compares every field exactly with the stored ones), and the overlay+idle scenario runs it on every window in both
+Record and Verify, because its fingerprints are never compared field by field.
 #>
 function Test-OverlayFingerprintShape {
     param(
@@ -682,23 +684,27 @@ function Test-OverlayFingerprintShape {
         [string]$SceneId,
 
         [Parameter(Mandatory = $true)]
-        [string]$FingerprintLine
+        [string]$FingerprintLine,
+
+        [Parameter(Mandatory = $true)]
+        [ValidateSet('overlay', 'overlayIdle')]
+        [string]$Kind
     )
 
     $overlayExStyleMask = 0x00280088
     $fingerprintFields = ConvertTo-FingerprintFields -FingerprintLine $FingerprintLine
     $exStyleText = "$($fingerprintFields['exStyle'])"
     if ($exStyleText -notmatch '^0x[0-9A-Fa-f]+$') {
-        Add-CheckResult -Status FAIL -Kind overlay -Name $SceneId -Detail "fingerprint exStyle is not hexadecimal: $exStyleText"
+        Add-CheckResult -Status FAIL -Kind $Kind -Name $SceneId -Detail "fingerprint exStyle is not hexadecimal: $exStyleText"
         return
     }
     $exStyleValue = [System.Convert]::ToInt64($exStyleText.Substring(2), 16)
     $shapeDetail = "windowMode=$($fingerprintFields['windowMode']) alpha=$($fingerprintFields['alpha']) exStyle=$exStyleText"
     if ($fingerprintFields['windowMode'] -eq 'overlay' -and $fingerprintFields['alpha'] -eq '1' -and ($exStyleValue -band $overlayExStyleMask) -eq $overlayExStyleMask) {
-        Add-CheckResult -Status PASS -Kind overlay -Name $SceneId -Detail "overlay window fingerprint: $shapeDetail"
+        Add-CheckResult -Status PASS -Kind $Kind -Name $SceneId -Detail "overlay window fingerprint: $shapeDetail"
     }
     else {
-        Add-CheckResult -Status FAIL -Kind overlay -Name $SceneId -Detail "not an overlay window fingerprint (expected windowMode=overlay alpha=1 and exStyle bits 0x00280088): $shapeDetail"
+        Add-CheckResult -Status FAIL -Kind $Kind -Name $SceneId -Detail "not an overlay window fingerprint (expected windowMode=overlay alpha=1 and exStyle bits 0x00280088): $shapeDetail"
     }
 }
 
@@ -746,12 +752,13 @@ The player logs "HIT_TEST x=<x> y=<y> alpha=<a> clickThrough=<on|off> exStyle=0x
 last frame of a --hit-test-probe run, where exStyle is GWL_EXSTYLE read back after the probe's click-through toggle.
 The line must name the probe's coordinates and report the expected click-through state: on for the transparent probe
 (the sampled alpha is below 8) and off for the opaque probe. WS_EX_TRANSPARENT (0x20) must be set in exStyle for
-clickThrough=on and cleared for clickThrough=off, which proves the toggle really changed the window style. When
-ExpectedExStyle is given (Verify, and the overlay+idle run) exStyle must also equal it exactly; when it is empty
-(Record's probe runs) any exStyle that passes the bit rule is accepted and returned for the manifest.
-A missing line (an empty HitTestLine) is a FAIL, and so is a Probe that is not "x,y" with base-10 coordinates or an
-ExpectedExStyle that is not 0x<8 upper-case hex digits (re-record required); the coordinates are regex-escaped in the
-expected pattern.
+clickThrough=on and cleared for clickThrough=off, which proves the toggle really changed the window style.
+Without -RecordMode (Verify, and the overlay+idle run) exStyle must also equal ExpectedExStyle exactly, and an
+ExpectedExStyle that is not 0x<8 upper-case hex digits throws: the caller validates recorded values first, so an
+invalid one here is a bug, never a silent downgrade to the bit rule. With -RecordMode (Record's probe runs, before any
+exStyle is recorded) ExpectedExStyle must be empty, and any exStyle that passes the bit rule is accepted and returned
+for the manifest. A missing line (an empty HitTestLine) is a FAIL, and so is a Probe that is not "x,y" with base-10
+coordinates (re-record required); the coordinates are regex-escaped in the expected pattern.
 .OUTPUTS
 The observed exStyle text (for example 0x002800A8) when the check passed; otherwise $null, after recording a FAIL.
 #>
@@ -780,9 +787,18 @@ function Test-OverlayHitTest {
 
         [Parameter(Mandatory = $true)]
         [AllowEmptyString()]
-        [string]$HitTestLine
+        [string]$HitTestLine,
+
+        [Parameter()]
+        [switch]$RecordMode
     )
 
+    if ($RecordMode -and $ExpectedExStyle.Length -gt 0) {
+        throw "Test-OverlayHitTest -RecordMode takes no ExpectedExStyle (got '$ExpectedExStyle'): Record accepts the observed value."
+    }
+    if (-not $RecordMode -and $ExpectedExStyle -cnotmatch '^0x[0-9A-F]{8}$') {
+        throw "Test-OverlayHitTest requires ExpectedExStyle as 0x<8 upper-case hex digits outside -RecordMode (got '$ExpectedExStyle'); validate the recorded value before calling it."
+    }
     if ($HitTestLine.Length -eq 0) {
         Add-CheckResult -Status FAIL -Kind $Kind -Name $SceneId -Detail "$ProbeName probe ${Probe}: the startup log has no HIT_TEST line"
         return $null
@@ -791,10 +807,6 @@ function Test-OverlayHitTest {
     # escaped so that the pattern can only ever match them literally.
     if ($Probe -notmatch '^\d+,\d+$') {
         Add-CheckResult -Status FAIL -Kind $Kind -Name $SceneId -Detail "$ProbeName probe '$Probe' is not x,y (re-record required)"
-        return $null
-    }
-    if ($ExpectedExStyle.Length -gt 0 -and $ExpectedExStyle -cnotmatch '^0x[0-9A-F]{8}$') {
-        Add-CheckResult -Status FAIL -Kind $Kind -Name $SceneId -Detail "$ProbeName recorded exStyle '$ExpectedExStyle' is not 0x<8 upper-case hex digits> (re-record required)"
         return $null
     }
     $probeCoordinates = $Probe.Split(',')
@@ -809,7 +821,7 @@ function Test-OverlayHitTest {
         Add-CheckResult -Status FAIL -Kind $Kind -Name $SceneId -Detail "$ProbeName probe clickThrough=${ExpectedClickThrough} requires WS_EX_TRANSPARENT (0x20) to be $(if ($ExpectedClickThrough -eq 'on') { 'set' } else { 'cleared' }): $HitTestLine"
         return $null
     }
-    if ($ExpectedExStyle.Length -gt 0 -and $observedExStyle -cne $ExpectedExStyle) {
+    if (-not $RecordMode -and $observedExStyle -cne $ExpectedExStyle) {
         Add-CheckResult -Status FAIL -Kind $Kind -Name $SceneId -Detail "$ProbeName probe exStyle recorded=$ExpectedExStyle actual=${observedExStyle}: $HitTestLine"
         return $null
     }
@@ -934,13 +946,20 @@ function Invoke-OverlayScenario {
     if (-not $RecordMode -and $null -eq $RecordedFingerprintsByWindow) {
         throw "Invoke-OverlayScenario requires -RecordedFingerprintsByWindow outside -RecordMode."
     }
+    # Checked before the launch, so a bad call never costs a player run; Test-OverlayHitTest enforces the same rule.
+    if ($RecordMode -and $ExpectedExStyle.Length -gt 0) {
+        throw "Invoke-OverlayScenario -RecordMode takes no ExpectedExStyle (got '$ExpectedExStyle')."
+    }
+    if (-not $RecordMode -and $ExpectedExStyle -cnotmatch '^0x[0-9A-F]{8}$') {
+        throw "Invoke-OverlayScenario requires ExpectedExStyle as 0x<8 upper-case hex digits outside -RecordMode (got '$ExpectedExStyle')."
+    }
 
     $overlayRun = Invoke-OverlayProbeRun -Kind overlay -SceneId $SceneId -ProbeName $ProbeName -Probe $Probe -CapturePath $CapturePath -DiffPath $DiffPath -ExtraArguments @()
     if ($null -eq $overlayRun) {
         return $null
     }
 
-    $observedExStyle = Test-OverlayHitTest -Kind overlay -SceneId $SceneId -ProbeName $ProbeName -Probe $Probe -ExpectedClickThrough $ExpectedClickThrough -ExpectedExStyle $ExpectedExStyle -HitTestLine "$($overlayRun.HitTest)"
+    $observedExStyle = Test-OverlayHitTest -Kind overlay -SceneId $SceneId -ProbeName $ProbeName -Probe $Probe -ExpectedClickThrough $ExpectedClickThrough -ExpectedExStyle $ExpectedExStyle -HitTestLine "$($overlayRun.HitTest)" -RecordMode:$RecordMode
     Test-OverlayPremultiplied -Kind overlay -SceneId $SceneId -ProbeName $ProbeName -CapturePath $CapturePath
     Test-CaptureMatchesGolden -Kind overlay -SceneId $SceneId -CompareCommand compare-rgba -CapturePath $CapturePath -GoldenPath $GoldenPath -DiffPath $DiffPath -Description "$ProbeName run capture" -GoldenLabel 'overlay golden'
 
@@ -948,7 +967,7 @@ function Invoke-OverlayScenario {
     if ($RecordMode) {
         Invoke-FingerprintHealthCheck -Name $fingerprintName -FingerprintsByWindow $overlayRun.FingerprintsByWindow -PassDetail "$ProbeName probe run healthy"
         foreach ($overlayWindowName in $overlayRun.FingerprintsByWindow.Keys) {
-            Test-OverlayFingerprintShape -SceneId $SceneId -FingerprintLine $overlayRun.FingerprintsByWindow[$overlayWindowName]
+            Test-OverlayFingerprintShape -SceneId $SceneId -FingerprintLine $overlayRun.FingerprintsByWindow[$overlayWindowName] -Kind overlay
         }
     }
     else {
@@ -970,7 +989,8 @@ Launches the player through Invoke-OverlayProbeRun with the overlay window flags
 ($script:idlePlayerArguments) and --hit-test-probe <Probe>, the recorded transparent probe. The run must exit 0 and:
 log HIT_TEST clickThrough=on with WS_EX_TRANSPARENT (0x20) set and exactly ExpectedExStyle, the transparent probe's
 recorded exStyle; pass check-idle on every window with MinimumIdleFrames and MinimumElapsedMilliseconds (the idle
-entry's minimums); pass check-premultiplied; and match the overlay golden with compare-rgba, because neither the idle
+entry's minimums); describe the overlay window in every window's fingerprint (Test-OverlayFingerprintShape:
+windowMode=overlay, alpha=1, the overlay exStyle bits); pass check-premultiplied; and match the overlay golden with compare-rgba, because neither the idle
 throttle nor the overlay window may change what a frame renders. Its fingerprints are never compared with recorded
 ones: the idle and active frame counts and the elapsed time differ from a normal run by design, and check-idle already
 checks them.
@@ -1004,6 +1024,10 @@ function Invoke-OverlayIdleScenario {
         [string]$MinimumElapsedMilliseconds
     )
 
+    # The caller validates the recorded value; an invalid one here is a bug, so it throws before any launch.
+    if ($ExpectedExStyle -cnotmatch '^0x[0-9A-F]{8}$') {
+        throw "Invoke-OverlayIdleScenario requires ExpectedExStyle as 0x<8 upper-case hex digits (got '$ExpectedExStyle')."
+    }
     $overlayIdleRun = Invoke-OverlayProbeRun -Kind overlayIdle -SceneId $SceneId -ProbeName transparent -Probe $Probe -CapturePath $CapturePath -DiffPath $DiffPath -ExtraArguments $script:idlePlayerArguments
     if ($null -eq $overlayIdleRun) {
         return $null
@@ -1011,6 +1035,10 @@ function Invoke-OverlayIdleScenario {
 
     $null = Test-OverlayHitTest -Kind overlayIdle -SceneId $SceneId -ProbeName transparent -Probe $Probe -ExpectedClickThrough on -ExpectedExStyle $ExpectedExStyle -HitTestLine "$($overlayIdleRun.HitTest)"
     Test-IdleFingerprints -Kind overlayIdle -SceneId $SceneId -FingerprintsByWindow $overlayIdleRun.FingerprintsByWindow -MinimumIdleFrames $MinimumIdleFrames -MinimumElapsedMilliseconds $MinimumElapsedMilliseconds
+    # The fingerprints are never compared field by field, so every window's overlay shape is checked on its own.
+    foreach ($overlayIdleWindowName in $overlayIdleRun.FingerprintsByWindow.Keys) {
+        Test-OverlayFingerprintShape -SceneId $SceneId -FingerprintLine $overlayIdleRun.FingerprintsByWindow[$overlayIdleWindowName] -Kind overlayIdle
+    }
     Test-OverlayPremultiplied -Kind overlayIdle -SceneId $SceneId -ProbeName transparent -CapturePath $CapturePath
     Test-CaptureMatchesGolden -Kind overlayIdle -SceneId $SceneId -CompareCommand compare-rgba -CapturePath $CapturePath -GoldenPath $GoldenPath -DiffPath $DiffPath -Description 'overlay idle run capture' -GoldenLabel 'overlay golden'
     return $overlayIdleRun.FingerprintsByWindow
@@ -1211,7 +1239,7 @@ function Resolve-ProjectCommit {
 }
 
 $RepoRoot = (Resolve-Path "$PSScriptRoot\..").Path
-$HelengineRoot =[System.IO.Path]::GetFullPath($HelengineRoot)
+$HelengineRoot = [System.IO.Path]::GetFullPath($HelengineRoot)
 $ProjectSource = [System.IO.Path]::GetFullPath($ProjectSource)
 $WorkRoot = [System.IO.Path]::GetFullPath($WorkRoot)
 Assert-WorkRootIsolated -WorkRootPath $WorkRoot -ProtectedRootPaths @($ProjectSource, $HelengineRoot, $RepoRoot)
@@ -1272,13 +1300,13 @@ if ($Verify) {
     if ([string]::IsNullOrWhiteSpace("$($pinnedManifest.projectCommit)")) {
         throw "The manifest has no projectCommit to pin the project to (re-record required): $manifestPath"
     }
-    $projectCommit = Resolve-ProjectCommit -ProjectSourcePath $ProjectSource -CommitText "$($pinnedManifest.projectCommit)" -Purpose 'recorded DemoDisc commit'
+    $builtProjectCommit = Resolve-ProjectCommit -ProjectSourcePath $ProjectSource -CommitText "$($pinnedManifest.projectCommit)" -Purpose 'recorded DemoDisc commit'
 }
 elseif ($ProjectCommit.Length -gt 0) {
-    $projectCommit = Resolve-ProjectCommit -ProjectSourcePath $ProjectSource -CommitText $ProjectCommit -Purpose '-ProjectCommit'
+    $builtProjectCommit = Resolve-ProjectCommit -ProjectSourcePath $ProjectSource -CommitText $ProjectCommit -Purpose '-ProjectCommit'
 }
 else {
-    $projectCommit = $projectHeadCommit
+    $builtProjectCommit = $projectHeadCommit
 }
 Write-Output ("PROJECT_HEAD=" + $projectHeadCommit)
 
@@ -1290,9 +1318,9 @@ if (Test-Path -LiteralPath $projectRootPath) {
 New-Item -ItemType Directory -Path $projectRootPath -Force | Out-Null
 
 $projectArchivePath = Join-Path $WorkRoot 'project-source.tar'
-& git -C $ProjectSource archive --format=tar -o $projectArchivePath $projectCommit
+& git -C $ProjectSource archive --format=tar -o $projectArchivePath $builtProjectCommit
 if ($LASTEXITCODE -ne 0) {
-    throw "Archiving the project source's commit $projectCommit failed with exit code $LASTEXITCODE."
+    throw "Archiving the project source's commit $builtProjectCommit failed with exit code $LASTEXITCODE."
 }
 & $tarExecutablePath -xf $projectArchivePath -C $projectRootPath
 if ($LASTEXITCODE -ne 0) {
@@ -1454,7 +1482,7 @@ if ((Get-Item -LiteralPath $playerExecutablePath).LastWriteTime -lt $buildStarte
     throw "The player executable was not rewritten by this build: $playerExecutablePath"
 }
 
-Write-Output ("PROJECT_COMMIT=" + $projectCommit)
+Write-Output ("PROJECT_COMMIT=" + $builtProjectCommit)
 Write-Output ("PLAYER_SOURCE_ROOT=" + $RepoRoot)
 Write-Output ("PLAYER=" + $playerExecutablePath)
 
@@ -1633,7 +1661,7 @@ if ($Record) {
     if (Test-PlayerRunSucceeded -PlayerRun $overlayRecordRun -Kind overlay -SceneId $smokeSceneId -CapturePath $overlayRecordCapturePath) {
         Invoke-FingerprintHealthCheck -Name "$smokeSceneId.overlay" -FingerprintsByWindow $overlayRecordRun.FingerprintsByWindow -PassDetail 'overlay record run healthy'
         foreach ($overlayWindowName in $overlayRecordRun.FingerprintsByWindow.Keys) {
-            Test-OverlayFingerprintShape -SceneId $smokeSceneId -FingerprintLine $overlayRecordRun.FingerprintsByWindow[$overlayWindowName]
+            Test-OverlayFingerprintShape -SceneId $smokeSceneId -FingerprintLine $overlayRecordRun.FingerprintsByWindow[$overlayWindowName] -Kind overlay
         }
         Test-OverlayPremultiplied -Kind overlay -SceneId $smokeSceneId -ProbeName record -CapturePath $overlayRecordCapturePath
         $overlayRecordGoldenRun = Invoke-RegressionTool -ToolArguments @('record-golden-rgba', $overlayRecordCapturePath, $overlayStagingGoldenPath)
@@ -1690,7 +1718,7 @@ if ($Record) {
         width = 640
         height = 360
         projectSource = $ProjectSource
-        projectCommit = $projectCommit
+        projectCommit = $builtProjectCommit
         buildConfigSourceHash = $buildConfigSourceHash
         generatedCodeHash = $generatedCodeHash
         helengineCommit = $helengineCommit
@@ -1729,53 +1757,49 @@ else {
     $recordedIdleScene = $null
     $recordedOverlayScene = $null
     $recordedOverlayIdleScene = $null
-    if (-not (Test-Path -LiteralPath $manifestPath -PathType Leaf)) {
-        Add-CheckResult -Status FAIL -Kind manifest -Name manifest.json -Detail "golden missing: $manifestPath"
+    # Step 1 already stopped the run when the manifest is missing, because Verify builds the commit it pins.
+    $manifest = [System.IO.File]::ReadAllText($manifestPath) | ConvertFrom-Json
+    # The build above used the pinned (recorded) commit, so a moved HEAD only means the net is not testing the
+    # project's latest state; move the pin deliberately with -Record (optionally -ProjectCommit <sha>).
+    if ($projectHeadCommit -ne $builtProjectCommit) {
+        Write-Output "WARN project changed since record: HEAD is $projectHeadCommit, but Verify built the pinned recorded commit $builtProjectCommit"
     }
-    else {
-        $manifest = [System.IO.File]::ReadAllText($manifestPath) | ConvertFrom-Json
-        # The build above used the pinned (recorded) commit, so a moved HEAD only means the net is not testing the
-        # project's latest state; move the pin deliberately with -Record (optionally -ProjectCommit <sha>).
-        if ($projectHeadCommit -ne $projectCommit) {
-            Write-Output "WARN project changed since record: HEAD is $projectHeadCommit, but Verify built the pinned recorded commit $projectCommit"
-        }
-        if ($manifest.helengineCommit -ne $helengineCommit -or [bool]$manifest.helengineDirty -ne $helengineDirty) {
-            Write-Output "WARN helengine changed since record: $($manifest.helengineCommit) (dirty=$($manifest.helengineDirty)) -> $helengineCommit (dirty=$helengineDirty)"
-        }
-        if ($manifest.buildConfigSourceHash -ne $buildConfigSourceHash) {
-            Write-Output "WARN buildConfigSourceHash changed since record (the project's user_settings\build_config.json): $($manifest.buildConfigSourceHash) -> $buildConfigSourceHash"
-        }
-        if ($manifest.generatedCodeHash -ne $generatedCodeHash) {
-            Write-Output "WARN generatedCodeHash changed since record (the project's user_settings\generated_code): $($manifest.generatedCodeHash) -> $generatedCodeHash"
-        }
-        if ($manifest.helengineWorkingTreeHash -ne $helengineWorkingTreeHash) {
-            Write-Output "WARN helengineWorkingTreeHash changed since record (helengine's uncommitted changes and untracked files): $($manifest.helengineWorkingTreeHash) -> $helengineWorkingTreeHash"
-        }
-        if ($manifest.frames -ne 30 -or [double]$manifest.fixedDelta -ne 0.016666 -or $manifest.width -ne 640 -or $manifest.height -ne 360) {
-            Add-CheckResult -Status FAIL -Kind manifest -Name manifest.json -Detail "recorded with frames=$($manifest.frames) fixedDelta=$($manifest.fixedDelta) size=$($manifest.width)x$($manifest.height); expected frames=30 fixedDelta=0.016666 size=640x360"
-        }
-        foreach ($manifestScene in $manifest.scenes) {
-            if ($manifestScene.kind -eq 'golden') {
-                $recordedGoldenSceneIds.Add($manifestScene.id)
-                $recordedGoldenScenesById[$manifestScene.id] = $manifestScene
-                if ($manifestScene.status -eq 'unstable') {
-                    $unstableSceneIds.Add($manifestScene.id)
-                }
-            }
-            elseif ($manifestScene.kind -eq 'idle') {
-                $recordedIdleScene = $manifestScene
-            }
-            elseif ($manifestScene.kind -eq 'overlay') {
-                $recordedOverlayScene = $manifestScene
-            }
-            elseif ($manifestScene.kind -eq 'overlayIdle') {
-                $recordedOverlayIdleScene = $manifestScene
+    if ($manifest.helengineCommit -ne $helengineCommit -or [bool]$manifest.helengineDirty -ne $helengineDirty) {
+        Write-Output "WARN helengine changed since record: $($manifest.helengineCommit) (dirty=$($manifest.helengineDirty)) -> $helengineCommit (dirty=$helengineDirty)"
+    }
+    if ($manifest.buildConfigSourceHash -ne $buildConfigSourceHash) {
+        Write-Output "WARN buildConfigSourceHash changed since record (the project's user_settings\build_config.json): $($manifest.buildConfigSourceHash) -> $buildConfigSourceHash"
+    }
+    if ($manifest.generatedCodeHash -ne $generatedCodeHash) {
+        Write-Output "WARN generatedCodeHash changed since record (the project's user_settings\generated_code): $($manifest.generatedCodeHash) -> $generatedCodeHash"
+    }
+    if ($manifest.helengineWorkingTreeHash -ne $helengineWorkingTreeHash) {
+        Write-Output "WARN helengineWorkingTreeHash changed since record (helengine's uncommitted changes and untracked files): $($manifest.helengineWorkingTreeHash) -> $helengineWorkingTreeHash"
+    }
+    if ($manifest.frames -ne 30 -or [double]$manifest.fixedDelta -ne 0.016666 -or $manifest.width -ne 640 -or $manifest.height -ne 360) {
+        Add-CheckResult -Status FAIL -Kind manifest -Name manifest.json -Detail "recorded with frames=$($manifest.frames) fixedDelta=$($manifest.fixedDelta) size=$($manifest.width)x$($manifest.height); expected frames=30 fixedDelta=0.016666 size=640x360"
+    }
+    foreach ($manifestScene in $manifest.scenes) {
+        if ($manifestScene.kind -eq 'golden') {
+            $recordedGoldenSceneIds.Add($manifestScene.id)
+            $recordedGoldenScenesById[$manifestScene.id] = $manifestScene
+            if ($manifestScene.status -eq 'unstable') {
+                $unstableSceneIds.Add($manifestScene.id)
             }
         }
-        foreach ($recordedSceneId in $recordedGoldenSceneIds) {
-            if (-not $sceneIds.Contains($recordedSceneId)) {
-                Add-CheckResult -Status FAIL -Kind golden -Name $recordedSceneId -Detail "recorded in the manifest but no longer built"
-            }
+        elseif ($manifestScene.kind -eq 'idle') {
+            $recordedIdleScene = $manifestScene
+        }
+        elseif ($manifestScene.kind -eq 'overlay') {
+            $recordedOverlayScene = $manifestScene
+        }
+        elseif ($manifestScene.kind -eq 'overlayIdle') {
+            $recordedOverlayIdleScene = $manifestScene
+        }
+    }
+    foreach ($recordedSceneId in $recordedGoldenSceneIds) {
+        if (-not $sceneIds.Contains($recordedSceneId)) {
+            Add-CheckResult -Status FAIL -Kind golden -Name $recordedSceneId -Detail "recorded in the manifest but no longer built"
         }
     }
 
@@ -1872,6 +1896,9 @@ else {
     }
     elseif ($null -eq $recordedOverlayScene.transparentProbe -or $null -eq $recordedOverlayScene.opaqueProbe -or $null -eq $recordedOverlayScene.transparentExStyle -or $null -eq $recordedOverlayScene.opaqueExStyle -or $null -eq $recordedOverlayScene.fingerprintsByProbe.transparent -or $null -eq $recordedOverlayScene.fingerprintsByProbe.opaque) {
         Add-CheckResult -Status FAIL -Kind overlay -Name $smokeSceneId -Detail "overlay entry lacks transparentProbe, opaqueProbe, transparentExStyle, opaqueExStyle or fingerprintsByProbe.transparent/opaque (re-record required): $manifestPath"
+    }
+    elseif ("$($recordedOverlayScene.transparentExStyle)" -cnotmatch '^0x[0-9A-F]{8}$' -or "$($recordedOverlayScene.opaqueExStyle)" -cnotmatch '^0x[0-9A-F]{8}$') {
+        Add-CheckResult -Status FAIL -Kind overlay -Name $smokeSceneId -Detail "overlay entry's transparentExStyle '$($recordedOverlayScene.transparentExStyle)' or opaqueExStyle '$($recordedOverlayScene.opaqueExStyle)' is not 0x<8 upper-case hex digits> (re-record required): $manifestPath"
     }
     else {
         $overlayEntryComplete = $true

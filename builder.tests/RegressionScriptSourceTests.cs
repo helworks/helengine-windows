@@ -66,8 +66,8 @@ public sealed class RegressionScriptSourceTests {
         Assert.Contains("rev-parse --verify \"$CommitText^{commit}\"", resolveSource, StringComparison.Ordinal);
         Assert.Contains("was not found in the project source", resolveSource, StringComparison.Ordinal);
 
-        int pinIndex = scriptSource.IndexOf("$projectCommit = Resolve-ProjectCommit -ProjectSourcePath $ProjectSource -CommitText \"$($pinnedManifest.projectCommit)\" -Purpose 'recorded DemoDisc commit'", StringComparison.Ordinal);
-        int archiveIndex = scriptSource.IndexOf("& git -C $ProjectSource archive --format=tar -o $projectArchivePath $projectCommit", StringComparison.Ordinal);
+        int pinIndex = scriptSource.IndexOf("$builtProjectCommit = Resolve-ProjectCommit -ProjectSourcePath $ProjectSource -CommitText \"$($pinnedManifest.projectCommit)\" -Purpose 'recorded DemoDisc commit'", StringComparison.Ordinal);
+        int archiveIndex = scriptSource.IndexOf("& git -C $ProjectSource archive --format=tar -o $projectArchivePath $builtProjectCommit", StringComparison.Ordinal);
         Assert.True(pinIndex >= 0, "Verify must pin the project to the manifest's projectCommit.");
         Assert.True(archiveIndex > pinIndex, "The pinned commit must be resolved before the project archive is made.");
         int pinBlockIndex = scriptSource.LastIndexOf("if ($Verify) {", pinIndex, StringComparison.Ordinal);
@@ -76,10 +76,16 @@ public sealed class RegressionScriptSourceTests {
         Assert.Contains("The manifest has no projectCommit to pin the project to (re-record required)", pinSource, StringComparison.Ordinal);
         Assert.Contains("the manifest is missing (re-record required)", pinSource, StringComparison.Ordinal);
         Assert.Contains("Resolve-ProjectCommit -ProjectSourcePath $ProjectSource -CommitText $ProjectCommit -Purpose '-ProjectCommit'", pinSource, StringComparison.Ordinal);
-        Assert.Contains("$projectCommit = $projectHeadCommit", pinSource, StringComparison.Ordinal);
-        Assert.DoesNotContain("$projectCommit = (& git -C $ProjectSource rev-parse HEAD)", scriptSource, StringComparison.Ordinal);
+        Assert.Contains("$builtProjectCommit = $projectHeadCommit", pinSource, StringComparison.Ordinal);
+        Assert.DoesNotContain("$builtProjectCommit = (& git -C $ProjectSource rev-parse HEAD)", scriptSource, StringComparison.Ordinal);
+        // PowerShell variables are case-insensitive, so a local $projectCommit would alias the -ProjectCommit parameter.
+        Assert.DoesNotContain("$projectCommit", scriptSource, StringComparison.Ordinal);
 
         Assert.Contains("but Verify built the pinned recorded commit", scriptSource, StringComparison.Ordinal);
+
+        // Step 1 already throws on a missing manifest, so Verify has no unreachable "golden missing" manifest branch.
+        Assert.DoesNotContain("golden missing: $manifestPath", scriptSource, StringComparison.Ordinal);
+        Assert.Contains("$HelengineRoot = [System.IO.Path]::GetFullPath($HelengineRoot)", scriptSource, StringComparison.Ordinal);
     }
 
     /// <summary>
@@ -358,6 +364,60 @@ public sealed class RegressionScriptSourceTests {
         Assert.Contains("$ExpectedExStyle -cnotmatch '^0x[0-9A-F]{8}$'", hitTestSource, StringComparison.Ordinal);
         Assert.Contains("$observedExStyle -cne $ExpectedExStyle", hitTestSource, StringComparison.Ordinal);
         Assert.Contains("return $observedExStyle", hitTestSource, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// Ensures record mode is an explicit switch instead of being inferred from an empty expected exStyle: outside
+    /// -RecordMode an empty or malformed expected value throws (never a silent downgrade to the bit rule), with
+    /// -RecordMode an expected value throws, the overlay scenario forwards its own switch and validates before launching,
+    /// and Verify fails an overlay entry whose recorded exStyles are not 0x&lt;8 upper-case hex digits&gt; with a re-record
+    /// request before any overlay or overlay+idle run.
+    /// </summary>
+    [Fact]
+    public void RegressionScript_RequiresValidRecordedExStylesAndAnExplicitRecordMode() {
+        string scriptSource = ReadRegressionScriptSource();
+
+        string hitTestSource = ReadFunctionSource(scriptSource, "Test-OverlayHitTest");
+        Assert.Contains("[switch]$RecordMode", hitTestSource, StringComparison.Ordinal);
+        Assert.Contains("if ($RecordMode -and $ExpectedExStyle.Length -gt 0) {\r\n        throw", hitTestSource.Replace("\r\n", "\n").Replace("\n", "\r\n"), StringComparison.Ordinal);
+        Assert.Contains("if (-not $RecordMode -and $ExpectedExStyle -cnotmatch '^0x[0-9A-F]{8}$') {\r\n        throw", hitTestSource.Replace("\r\n", "\n").Replace("\n", "\r\n"), StringComparison.Ordinal);
+        Assert.Contains("if (-not $RecordMode -and $observedExStyle -cne $ExpectedExStyle) {", hitTestSource, StringComparison.Ordinal);
+        Assert.DoesNotContain("$ExpectedExStyle.Length -gt 0 -and", hitTestSource, StringComparison.Ordinal);
+
+        string overlayScenarioSource = ReadFunctionSource(scriptSource, "Invoke-OverlayScenario");
+        Assert.Contains("-HitTestLine \"$($overlayRun.HitTest)\" -RecordMode:$RecordMode", overlayScenarioSource, StringComparison.Ordinal);
+        int scenarioGuardIndex = overlayScenarioSource.IndexOf("if (-not $RecordMode -and $ExpectedExStyle -cnotmatch '^0x[0-9A-F]{8}$') {", StringComparison.Ordinal);
+        int scenarioLaunchIndex = overlayScenarioSource.IndexOf("Invoke-OverlayProbeRun -Kind overlay", StringComparison.Ordinal);
+        Assert.True(scenarioGuardIndex >= 0 && scenarioLaunchIndex > scenarioGuardIndex, "Invoke-OverlayScenario must validate ExpectedExStyle before launching the player.");
+
+        string overlayIdleSource = ReadFunctionSource(scriptSource, "Invoke-OverlayIdleScenario");
+        int idleGuardIndex = overlayIdleSource.IndexOf("if ($ExpectedExStyle -cnotmatch '^0x[0-9A-F]{8}$') {", StringComparison.Ordinal);
+        int idleLaunchIndex = overlayIdleSource.IndexOf("Invoke-OverlayProbeRun -Kind overlayIdle", StringComparison.Ordinal);
+        Assert.True(idleGuardIndex >= 0 && idleLaunchIndex > idleGuardIndex, "Invoke-OverlayIdleScenario must validate ExpectedExStyle before launching the player.");
+
+        int verifyIndex = scriptSource.IndexOf("# 11V.", StringComparison.Ordinal);
+        string verifySource = scriptSource.Substring(verifyIndex);
+        int exStyleValidationIndex = verifySource.IndexOf("elseif (\"$($recordedOverlayScene.transparentExStyle)\" -cnotmatch '^0x[0-9A-F]{8}$' -or \"$($recordedOverlayScene.opaqueExStyle)\" -cnotmatch '^0x[0-9A-F]{8}$') {", StringComparison.Ordinal);
+        int overlayCompleteIndex = verifySource.IndexOf("$overlayEntryComplete = $true", StringComparison.Ordinal);
+        Assert.True(exStyleValidationIndex >= 0 && overlayCompleteIndex > exStyleValidationIndex, "Verify must validate both recorded exStyles before it marks the overlay entry complete.");
+        Assert.Contains("is not 0x<8 upper-case hex digits> (re-record required)", verifySource, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// Ensures the overlay+idle run, whose fingerprints are never compared field by field, has every window's overlay
+    /// shape (windowMode, alpha and the overlay exStyle bits) checked in both Record and Verify under its own kind.
+    /// </summary>
+    [Fact]
+    public void RegressionScript_ShapeChecksTheOverlayIdleRun() {
+        string scriptSource = ReadRegressionScriptSource();
+
+        string shapeSource = ReadFunctionSource(scriptSource, "Test-OverlayFingerprintShape");
+        Assert.Contains("[ValidateSet('overlay', 'overlayIdle')]", shapeSource, StringComparison.Ordinal);
+        Assert.DoesNotContain("-Kind overlay -Name", shapeSource, StringComparison.Ordinal);
+
+        string overlayIdleSource = ReadFunctionSource(scriptSource, "Invoke-OverlayIdleScenario");
+        Assert.Contains("foreach ($overlayIdleWindowName in $overlayIdleRun.FingerprintsByWindow.Keys) {", overlayIdleSource, StringComparison.Ordinal);
+        Assert.Contains("Test-OverlayFingerprintShape -SceneId $SceneId -FingerprintLine $overlayIdleRun.FingerprintsByWindow[$overlayIdleWindowName] -Kind overlayIdle", overlayIdleSource, StringComparison.Ordinal);
     }
 
     /// <summary>
