@@ -4,8 +4,11 @@ Builds this checkout's Windows player against an isolated copy of the DemoDisc p
 
 .DESCRIPTION
 Modes (exactly one is required):
-  -BuildOnly  Builds the player from THIS checkout (the folder above this script) into <WorkRoot>\player and prints
-              PROJECT_COMMIT=<DemoDisc HEAD>, PLAYER_SOURCE_ROOT=<checkout> and PLAYER=<exe path>.
+  -BuildOnly  Builds the player from THIS checkout (the folder above this script) into <WorkRoot>\player against
+              -ProjectCommit (default: DemoDisc HEAD) and prints PROJECT_COMMIT=<built commit>,
+              PLAYER_SOURCE_ROOT=<checkout> and PLAYER=<exe path>. Note that -Verify does not build HEAD: it pins
+              the project to the manifest's recorded projectCommit, so pass -ProjectCommit <that sha> to reproduce
+              a Verify build.
   -Record     Builds, runs every scene twice (runs a and b), records each stable scene as a golden, writes
               manifest.json (run settings, scene status, host fingerprints, the idle scenario and provenance hashes)
               and records each test suite's failing-test set and executed-test count. Everything is written to
@@ -49,7 +52,12 @@ The work root is marked with a .helengine-regression-workroot file; a non-empty 
 
 See regression\README.md for the thresholds and for when and how to re-record deliberately.
 
-The script never modifies the helengine checkout or the project source. It extracts the project's committed HEAD
+Project pinning: -Verify always builds the project commit recorded as projectCommit in regression\golden\manifest.json
+(a manifest without it, or a commit the project source does not have, stops the run with "re-record required" or
+"recorded DemoDisc commit ... was not found"); it never follows the project's HEAD and only WARNs when HEAD differs.
+-Record and -BuildOnly build -ProjectCommit <sha> (default: HEAD), and -Record records that commit as the new pin.
+
+The script never modifies the helengine checkout or the project source. It extracts the selected project commit
 (git archive) into <WorkRoot>\project, copies the git-ignored user_settings folder beside it, writes its own engine
 user settings to <WorkRoot>\engine-user-settings (pointing the windows platform at this checkout), and points
 HELENGINE_ENGINE_USER_SETTINGS_ROOT there only for the duration of the canonical build-platform.ps1 call.
@@ -71,7 +79,10 @@ param(
     [string]$ProjectSource = 'C:\dev\helprojs\demodisc',
 
     [Parameter()]
-    [string]$WorkRoot = 'C:\dev\helworks\builds\helengine-windows\regression'
+    [string]$WorkRoot = 'C:\dev\helworks\builds\helengine-windows\regression',
+
+    [Parameter()]
+    [string]$ProjectCommit = ''
 )
 
 $ErrorActionPreference = 'Stop'
@@ -1161,8 +1172,46 @@ function Invoke-TestSuite {
     return [pscustomobject]@{ FailingListPath = $failingListPath; TrxPath = $trxPath }
 }
 
+<#
+.SYNOPSIS
+Resolves a commit of the project source to its full SHA and throws when the project source does not have it.
+.DESCRIPTION
+The commit is checked with "git cat-file -e <commit>^{commit}" and resolved with "git rev-parse --verify". Git's own
+error output is suppressed; the thrown message names the commit, the project source and what the commit was for
+(Purpose), for example "recorded DemoDisc commit".
+.OUTPUTS
+The full 40-hex SHA of the commit.
+#>
+function Resolve-ProjectCommit {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$ProjectSourcePath,
+
+        [Parameter(Mandatory = $true)]
+        [string]$CommitText,
+
+        [Parameter(Mandatory = $true)]
+        [string]$Purpose
+    )
+
+    # Native stderr must not become a terminating error here; the exit code decides.
+    $ErrorActionPreference = 'Continue'
+    & git -C $ProjectSourcePath cat-file -e "$CommitText^{commit}" 2>$null
+    $commitExitCode = $LASTEXITCODE
+    $resolvedCommit = $null
+    if ($commitExitCode -eq 0) {
+        $resolvedCommit = (& git -C $ProjectSourcePath rev-parse --verify "$CommitText^{commit}" 2>$null)
+        $commitExitCode = $LASTEXITCODE
+    }
+    $ErrorActionPreference = 'Stop'
+    if ($commitExitCode -ne 0 -or $null -eq $resolvedCommit) {
+        throw "The $Purpose '$CommitText' was not found in the project source $ProjectSourcePath (git cat-file -e failed)."
+    }
+    return "$resolvedCommit".Trim()
+}
+
 $RepoRoot = (Resolve-Path "$PSScriptRoot\..").Path
-$HelengineRoot = [System.IO.Path]::GetFullPath($HelengineRoot)
+$HelengineRoot =[System.IO.Path]::GetFullPath($HelengineRoot)
 $ProjectSource = [System.IO.Path]::GetFullPath($ProjectSource)
 $WorkRoot = [System.IO.Path]::GetFullPath($WorkRoot)
 Assert-WorkRootIsolated -WorkRootPath $WorkRoot -ProtectedRootPaths @($ProjectSource, $HelengineRoot, $RepoRoot)
@@ -1201,12 +1250,37 @@ if (-not (Test-Path -LiteralPath $tarExecutablePath -PathType Leaf)) {
     throw "Windows tar was not found: $tarExecutablePath"
 }
 
-# 1. Extract the project's committed HEAD into the work root, then add its git-ignored user_settings folder.
-$projectCommit = (& git -C $ProjectSource rev-parse HEAD)
+# 1. Pick the project commit to build, extract it into the work root, then add the git-ignored user_settings folder.
+#    Verify is pinned: it always builds the projectCommit recorded in the committed manifest and never follows the
+#    project's HEAD, so a project that moved on cannot change what the player is tested against. Record and BuildOnly
+#    build -ProjectCommit (default: the project's HEAD); Record writes it into the manifest as the new pin.
+$projectHeadCommit = (& git -C $ProjectSource rev-parse HEAD)
 if ($LASTEXITCODE -ne 0) {
     throw "Reading the project source's HEAD commit failed with exit code $LASTEXITCODE."
 }
-$projectCommit = $projectCommit.Trim()
+$projectHeadCommit = $projectHeadCommit.Trim()
+$goldenRootPath = Join-Path $RepoRoot 'regression\golden'
+$manifestPath = Join-Path $goldenRootPath 'manifest.json'
+if ($Verify) {
+    if ($ProjectCommit.Length -gt 0) {
+        throw "-ProjectCommit cannot be used with -Verify: Verify always builds the projectCommit recorded in $manifestPath."
+    }
+    if (-not (Test-Path -LiteralPath $manifestPath -PathType Leaf)) {
+        throw "Verify builds the project commit recorded in the manifest, but the manifest is missing (re-record required): $manifestPath"
+    }
+    $pinnedManifest = [System.IO.File]::ReadAllText($manifestPath) | ConvertFrom-Json
+    if ([string]::IsNullOrWhiteSpace("$($pinnedManifest.projectCommit)")) {
+        throw "The manifest has no projectCommit to pin the project to (re-record required): $manifestPath"
+    }
+    $projectCommit = Resolve-ProjectCommit -ProjectSourcePath $ProjectSource -CommitText "$($pinnedManifest.projectCommit)" -Purpose 'recorded DemoDisc commit'
+}
+elseif ($ProjectCommit.Length -gt 0) {
+    $projectCommit = Resolve-ProjectCommit -ProjectSourcePath $ProjectSource -CommitText $ProjectCommit -Purpose '-ProjectCommit'
+}
+else {
+    $projectCommit = $projectHeadCommit
+}
+Write-Output ("PROJECT_HEAD=" + $projectHeadCommit)
 
 New-Item -ItemType Directory -Path $WorkRoot -Force | Out-Null
 $projectRootPath = Join-Path $WorkRoot 'project'
@@ -1218,7 +1292,7 @@ New-Item -ItemType Directory -Path $projectRootPath -Force | Out-Null
 $projectArchivePath = Join-Path $WorkRoot 'project-source.tar'
 & git -C $ProjectSource archive --format=tar -o $projectArchivePath $projectCommit
 if ($LASTEXITCODE -ne 0) {
-    throw "Archiving the project source's HEAD failed with exit code $LASTEXITCODE."
+    throw "Archiving the project source's commit $projectCommit failed with exit code $LASTEXITCODE."
 }
 & $tarExecutablePath -xf $projectArchivePath -C $projectRootPath
 if ($LASTEXITCODE -ne 0) {
@@ -1441,9 +1515,7 @@ $helengineWorkingTreeHash = Get-TextSha256 -Text (($helengineDiffLines -join "`n
 Write-Output ("HELENGINE_COMMIT=" + $helengineCommit)
 Write-Output ("HELENGINE_DIRTY=" + $helengineDirty)
 
-$goldenRootPath = Join-Path $RepoRoot 'regression\golden'
 $baselineRootPath = Join-Path $RepoRoot 'regression\baselines'
-$manifestPath = Join-Path $goldenRootPath 'manifest.json'
 $recordStagingRootPath = Join-Path $WorkRoot 'record-staging'
 $stagingGoldenRootPath = Join-Path $recordStagingRootPath 'golden'
 $stagingBaselineRootPath = Join-Path $recordStagingRootPath 'baselines'
@@ -1662,8 +1734,10 @@ else {
     }
     else {
         $manifest = [System.IO.File]::ReadAllText($manifestPath) | ConvertFrom-Json
-        if ($manifest.projectCommit -ne $projectCommit) {
-            Write-Output "WARN project changed since record: $($manifest.projectCommit) -> $projectCommit"
+        # The build above used the pinned (recorded) commit, so a moved HEAD only means the net is not testing the
+        # project's latest state; move the pin deliberately with -Record (optionally -ProjectCommit <sha>).
+        if ($projectHeadCommit -ne $projectCommit) {
+            Write-Output "WARN project changed since record: HEAD is $projectHeadCommit, but Verify built the pinned recorded commit $projectCommit"
         }
         if ($manifest.helengineCommit -ne $helengineCommit -or [bool]$manifest.helengineDirty -ne $helengineDirty) {
             Write-Output "WARN helengine changed since record: $($manifest.helengineCommit) (dirty=$($manifest.helengineDirty)) -> $helengineCommit (dirty=$helengineDirty)"

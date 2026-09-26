@@ -50,6 +50,54 @@ public sealed class RegressionScriptSourceTests {
     }
 
     /// <summary>
+    /// Ensures Verify builds the project commit recorded in the manifest instead of the project's HEAD: the pin is read
+    /// from the committed manifest before the archive is made, a manifest without projectCommit or a commit the project
+    /// source lacks stops the run with a clear message, -ProjectCommit is refused with -Verify, Record and BuildOnly build
+    /// -ProjectCommit (default HEAD), and a moved HEAD is only a WARN that says the pinned commit was built.
+    /// </summary>
+    [Fact]
+    public void RegressionScript_PinsVerifyToTheRecordedProjectCommit() {
+        string scriptSource = ReadRegressionScriptSource();
+
+        Assert.Contains("[string]$ProjectCommit = ''", scriptSource, StringComparison.Ordinal);
+
+        string resolveSource = ReadFunctionSource(scriptSource, "Resolve-ProjectCommit");
+        Assert.Contains("cat-file -e \"$CommitText^{commit}\"", resolveSource, StringComparison.Ordinal);
+        Assert.Contains("rev-parse --verify \"$CommitText^{commit}\"", resolveSource, StringComparison.Ordinal);
+        Assert.Contains("was not found in the project source", resolveSource, StringComparison.Ordinal);
+
+        int pinIndex = scriptSource.IndexOf("$projectCommit = Resolve-ProjectCommit -ProjectSourcePath $ProjectSource -CommitText \"$($pinnedManifest.projectCommit)\" -Purpose 'recorded DemoDisc commit'", StringComparison.Ordinal);
+        int archiveIndex = scriptSource.IndexOf("& git -C $ProjectSource archive --format=tar -o $projectArchivePath $projectCommit", StringComparison.Ordinal);
+        Assert.True(pinIndex >= 0, "Verify must pin the project to the manifest's projectCommit.");
+        Assert.True(archiveIndex > pinIndex, "The pinned commit must be resolved before the project archive is made.");
+        int pinBlockIndex = scriptSource.LastIndexOf("if ($Verify) {", pinIndex, StringComparison.Ordinal);
+        string pinSource = scriptSource.Substring(pinBlockIndex, archiveIndex - pinBlockIndex);
+        Assert.Contains("-ProjectCommit cannot be used with -Verify", pinSource, StringComparison.Ordinal);
+        Assert.Contains("The manifest has no projectCommit to pin the project to (re-record required)", pinSource, StringComparison.Ordinal);
+        Assert.Contains("the manifest is missing (re-record required)", pinSource, StringComparison.Ordinal);
+        Assert.Contains("Resolve-ProjectCommit -ProjectSourcePath $ProjectSource -CommitText $ProjectCommit -Purpose '-ProjectCommit'", pinSource, StringComparison.Ordinal);
+        Assert.Contains("$projectCommit = $projectHeadCommit", pinSource, StringComparison.Ordinal);
+        Assert.DoesNotContain("$projectCommit = (& git -C $ProjectSource rev-parse HEAD)", scriptSource, StringComparison.Ordinal);
+
+        Assert.Contains("but Verify built the pinned recorded commit", scriptSource, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// Ensures the regression README documents that Verify is pinned to the recorded project commit and how to move the
+    /// pin forward deliberately.
+    /// </summary>
+    [Fact]
+    public void RegressionReadme_DocumentsProjectPinning() {
+        string repositoryRootPath = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", ".."));
+        string readmeSource = File.ReadAllText(Path.Combine(repositoryRootPath, "regression", "README.md"));
+
+        Assert.Contains("## Project pinning", readmeSource, StringComparison.Ordinal);
+        Assert.Contains("-Record -ProjectCommit <sha>", readmeSource, StringComparison.Ordinal);
+        Assert.Contains("never follows the project's HEAD", readmeSource, StringComparison.Ordinal);
+        Assert.Contains("recorded DemoDisc commit", readmeSource, StringComparison.Ordinal);
+    }
+
+    /// <summary>
     /// Ensures the regression script records which project and helengine revisions its goldens came from, and warns on verify when either has moved since the record.
     /// </summary>
     [Fact]

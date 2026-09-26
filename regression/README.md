@@ -1,7 +1,8 @@
 # Windows player regression net
 
-`scripts\run-regression.ps1` builds **this checkout's** Windows player against an isolated copy of DemoDisc's
-committed HEAD. It then checks that the player still renders what it rendered when the goldens were recorded, that
+`scripts\run-regression.ps1` builds **this checkout's** Windows player against an isolated copy of one committed
+DemoDisc version: `-Verify` uses the commit pinned in the manifest, and `-Record` uses HEAD or `-ProjectCommit`
+(see "Project pinning"). It then checks that the player still renders what it rendered when the goldens were recorded, that
 its host layer (swap chain, window, Present) is unchanged, and that the editor-side test suites have no new failures.
 
 ## What is checked
@@ -414,6 +415,34 @@ While the net runs:
   `builder\bin\Debug\net9.0\helengine.windows.builder.dll`, which the real `platforms.json` also points at.
 - The net builds and runs the **Debug** player only.
 
+## Project pinning
+
+The goldens show DemoDisc as it was at one commit. If the net built whatever DemoDisc's HEAD is today, any
+DemoDisc change (for example regenerated scenes) would look like a player regression. So **`-Verify` is pinned**: it
+always builds the `projectCommit` recorded in `regression\golden\manifest.json` (`git archive <projectCommit>`), and
+it never follows the project's HEAD.
+
+- When DemoDisc's HEAD differs from the pin, `-Verify` prints
+  `WARN project changed since record: HEAD is <head>, but Verify built the pinned recorded commit <pin>` and carries on.
+  Every check still runs against the pinned commit.
+- A manifest without `projectCommit` stops the run with
+  `The manifest has no projectCommit to pin the project to (re-record required)`, and a missing manifest stops it with
+  `... but the manifest is missing (re-record required)`.
+- A pinned commit the project source does not have (for example a history rewrite, or a different clone) stops the
+  run with `The recorded DemoDisc commit '<sha>' was not found in the project source <path> (git cat-file -e failed).`
+  Fetch the commit into the project source, or re-record.
+- `-ProjectCommit` is refused with `-Verify`.
+- Only the committed project is pinned. The git-ignored `user_settings` folder (its build config and generated code)
+  is still copied from the project's working tree, and the `buildConfigSourceHash` and `generatedCodeHash` WARNs
+  below still report when it changed.
+
+**Moving DemoDisc forward, deliberately.** `-Record` builds `-ProjectCommit <sha>` (default: DemoDisc's HEAD) and
+records that commit as the new pin. To move the pin, run `-Record -ProjectCommit <sha>` for a specific commit or a
+plain `-Record` for the current HEAD. Then follow "Re-recording (deliberately)": look at the diffs first, because
+every golden may change with the project. `-BuildOnly` also accepts `-ProjectCommit` (default HEAD) and prints the
+built commit as `PROJECT_COMMIT=`. To reproduce the player a `-Verify` builds, pass the manifest's `projectCommit`.
+Every mode also prints `PROJECT_HEAD=<DemoDisc HEAD>`.
+
 ## Provenance warnings
 
 `manifest.json` records the provenance of the goldens and baselines:
@@ -430,7 +459,8 @@ While the net runs:
 
 `-Verify` prints:
 
-- `WARN project changed since record: <old> -> <new>` when DemoDisc's HEAD has moved;
+- `WARN project changed since record: HEAD is <head>, but Verify built the pinned recorded commit <pin>` when
+  DemoDisc's HEAD has moved (see "Project pinning");
 - `WARN helengine changed since record: ...` when the helengine commit or its dirty state differs;
 - `WARN <input> changed since record ...` for each of `buildConfigSourceHash`, `generatedCodeHash` and
   `helengineWorkingTreeHash` that differs.
