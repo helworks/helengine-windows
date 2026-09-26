@@ -61,6 +61,9 @@ The script never modifies the helengine checkout or the project source. It extra
 (git archive) into <WorkRoot>\project, copies the git-ignored user_settings folder beside it, writes its own engine
 user settings to <WorkRoot>\engine-user-settings (pointing the windows platform at this checkout), and points
 HELENGINE_ENGINE_USER_SETTINGS_ROOT there only for the duration of the canonical build-platform.ps1 call.
+Those engine user settings are generated from -PlatformsManifestPath (default: <HelengineRoot>\user_settings\platforms.json),
+whose relative paths are made absolute against that file's folder. A helengine worktree has no user_settings\platforms.json
+(it is git-ignored), so building against one passes the main checkout's file explicitly; see regression\README.md.
 #>
 param(
     [Parameter()]
@@ -82,7 +85,10 @@ param(
     [string]$WorkRoot = 'C:\dev\helworks\builds\helengine-windows\regression',
 
     [Parameter()]
-    [string]$ProjectCommit = ''
+    [string]$ProjectCommit = '',
+
+    [Parameter()]
+    [string]$PlatformsManifestPath = (Join-Path $HelengineRoot 'user_settings\platforms.json')
 )
 
 $ErrorActionPreference = 'Stop'
@@ -1242,6 +1248,7 @@ $RepoRoot = (Resolve-Path "$PSScriptRoot\..").Path
 $HelengineRoot = [System.IO.Path]::GetFullPath($HelengineRoot)
 $ProjectSource = [System.IO.Path]::GetFullPath($ProjectSource)
 $WorkRoot = [System.IO.Path]::GetFullPath($WorkRoot)
+$PlatformsManifestPath = [System.IO.Path]::GetFullPath($PlatformsManifestPath)
 Assert-WorkRootIsolated -WorkRootPath $WorkRoot -ProtectedRootPaths @($ProjectSource, $HelengineRoot, $RepoRoot)
 $utf8WithoutBom = New-Object System.Text.UTF8Encoding($false)
 
@@ -1276,6 +1283,9 @@ if (-not (Test-Path -LiteralPath (Join-Path $ProjectSource 'user_settings\build_
 }
 if (-not (Test-Path -LiteralPath $tarExecutablePath -PathType Leaf)) {
     throw "Windows tar was not found: $tarExecutablePath"
+}
+if (-not (Test-Path -LiteralPath $PlatformsManifestPath -PathType Leaf)) {
+    throw "The platform manifest was not found: $PlatformsManifestPath"
 }
 
 # 1. Pick the project commit to build, extract it into the work root, then add the git-ignored user_settings folder.
@@ -1350,9 +1360,11 @@ if ($LASTEXITCODE -ge 8) {
 }
 $global:LASTEXITCODE = 0
 
-# 2. Write isolated engine user settings whose windows entry points at this checkout.
-$sourceUserSettingsRootPath = Join-Path $HelengineRoot 'user_settings'
-$platformsSource = [System.IO.File]::ReadAllText((Join-Path $sourceUserSettingsRootPath 'platforms.json'))
+# 2. Write isolated engine user settings whose windows entry points at this checkout. They are generated from
+#    -PlatformsManifestPath (default: the helengine root's user_settings\platforms.json); its relative paths are made
+#    absolute against the folder of that manifest file.
+$platformsManifestRootPath = [System.IO.Path]::GetDirectoryName($PlatformsManifestPath)
+$platformsSource = [System.IO.File]::ReadAllText($PlatformsManifestPath)
 $platformsDocument = $platformsSource | ConvertFrom-Json
 $windowsPlatform = $null
 foreach ($platform in $platformsDocument.platforms) {
@@ -1361,7 +1373,7 @@ foreach ($platform in $platformsDocument.platforms) {
     }
 }
 if ($null -eq $windowsPlatform) {
-    throw "No 'windows' platform entry was found in $sourceUserSettingsRootPath\platforms.json."
+    throw "No 'windows' platform entry was found in $PlatformsManifestPath."
 }
 
 $pathPropertyNames = @('builderAssemblyPath', 'playerSourceRootPath', 'generatedCoreCppRootPath', 'codegenToolPath', 'pluginManifestPath')
@@ -1369,7 +1381,27 @@ foreach ($platform in $platformsDocument.platforms) {
     foreach ($pathPropertyName in $pathPropertyNames) {
         $pathProperty = $platform.PSObject.Properties[$pathPropertyName]
         if ($null -ne $pathProperty -and -not [string]::IsNullOrWhiteSpace($pathProperty.Value) -and -not [System.IO.Path]::IsPathRooted($pathProperty.Value)) {
-            $pathProperty.Value = [System.IO.Path]::GetFullPath((Join-Path $sourceUserSettingsRootPath $pathProperty.Value))
+            $pathProperty.Value = [System.IO.Path]::GetFullPath((Join-Path $platformsManifestRootPath $pathProperty.Value))
+        }
+    }
+}
+
+# A build against another helengine root (for example a worktree) reads the main checkout's manifest, whose generated
+# output paths point into that checkout. Move every output path under the manifest's helengine root to the same relative
+# path under -HelengineRoot, so the build writes nothing into the checkout the manifest came from. The engine treats a
+# missing generated-core folder as "not installed", so the moved folder is created. A default run (the manifest belongs
+# to -HelengineRoot) changes nothing.
+$outputPathPropertyNames = @('generatedCoreCppRootPath')
+$platformsManifestHelengineRootPath = [System.IO.Path]::GetDirectoryName($platformsManifestRootPath).TrimEnd('\')
+if (-not [string]::Equals($platformsManifestHelengineRootPath, $HelengineRoot.TrimEnd('\'), [System.StringComparison]::OrdinalIgnoreCase)) {
+    foreach ($platform in $platformsDocument.platforms) {
+        foreach ($outputPathPropertyName in $outputPathPropertyNames) {
+            $outputPathProperty = $platform.PSObject.Properties[$outputPathPropertyName]
+            if ($null -ne $outputPathProperty -and -not [string]::IsNullOrWhiteSpace($outputPathProperty.Value) -and $outputPathProperty.Value.StartsWith($platformsManifestHelengineRootPath + '\', [System.StringComparison]::OrdinalIgnoreCase) -and -not $outputPathProperty.Value.StartsWith($HelengineRoot.TrimEnd('\') + '\', [System.StringComparison]::OrdinalIgnoreCase)) {
+                $outputPathRelativePath = $outputPathProperty.Value.Substring($platformsManifestHelengineRootPath.Length + 1)
+                $outputPathProperty.Value = [System.IO.Path]::GetFullPath((Join-Path $HelengineRoot $outputPathRelativePath))
+                New-Item -ItemType Directory -Path $outputPathProperty.Value -Force | Out-Null
+            }
         }
     }
 }
@@ -1379,6 +1411,7 @@ $windowsPlatform.playerSourceRootPath = $RepoRoot
 $engineUserSettingsRootPath = Join-Path $WorkRoot 'engine-user-settings'
 New-Item -ItemType Directory -Path $engineUserSettingsRootPath -Force | Out-Null
 [System.IO.File]::WriteAllText((Join-Path $engineUserSettingsRootPath 'platforms.json'), ($platformsDocument | ConvertTo-Json -Depth 20), $utf8WithoutBom)
+Write-Output ("GENERATED_CORE_ROOT=" + $windowsPlatform.generatedCoreCppRootPath)
 
 # 3. Align the copied project's engine version with the windows platform entry.
 $projectFilePath = Join-Path $projectRootPath 'project.heproj'

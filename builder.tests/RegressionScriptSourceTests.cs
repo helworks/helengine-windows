@@ -89,6 +89,70 @@ public sealed class RegressionScriptSourceTests {
     }
 
     /// <summary>
+    /// Ensures the platform manifest the isolated engine user settings are generated from can be chosen with
+    /// -PlatformsManifestPath (default: the helengine root's user_settings\platforms.json, so a helengine worktree without
+    /// the git-ignored file can use the main checkout's), that a missing file stops the run, and that the manifest's
+    /// relative paths are made absolute against the folder of the manifest file actually read.
+    /// </summary>
+    [Fact]
+    public void RegressionScript_ReadsThePlatformManifestFromPlatformsManifestPath() {
+        string scriptSource = ReadRegressionScriptSource();
+
+        Assert.Contains("[string]$PlatformsManifestPath = (Join-Path $HelengineRoot 'user_settings\\platforms.json')", scriptSource, StringComparison.Ordinal);
+        Assert.Contains("$PlatformsManifestPath = [System.IO.Path]::GetFullPath($PlatformsManifestPath)", scriptSource, StringComparison.Ordinal);
+        Assert.Contains("The platform manifest was not found: $PlatformsManifestPath", scriptSource, StringComparison.Ordinal);
+        Assert.Contains("$platformsSource = [System.IO.File]::ReadAllText($PlatformsManifestPath)", scriptSource, StringComparison.Ordinal);
+        Assert.Contains("$platformsManifestRootPath = [System.IO.Path]::GetDirectoryName($PlatformsManifestPath)", scriptSource, StringComparison.Ordinal);
+        Assert.Contains("[System.IO.Path]::GetFullPath((Join-Path $platformsManifestRootPath $pathProperty.Value))", scriptSource, StringComparison.Ordinal);
+        Assert.DoesNotContain("$sourceUserSettingsRootPath", scriptSource, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// Ensures a build against another helengine root (for example a worktree) never writes generated output into the
+    /// checkout the platform manifest came from: generated-core output paths under the manifest's helengine root are
+    /// moved to the same relative path under -HelengineRoot (and created there, because the engine treats a missing
+    /// generated-core folder as "not installed"), after the relative paths were made absolute and before the isolated
+    /// platforms.json is written.
+    /// </summary>
+    [Fact]
+    public void RegressionScript_MovesGeneratedOutputIntoTheBuiltHelengineRoot() {
+        string scriptSource = ReadRegressionScriptSource();
+
+        Assert.Contains("$outputPathPropertyNames = @('generatedCoreCppRootPath')", scriptSource, StringComparison.Ordinal);
+        Assert.Contains("$platformsManifestHelengineRootPath = [System.IO.Path]::GetDirectoryName($platformsManifestRootPath).TrimEnd('\\')", scriptSource, StringComparison.Ordinal);
+        Assert.Contains("$outputPathRelativePath = $outputPathProperty.Value.Substring($platformsManifestHelengineRootPath.Length + 1)", scriptSource, StringComparison.Ordinal);
+        Assert.Contains("$outputPathProperty.Value = [System.IO.Path]::GetFullPath((Join-Path $HelengineRoot $outputPathRelativePath))", scriptSource, StringComparison.Ordinal);
+        Assert.Contains("New-Item -ItemType Directory -Path $outputPathProperty.Value -Force | Out-Null", scriptSource, StringComparison.Ordinal);
+        Assert.Contains("GENERATED_CORE_ROOT=", scriptSource, StringComparison.Ordinal);
+        // Windows PowerShell 5.1 runs the script on .NET Framework, which has no Path.GetRelativePath.
+        Assert.DoesNotContain("GetRelativePath", scriptSource, StringComparison.Ordinal);
+
+        int absolutizeIndex = scriptSource.IndexOf("[System.IO.Path]::GetFullPath((Join-Path $platformsManifestRootPath $pathProperty.Value))", StringComparison.Ordinal);
+        int moveIndex = scriptSource.IndexOf("$outputPathProperty.Value = [System.IO.Path]::GetFullPath((Join-Path $HelengineRoot $outputPathRelativePath))", StringComparison.Ordinal);
+        int writeIndex = scriptSource.IndexOf("[System.IO.File]::WriteAllText((Join-Path $engineUserSettingsRootPath 'platforms.json')", StringComparison.Ordinal);
+        Assert.True(absolutizeIndex >= 0 && moveIndex > absolutizeIndex, "Output paths must be moved after the relative paths were made absolute.");
+        Assert.True(writeIndex > moveIndex, "Output paths must be moved before the isolated platforms.json is written.");
+    }
+
+    /// <summary>
+    /// Ensures a default run (the platform manifest belongs to -HelengineRoot itself) writes exactly the platforms.json it
+    /// wrote before: output paths are only moved when the manifest's helengine root differs from -HelengineRoot, and only
+    /// when they lie under the manifest's helengine root but not already under -HelengineRoot.
+    /// </summary>
+    [Fact]
+    public void RegressionScript_LeavesDefaultRunOutputPathsUnchanged() {
+        string scriptSource = ReadRegressionScriptSource();
+
+        int guardIndex = scriptSource.IndexOf("if (-not [string]::Equals($platformsManifestHelengineRootPath, $HelengineRoot.TrimEnd('\\'), [System.StringComparison]::OrdinalIgnoreCase)) {", StringComparison.Ordinal);
+        int moveIndex = scriptSource.IndexOf("$outputPathProperty.Value = [System.IO.Path]::GetFullPath((Join-Path $HelengineRoot $outputPathRelativePath))", StringComparison.Ordinal);
+        Assert.True(guardIndex >= 0 && moveIndex > guardIndex, "Output paths may only be moved when the manifest belongs to another helengine root.");
+
+        string moveSource = scriptSource.Substring(guardIndex, moveIndex - guardIndex);
+        Assert.Contains("$outputPathProperty.Value.StartsWith($platformsManifestHelengineRootPath + '\\', [System.StringComparison]::OrdinalIgnoreCase)", moveSource, StringComparison.Ordinal);
+        Assert.Contains("-not $outputPathProperty.Value.StartsWith($HelengineRoot.TrimEnd('\\') + '\\', [System.StringComparison]::OrdinalIgnoreCase)", moveSource, StringComparison.Ordinal);
+    }
+
+    /// <summary>
     /// Ensures the regression README documents that Verify is pinned to the recorded project commit and how to move the
     /// pin forward deliberately.
     /// </summary>
