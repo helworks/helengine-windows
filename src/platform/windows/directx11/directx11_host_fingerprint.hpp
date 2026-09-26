@@ -28,8 +28,11 @@ namespace helengine::windows {
         /// Builds the HOST_FINGERPRINT line from the current swap-chain description, window styles, client rectangle
         /// and Present count, plus the recorded failures, the given frame count, whether the idle throttle is enabled
         /// (written as idleThrottle=on or off), how many of the frames ran in idle and in active mode, the window mode
-        /// (written as windowMode=normal or overlay), and the milliseconds between the first and the last recorded
-        /// Present. Throws std::runtime_error when a DXGI or Win32 query fails.
+        /// (written as windowMode=normal or overlay), the window tag (window=main), the window's DPI from
+        /// GetDpiForWindow, its DPI awareness (unaware, system, permonitor, permonitorv2 or unknown), its window
+        /// rectangle as left,top,right,bottom in overlay mode or `default` in normal mode (where CW_USEDEFAULT makes the
+        /// position nondeterministic), and the milliseconds between the first and the last recorded Present. Throws
+        /// std::runtime_error when a DXGI or Win32 query fails.
         std::string Describe(int frameCount, bool idleThrottleEnabled, int idleFrames, int activeFrames, Win32WindowMode windowMode) const;
 
         /// Formats a failing Present HRESULT as a readable startup-log line with the value in hexadecimal.

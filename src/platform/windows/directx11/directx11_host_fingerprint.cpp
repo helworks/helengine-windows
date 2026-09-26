@@ -50,8 +50,11 @@ namespace helengine::windows {
     /// Builds the HOST_FINGERPRINT line from the current swap-chain description, window styles, client rectangle
     /// and Present count, plus the recorded failures, the given frame count, whether the idle throttle is enabled
     /// (written as idleThrottle=on or off), how many of the frames ran in idle and in active mode, the window mode
-    /// (written as windowMode=normal or overlay), and the milliseconds between the first and the last recorded
-    /// Present. Throws std::runtime_error when a DXGI or Win32 query fails.
+    /// (written as windowMode=normal or overlay), the window tag (window=main), the window's DPI from GetDpiForWindow,
+    /// its DPI awareness (unaware, system, permonitor, permonitorv2 or unknown), its window rectangle as
+    /// left,top,right,bottom in overlay mode or `default` in normal mode (where CW_USEDEFAULT makes the position
+    /// nondeterministic), and the milliseconds between the first and the last recorded Present. Throws
+    /// std::runtime_error when a DXGI or Win32 query fails.
     std::string DirectX11HostFingerprint::Describe(int frameCount, bool idleThrottleEnabled, int idleFrames, int activeFrames, Win32WindowMode windowMode) const {
         IDXGISwapChain1* swapChain = Bootstrap.GetSwapChain();
         DXGI_SWAP_CHAIN_DESC1 swapChainDesc = {};
@@ -68,6 +71,47 @@ namespace helengine::windows {
             std::ostringstream messageBuilder;
             messageBuilder << "Host fingerprint: GetClientRect failed with Win32 error " << GetLastError() << ".";
             throw std::runtime_error(messageBuilder.str());
+        }
+
+        UINT windowDpi = GetDpiForWindow(WindowHandle);
+        if (windowDpi == 0) {
+            throw std::runtime_error("Host fingerprint: GetDpiForWindow returned 0 for the main window.");
+        }
+
+        DPI_AWARENESS_CONTEXT awarenessContext = GetWindowDpiAwarenessContext(WindowHandle);
+        if (awarenessContext == nullptr) {
+            throw std::runtime_error("Host fingerprint: GetWindowDpiAwarenessContext returned no context for the main window.");
+        }
+
+        // Per-monitor v2 reports the same DPI_AWARENESS as per-monitor v1, so it is told apart by comparing contexts
+        // before the plain awareness level is read.
+        const char* dpiAwarenessText = nullptr;
+        if (AreDpiAwarenessContextsEqual(awarenessContext, DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2)) {
+            dpiAwarenessText = "permonitorv2";
+        } else {
+            DPI_AWARENESS awareness = GetAwarenessFromDpiAwarenessContext(awarenessContext);
+            if (awareness == DPI_AWARENESS_UNAWARE) {
+                dpiAwarenessText = "unaware";
+            } else if (awareness == DPI_AWARENESS_SYSTEM_AWARE) {
+                dpiAwarenessText = "system";
+            } else if (awareness == DPI_AWARENESS_PER_MONITOR_AWARE) {
+                dpiAwarenessText = "permonitor";
+            } else {
+                dpiAwarenessText = "unknown";
+            }
+        }
+
+        std::ostringstream windowRectBuilder;
+        if (windowMode == Win32WindowMode::Overlay) {
+            RECT windowRect = {};
+            if (!GetWindowRect(WindowHandle, &windowRect)) {
+                std::ostringstream messageBuilder;
+                messageBuilder << "Host fingerprint: GetWindowRect failed with Win32 error " << GetLastError() << ".";
+                throw std::runtime_error(messageBuilder.str());
+            }
+            windowRectBuilder << windowRect.left << "," << windowRect.top << "," << windowRect.right << "," << windowRect.bottom;
+        } else {
+            windowRectBuilder << "default";
         }
 
         long long elapsedMilliseconds = 0;
@@ -91,6 +135,10 @@ namespace helengine::windows {
                     << " idleFrames=" << idleFrames
                     << " activeFrames=" << activeFrames
                     << " windowMode=" << Win32WindowModeNames::ToText(windowMode)
+                    << " window=main"
+                    << " dpi=" << windowDpi
+                    << " dpiAwareness=" << dpiAwarenessText
+                    << " windowRect=" << windowRectBuilder.str()
                     << " elapsedMs=" << elapsedMilliseconds;
         return lineBuilder.str();
     }

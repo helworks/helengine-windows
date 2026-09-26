@@ -2,6 +2,7 @@
 
 #include <Windows.h>
 
+#include <cstdint>
 #include <string>
 
 #include "platform/windows/directx11/directx11_hit_test_sampler.hpp"
@@ -14,9 +15,9 @@ namespace helengine::windows {
     /// Decides the overlay window's per-pixel click-through. Each frame it samples the drawn alpha under the cursor
     /// (or under the fixed --hit-test-probe point) through its DirectX11HitTestSampler, and turns the newest completed
     /// sample into a click-through state with the alpha < 8 threshold, applied through its Win32ClickThroughController.
-    /// Probe runs only remember the sampled alpha for the HIT_TEST line and never toggle the window style. It also
-    /// watches the cursor for the idle-throttled loop, because a click-through window receives no mouse messages. Only
-    /// constructed in overlay mode, so normal mode never runs any of this.
+    /// Probe runs apply the same real toggle and also remember the sampled alpha and the resulting extended window style
+    /// for the HIT_TEST line. It also watches the cursor for the idle-throttled loop, because a click-through window
+    /// receives no mouse messages. Only constructed in overlay mode, so normal mode never runs any of this.
     class Win32OverlayHitTestController {
     public:
         /// Creates the sampler on the bootstrap's device and the click-through controller for the overlay window.
@@ -32,10 +33,10 @@ namespace helengine::windows {
         /// Runs one frame's hit test; must be called after the frame is drawn and before it is presented. Captures the
         /// pixel under the cursor, mapped to client coordinates, or the probe point in --hit-test-probe runs; when
         /// GetCursorPos fails (another desktop such as the lock screen is active) nothing is captured, the same as a
-        /// cursor outside the window. Then reads the newest completed sample and, outside probe runs, applies
-        /// click-through on for an alpha below ClickThroughAlphaThreshold and off otherwise; probe runs only remember
-        /// the alpha. Throws std::runtime_error when ScreenToClient, the capture, the readback or the style toggle
-        /// fails.
+        /// cursor outside the window. Then reads the newest completed sample and applies click-through on for an alpha
+        /// below ClickThroughAlphaThreshold and off otherwise. Probe runs go through the same real toggle and then
+        /// remember the alpha and the window's resulting GWL_EXSTYLE for the HIT_TEST line. Throws std::runtime_error
+        /// when ScreenToClient, the capture, the readback, the style toggle or the extended-style read fails.
         void SampleFrame();
 
         /// Samples the cursor for the idle-throttled loop: while click-through is on the window receives no mouse
@@ -52,9 +53,9 @@ namespace helengine::windows {
         bool HasProbeAlpha() const;
 
         /// Returns the HIT_TEST line of a --hit-test-probe run:
-        /// `HIT_TEST x=<x> y=<y> alpha=<a> clickThrough=<on|off>`, where clickThrough is the state the threshold would
-        /// select (probe runs never toggle the window style), or `HIT_TEST x=<x> y=<y> alpha=pending` when no readback
-        /// completed.
+        /// `HIT_TEST x=<x> y=<y> alpha=<a> clickThrough=<on|off> exStyle=0x<hex>`, where clickThrough is the state the
+        /// click-through controller actually applied and exStyle is the window's GWL_EXSTYLE read after that toggle, as
+        /// eight upper-case hexadecimal digits; or `HIT_TEST x=<x> y=<y> alpha=pending` when no readback completed.
         std::string DescribeProbeResult() const;
 
     private:
@@ -72,12 +73,17 @@ namespace helengine::windows {
         /// Stores the sampler that reads the back-buffer alpha under the sample point without stalling.
         DirectX11HitTestSampler HitTestSampler;
 
-        /// Stores the controller that toggles WS_EX_TRANSPARENT from the sampled alpha; never used in probe runs.
+        /// Stores the controller that toggles WS_EX_TRANSPARENT from the sampled alpha, for the cursor and for the
+        /// --hit-test-probe point alike.
         Win32ClickThroughController ClickThroughController;
 
         /// Stores the newest alpha read back at the --hit-test-probe point; only meaningful once ProbeAlphaAvailable is
         /// true, and never written outside probe runs.
         int ProbeAlpha;
+
+        /// Stores the overlay window's GWL_EXSTYLE read right after the newest probe toggle, so the HIT_TEST line shows
+        /// whether WS_EX_TRANSPARENT really changed; only meaningful once ProbeAlphaAvailable is true.
+        std::uint32_t ProbeExStyle;
 
         /// Tracks whether at least one --hit-test-probe readback completed; stays false outside probe runs.
         bool ProbeAlphaAvailable;

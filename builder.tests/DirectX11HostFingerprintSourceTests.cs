@@ -62,6 +62,10 @@ public sealed class DirectX11HostFingerprintSourceTests {
             "\" idleFrames=\"",
             "\" activeFrames=\"",
             "\" windowMode=\"",
+            "\" window=main\"",
+            "\" dpi=\"",
+            "\" dpiAwareness=\"",
+            "\" windowRect=\"",
             "\" elapsedMs=\""
         };
         int previousIndex = -1;
@@ -70,6 +74,46 @@ public sealed class DirectX11HostFingerprintSourceTests {
             Assert.True(fieldIndex > previousIndex, $"Field {field} is missing or out of order.");
             previousIndex = fieldIndex;
         }
+    }
+
+    /// <summary>
+    /// Verifies the fingerprint reports the main window's DPI from <c>GetDpiForWindow</c>, its DPI awareness from the
+    /// window's awareness context (with per-monitor v2 detected by comparing contexts), and its window rectangle from
+    /// <c>GetWindowRect</c> in overlay mode only, printing <c>windowRect=default</c> for normal windows whose position is
+    /// chosen by <c>CW_USEDEFAULT</c>. Every Win32 failure throws instead of printing a guessed value.
+    /// </summary>
+    [Fact]
+    public void DirectX11HostFingerprint_describes_dpi_awareness_and_window_rect() {
+        string fingerprintSource = ReadRepositoryFile("src", "platform", "windows", "directx11", "directx11_host_fingerprint.cpp");
+        string describeBody = ExtractMethodBody(fingerprintSource, "std::string DirectX11HostFingerprint::Describe(");
+
+        Assert.Contains("UINT windowDpi = GetDpiForWindow(WindowHandle);", describeBody, StringComparison.Ordinal);
+        Assert.Matches(new Regex(@"if \(windowDpi == 0\) \{\s*throw std::runtime_error\("), describeBody);
+        Assert.Contains("<< \" dpi=\" << windowDpi", describeBody, StringComparison.Ordinal);
+
+        Assert.Contains("DPI_AWARENESS_CONTEXT awarenessContext = GetWindowDpiAwarenessContext(WindowHandle);", describeBody, StringComparison.Ordinal);
+        Assert.Matches(new Regex(@"if \(awarenessContext == nullptr\) \{\s*throw std::runtime_error\("), describeBody);
+        Assert.Contains("AreDpiAwarenessContextsEqual(awarenessContext, DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2)", describeBody, StringComparison.Ordinal);
+        Assert.Contains("GetAwarenessFromDpiAwarenessContext(awarenessContext)", describeBody, StringComparison.Ordinal);
+        Assert.Contains("\"permonitorv2\"", describeBody, StringComparison.Ordinal);
+        Assert.Contains("\"permonitor\"", describeBody, StringComparison.Ordinal);
+        Assert.Contains("\"system\"", describeBody, StringComparison.Ordinal);
+        Assert.Contains("\"unaware\"", describeBody, StringComparison.Ordinal);
+        Assert.Contains("\"unknown\"", describeBody, StringComparison.Ordinal);
+        int v2Index = describeBody.IndexOf("AreDpiAwarenessContextsEqual(", StringComparison.Ordinal);
+        int awarenessIndex = describeBody.IndexOf("GetAwarenessFromDpiAwarenessContext(", StringComparison.Ordinal);
+        Assert.True(awarenessIndex > v2Index, "Per-monitor v2 must be detected before the plain awareness level is read.");
+        Assert.Contains("<< \" dpiAwareness=\" << dpiAwarenessText", describeBody, StringComparison.Ordinal);
+
+        Assert.Matches(
+            new Regex(
+                @"if \(windowMode == Win32WindowMode::Overlay\) \{\s*RECT windowRect = \{\};\s*if \(!GetWindowRect\(WindowHandle, &windowRect\)\) \{\s*"
+                + @"[^}]*throw std::runtime_error\([^}]*\}\s*"
+                + @"windowRectBuilder << windowRect\.left << "","" << windowRect\.top << "","" << windowRect\.right << "","" << windowRect\.bottom;\s*"
+                + @"\} else \{\s*windowRectBuilder << ""default"";\s*\}"),
+            describeBody);
+        Assert.Contains("<< \" window=main\"", describeBody, StringComparison.Ordinal);
+        Assert.Contains("<< \" windowRect=\" << windowRectBuilder.str()", describeBody, StringComparison.Ordinal);
     }
 
     /// <summary>
@@ -111,6 +155,22 @@ public sealed class DirectX11HostFingerprintSourceTests {
         string cmakeSource = ReadRepositoryFile("CMakeLists.txt");
 
         Assert.Contains("src/platform/windows/directx11/directx11_host_fingerprint.cpp", cmakeSource, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// Returns the text of one C++ method definition from its qualified name up to the closing brace that ends a
+    /// namespace-level member definition.
+    /// </summary>
+    /// <param name="source">Full C++ source text; CRLF line endings are normalized to LF first.</param>
+    /// <param name="qualifiedNamePrefix">Qualified method name including the opening parenthesis.</param>
+    /// <returns>The method definition text.</returns>
+    static string ExtractMethodBody(string source, string qualifiedNamePrefix) {
+        string normalizedSource = source.Replace("\r\n", "\n", StringComparison.Ordinal);
+        int startIndex = normalizedSource.IndexOf(qualifiedNamePrefix, StringComparison.Ordinal);
+        Assert.True(startIndex >= 0, $"Method definition '{qualifiedNamePrefix}' was not found.");
+        int endIndex = normalizedSource.IndexOf("\n    }\n", startIndex, StringComparison.Ordinal);
+        Assert.True(endIndex >= 0, $"End of method definition '{qualifiedNamePrefix}' was not found.");
+        return normalizedSource.Substring(startIndex, endIndex - startIndex);
     }
 
     /// <summary>

@@ -1,5 +1,6 @@
 #include "platform/windows/win32/win32_overlay_hit_test_controller.hpp"
 
+#include <iomanip>
 #include <sstream>
 #include <stdexcept>
 
@@ -12,6 +13,7 @@ namespace helengine::windows {
           HitTestSampler(bootstrap),
           ClickThroughController(windowHandle),
           ProbeAlpha(0),
+          ProbeExStyle(0),
           ProbeAlphaAvailable(false),
           LastCursorPosition() {
     }
@@ -19,9 +21,10 @@ namespace helengine::windows {
     /// Runs one frame's hit test; must be called after the frame is drawn and before it is presented. Captures the
     /// pixel under the cursor, mapped to client coordinates, or the probe point in --hit-test-probe runs; when
     /// GetCursorPos fails (another desktop such as the lock screen is active) nothing is captured, the same as a cursor
-    /// outside the window. Then reads the newest completed sample and, outside probe runs, applies click-through on for
-    /// an alpha below ClickThroughAlphaThreshold and off otherwise; probe runs only remember the alpha. Throws
-    /// std::runtime_error when ScreenToClient, the capture, the readback or the style toggle fails.
+    /// outside the window. Then reads the newest completed sample and applies click-through on for an alpha below
+    /// ClickThroughAlphaThreshold and off otherwise. Probe runs go through the same real toggle and then remember the
+    /// alpha and the window's resulting GWL_EXSTYLE for the HIT_TEST line. Throws std::runtime_error when
+    /// ScreenToClient, the capture, the readback, the style toggle or the extended-style read fails.
     void Win32OverlayHitTestController::SampleFrame() {
         POINT samplePoint {};
         bool hasSamplePoint = false;
@@ -42,7 +45,16 @@ namespace helengine::windows {
         int sampledAlpha = 0;
         if (HitTestSampler.TryReadLatestAlpha(sampledAlpha)) {
             if (CommandLineOptions.HasHitTestProbe()) {
+                ClickThroughController.Apply(sampledAlpha < ClickThroughAlphaThreshold);
+                // GetWindowLongPtrW reports a failure as 0 with a non-zero last error, so the last error is cleared
+                // first to tell a failure from a style value of 0.
+                SetLastError(0);
+                LONG_PTR probeExStyle = GetWindowLongPtrW(WindowHandle, GWL_EXSTYLE);
+                if (probeExStyle == 0 && GetLastError() != 0) {
+                    throw std::runtime_error("GetWindowLongPtrW(GWL_EXSTYLE) failed for the overlay hit-test probe with Win32 error " + std::to_string(GetLastError()) + ".");
+                }
                 ProbeAlpha = sampledAlpha;
+                ProbeExStyle = static_cast<std::uint32_t>(probeExStyle);
                 ProbeAlphaAvailable = true;
             } else {
                 ClickThroughController.Apply(sampledAlpha < ClickThroughAlphaThreshold);
@@ -81,9 +93,10 @@ namespace helengine::windows {
         return ProbeAlphaAvailable;
     }
 
-    /// Returns the HIT_TEST line of a --hit-test-probe run: `HIT_TEST x=<x> y=<y> alpha=<a> clickThrough=<on|off>`,
-    /// where clickThrough is the state the threshold would select (probe runs never toggle the window style), or
-    /// `HIT_TEST x=<x> y=<y> alpha=pending` when no readback completed.
+    /// Returns the HIT_TEST line of a --hit-test-probe run:
+    /// `HIT_TEST x=<x> y=<y> alpha=<a> clickThrough=<on|off> exStyle=0x<hex>`, where clickThrough is the state the
+    /// click-through controller actually applied and exStyle is the window's GWL_EXSTYLE read after that toggle, as
+    /// eight upper-case hexadecimal digits; or `HIT_TEST x=<x> y=<y> alpha=pending` when no readback completed.
     std::string Win32OverlayHitTestController::DescribeProbeResult() const {
         std::ostringstream hitTestBuilder;
         hitTestBuilder << "HIT_TEST x=" << CommandLineOptions.GetHitTestProbeX() << " y=" << CommandLineOptions.GetHitTestProbeY();
@@ -92,7 +105,8 @@ namespace helengine::windows {
             return hitTestBuilder.str();
         }
 
-        hitTestBuilder << " alpha=" << ProbeAlpha << " clickThrough=" << (ProbeAlpha < ClickThroughAlphaThreshold ? "on" : "off");
+        hitTestBuilder << " alpha=" << ProbeAlpha << " clickThrough=" << (ClickThroughController.IsClickThrough() ? "on" : "off")
+                       << " exStyle=0x" << std::hex << std::uppercase << std::setw(8) << std::setfill('0') << ProbeExStyle;
         return hitTestBuilder.str();
     }
 }

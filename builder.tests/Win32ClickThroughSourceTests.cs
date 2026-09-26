@@ -161,8 +161,10 @@ public sealed class Win32ClickThroughSourceTests {
 
     /// <summary>
     /// Verifies RenderFrame hands the hit test to the controller between Draw and Present, and that the controller
-    /// samples the probe point instead of the cursor when probing, captures before it reads back, applies the alpha
-    /// &lt; 8 threshold only when not probing, and never toggles styles in probe mode.
+    /// samples the probe point instead of the cursor when probing, captures before it reads back, and applies the alpha
+    /// &lt; 8 threshold through the real click-through toggle in both paths: after the readback in probe mode, where it
+    /// then reads <c>GWL_EXSTYLE</c> with a cleared last error and throws on failure, and for the cursor otherwise. No
+    /// other code calls <c>Apply</c>.
     /// </summary>
     [Fact]
     public void Win32Application_samples_between_draw_and_present_with_the_threshold() {
@@ -190,17 +192,25 @@ public sealed class Win32ClickThroughSourceTests {
         Assert.Contains("GetCursorPos(&samplePoint)", sampleBody, StringComparison.Ordinal);
         Assert.Contains("ScreenToClient(WindowHandle, &samplePoint)", sampleBody, StringComparison.Ordinal);
 
-        Assert.Single(Regex.Matches(hitTestSource, @"ClickThroughController\.Apply\("));
+        Assert.Equal(2, Regex.Matches(hitTestSource, @"ClickThroughController\.Apply\(").Count);
+        Assert.Equal(2, Regex.Matches(sampleBody, Regex.Escape("ClickThroughController.Apply(sampledAlpha < ClickThroughAlphaThreshold);")).Count);
         Assert.Matches(
             new Regex(
-                @"if \(CommandLineOptions\.HasHitTestProbe\(\)\) \{\s*ProbeAlpha = sampledAlpha;\s*ProbeAlphaAvailable = true;\s*\} else \{\s*"
-                + @"ClickThroughController\.Apply\(sampledAlpha < ClickThroughAlphaThreshold\);\s*\}"),
+                @"if \(HitTestSampler\.TryReadLatestAlpha\(sampledAlpha\)\) \{\s*if \(CommandLineOptions\.HasHitTestProbe\(\)\) \{\s*"
+                + @"ClickThroughController\.Apply\(sampledAlpha < ClickThroughAlphaThreshold\);\s*(?://[^
+]*\s*)*SetLastError\(0\);\s*"
+                + @"LONG_PTR probeExStyle = GetWindowLongPtrW\(WindowHandle, GWL_EXSTYLE\);\s*"
+                + @"if \(probeExStyle == 0 && GetLastError\(\) != 0\) \{\s*throw std::runtime_error\([^;]*;\s*\}\s*"
+                + @"ProbeAlpha = sampledAlpha;\s*ProbeExStyle = static_cast<std::uint32_t>\(probeExStyle\);\s*ProbeAlphaAvailable = true;\s*"
+                + @"\} else \{\s*ClickThroughController\.Apply\(sampledAlpha < ClickThroughAlphaThreshold\);\s*\}\s*\}"),
             sampleBody);
+        Assert.Single(Regex.Matches(sampleBody, @"GetWindowLongPtrW\(WindowHandle,"));
     }
 
     /// <summary>
     /// Verifies the HIT_TEST line is written only for probe runs, after the fingerprint of the last frame, that the
-    /// controller composes it from the remembered probe alpha with the same threshold, and that a probe whose readback
+    /// controller composes it from the remembered probe alpha, the real click-through state and the extended style read
+    /// after the toggle (formatted as eight upper-case hexadecimal digits), and that a probe whose readback
     /// never completed logs <c>alpha=pending</c> and exits with code 3 instead of guessing.
     /// </summary>
     [Fact]
@@ -210,6 +220,7 @@ public sealed class Win32ClickThroughSourceTests {
         string renderFrameBody = ExtractMethodBody(applicationSource, "void Win32Application::RenderFrame(");
         string probeResultBody = ExtractMethodBody(applicationSource, "void Win32Application::WriteHitTestProbeResult(");
         string describeBody = ExtractMethodBody(hitTestSource, "std::string Win32OverlayHitTestController::DescribeProbeResult(");
+        string hitTestHeader = ReadRepositoryFile("src", "platform", "windows", "win32", "win32_overlay_hit_test_controller.hpp");
 
         Assert.Single(Regex.Matches(hitTestSource, Regex.Escape("\"HIT_TEST x=\"")));
         Assert.DoesNotContain("\"HIT_TEST x=\"", applicationSource, StringComparison.Ordinal);
@@ -227,7 +238,12 @@ public sealed class Win32ClickThroughSourceTests {
 
         Assert.Contains("\"HIT_TEST x=\" << CommandLineOptions.GetHitTestProbeX() << \" y=\" << CommandLineOptions.GetHitTestProbeY()", describeBody, StringComparison.Ordinal);
         Assert.Matches(new Regex(@"if \(!ProbeAlphaAvailable\) \{\s*hitTestBuilder << "" alpha=pending"";"), describeBody);
-        Assert.Contains("\" alpha=\" << ProbeAlpha << \" clickThrough=\" << (ProbeAlpha < ClickThroughAlphaThreshold ? \"on\" : \"off\")", describeBody, StringComparison.Ordinal);
+        Assert.Contains("\" alpha=\" << ProbeAlpha << \" clickThrough=\" << (ClickThroughController.IsClickThrough() ? \"on\" : \"off\")", describeBody, StringComparison.Ordinal);
+        Assert.Contains("<< \" exStyle=0x\" << std::hex << std::uppercase << std::setw(8) << std::setfill('0') << ProbeExStyle", describeBody, StringComparison.Ordinal);
+        int clickThroughIndex = describeBody.IndexOf("\" clickThrough=\"", StringComparison.Ordinal);
+        int exStyleIndex = describeBody.IndexOf("\" exStyle=0x\"", StringComparison.Ordinal);
+        Assert.True(exStyleIndex > clickThroughIndex, "exStyle must follow clickThrough in the HIT_TEST line.");
+        Assert.Contains("std::uint32_t ProbeExStyle;", hitTestHeader, StringComparison.Ordinal);
     }
 
     /// <summary>
