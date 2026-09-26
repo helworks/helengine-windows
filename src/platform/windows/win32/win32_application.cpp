@@ -717,7 +717,18 @@ namespace helengine::windows {
         }
         MainWindow->Create();
         MainWindow->Show();
-        {
+        // The overlay is sized by its resolved bounds, not the profile resolution, so it reports its real client size;
+        // the normal-mode line keeps today's text.
+        if (windowModeSettings.GetWindowMode() == Win32WindowMode::Overlay) {
+            std::ostringstream messageBuilder;
+            messageBuilder << "Main window configured to overlay client size "
+                << MainWindow->GetClientWidth()
+                << "x"
+                << MainWindow->GetClientHeight()
+                << '.';
+            std::string message = messageBuilder.str();
+            WriteLifecycleLog(message.c_str());
+        } else {
             std::ostringstream messageBuilder;
             messageBuilder << "Main window configured to default client size "
                 << profile.ResolutionWidth

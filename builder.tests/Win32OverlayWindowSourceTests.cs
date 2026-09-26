@@ -244,6 +244,31 @@ public sealed class Win32OverlayWindowSourceTests {
     }
 
     /// <summary>
+    /// Verifies the client-size log line after the window is shown: in overlay mode it reports the overlay's actual
+    /// client size, while the normal-mode line keeps today's text and still reports the profile resolution, so a
+    /// normal-mode startup log is byte-identical.
+    /// </summary>
+    [Fact]
+    public void Win32Application_logs_the_actual_overlay_client_size_and_keeps_the_normal_line() {
+        string applicationSource = ReadRepositoryFile("src", "platform", "windows", "win32", "win32_application.cpp");
+        string createMainWindowBody = ExtractMethodBody(applicationSource, "void Win32Application::CreateMainWindow(");
+
+        Assert.Matches(
+            new Regex(
+                @"MainWindow->Show\(\);\s*(?://[^
+]*\s*)*if \(windowModeSettings\.GetWindowMode\(\) == Win32WindowMode::Overlay\) \{\s*"
+                + @"std::ostringstream messageBuilder;\s*messageBuilder << ""Main window configured to overlay client size ""\s*"
+                + @"<< MainWindow->GetClientWidth\(\)\s*<< ""x""\s*<< MainWindow->GetClientHeight\(\)\s*<< '\.';\s*"
+                + @"std::string message = messageBuilder\.str\(\);\s*WriteLifecycleLog\(message\.c_str\(\)\);\s*\} else \{\s*"
+                + @"std::ostringstream messageBuilder;\s*messageBuilder << ""Main window configured to default client size ""\s*"
+                + @"<< profile\.ResolutionWidth\s*<< ""x""\s*<< profile\.ResolutionHeight\s*<< '\.';\s*"
+                + @"std::string message = messageBuilder\.str\(\);\s*WriteLifecycleLog\(message\.c_str\(\)\);\s*\}\s*"
+                + @"WriteLifecycleLog\(""Main window loaded and shown\.""\);"),
+            createMainWindowBody);
+        Assert.Single(Regex.Matches(applicationSource, Regex.Escape("\"Main window configured to default client size \"")));
+    }
+
+    /// <summary>
     /// Returns the text of one C++ method definition from its qualified name up to the closing brace that ends a
     /// namespace-level member definition.
     /// </summary>
