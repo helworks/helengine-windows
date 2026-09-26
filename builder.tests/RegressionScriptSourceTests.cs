@@ -137,19 +137,27 @@ public sealed class RegressionScriptSourceTests {
     /// <summary>
     /// Ensures a default run (the platform manifest belongs to -HelengineRoot itself) writes exactly the platforms.json it
     /// wrote before: output paths are only moved when the manifest's helengine root differs from -HelengineRoot, and only
-    /// when they lie under the manifest's helengine root but not already under -HelengineRoot.
+    /// when they lie under the manifest's helengine root but not already under -HelengineRoot. The move statement and its
+    /// StartsWith conditions must sit lexically inside the guard's own brace block, not merely somewhere after its 'if'
+    /// line, otherwise a default run could still execute them.
     /// </summary>
     [Fact]
     public void RegressionScript_LeavesDefaultRunOutputPathsUnchanged() {
         string scriptSource = ReadRegressionScriptSource();
 
-        int guardIndex = scriptSource.IndexOf("if (-not [string]::Equals($platformsManifestHelengineRootPath, $HelengineRoot.TrimEnd('\\'), [System.StringComparison]::OrdinalIgnoreCase)) {", StringComparison.Ordinal);
-        int moveIndex = scriptSource.IndexOf("$outputPathProperty.Value = [System.IO.Path]::GetFullPath((Join-Path $HelengineRoot $outputPathRelativePath))", StringComparison.Ordinal);
-        Assert.True(guardIndex >= 0 && moveIndex > guardIndex, "Output paths may only be moved when the manifest belongs to another helengine root.");
+        string guardAnchor = "if (-not [string]::Equals($platformsManifestHelengineRootPath, $HelengineRoot.TrimEnd('\\'), [System.StringComparison]::OrdinalIgnoreCase)) {";
+        int guardOpenBraceIndex = scriptSource.IndexOf(guardAnchor, StringComparison.Ordinal) + guardAnchor.Length - 1;
+        Assert.True(guardOpenBraceIndex >= 0, "The script must guard the output path move behind the helengine-root comparison.");
+        string guardBlock = ExtractBraceBlock(scriptSource, guardAnchor);
+        int guardCloseBraceIndex = guardOpenBraceIndex + guardBlock.Length - 1;
 
-        string moveSource = scriptSource.Substring(guardIndex, moveIndex - guardIndex);
-        Assert.Contains("$outputPathProperty.Value.StartsWith($platformsManifestHelengineRootPath + '\\', [System.StringComparison]::OrdinalIgnoreCase)", moveSource, StringComparison.Ordinal);
-        Assert.Contains("-not $outputPathProperty.Value.StartsWith($HelengineRoot.TrimEnd('\\') + '\\', [System.StringComparison]::OrdinalIgnoreCase)", moveSource, StringComparison.Ordinal);
+        int moveIndex = scriptSource.IndexOf("$outputPathProperty.Value = [System.IO.Path]::GetFullPath((Join-Path $HelengineRoot $outputPathRelativePath))", StringComparison.Ordinal);
+        int createIndex = scriptSource.IndexOf("New-Item -ItemType Directory -Path $outputPathProperty.Value -Force | Out-Null", StringComparison.Ordinal);
+        Assert.True(moveIndex > guardOpenBraceIndex && moveIndex < guardCloseBraceIndex, "The output path move must sit lexically inside the guard's brace block, not merely after its 'if' line.");
+        Assert.True(createIndex > guardOpenBraceIndex && createIndex < guardCloseBraceIndex, "The created-folder statement must sit lexically inside the guard's brace block.");
+
+        Assert.Contains("$outputPathProperty.Value.StartsWith($platformsManifestHelengineRootPath + '\\', [System.StringComparison]::OrdinalIgnoreCase)", guardBlock, StringComparison.Ordinal);
+        Assert.Contains("-not $outputPathProperty.Value.StartsWith($HelengineRoot.TrimEnd('\\') + '\\', [System.StringComparison]::OrdinalIgnoreCase)", guardBlock, StringComparison.Ordinal);
     }
 
     /// <summary>
@@ -855,6 +863,36 @@ public sealed class RegressionScriptSourceTests {
         }
 
         return scriptSource.Substring(functionIndex, nextFunctionIndex - functionIndex);
+    }
+
+    /// <summary>
+    /// Extracts one balanced brace block, from the '{' at the end of the given anchor text up to its matching '}', so a
+    /// test can prove that later statements are lexically inside (not merely textually after) a specific guard's block.
+    /// </summary>
+    /// <param name="scriptSource">The full text of scripts/run-regression.ps1.</param>
+    /// <param name="anchorText">The guard or block-opening text, ending in its opening '{' (for example an "if (...) {"
+    /// line).</param>
+    /// <returns>The block's source text, including its opening and closing braces.</returns>
+    static string ExtractBraceBlock(string scriptSource, string anchorText) {
+        int anchorIndex = scriptSource.IndexOf(anchorText, StringComparison.Ordinal);
+        Assert.True(anchorIndex >= 0, "The script must contain: " + anchorText);
+
+        int openBraceIndex = anchorIndex + anchorText.Length - 1;
+        Assert.True(openBraceIndex < scriptSource.Length && scriptSource[openBraceIndex] == '{', "The anchor text must end with the block's opening brace.");
+
+        int depth = 0;
+        for (int index = openBraceIndex; index < scriptSource.Length; index++) {
+            if (scriptSource[index] == '{') {
+                depth++;
+            } else if (scriptSource[index] == '}') {
+                depth--;
+                if (depth == 0) {
+                    return scriptSource.Substring(openBraceIndex, index - openBraceIndex + 1);
+                }
+            }
+        }
+
+        throw new InvalidOperationException("No matching closing brace was found for: " + anchorText);
     }
 
     /// <summary>

@@ -197,8 +197,7 @@ public sealed class Win32ClickThroughSourceTests {
         Assert.Matches(
             new Regex(
                 @"if \(HitTestSampler\.TryReadLatestAlpha\(sampledAlpha\)\) \{\s*if \(CommandLineOptions\.HasHitTestProbe\(\)\) \{\s*"
-                + @"ClickThroughController\.Apply\(sampledAlpha < ClickThroughAlphaThreshold\);\s*(?://[^
-]*\s*)*SetLastError\(0\);\s*"
+                + @"ClickThroughController\.Apply\(sampledAlpha < ClickThroughAlphaThreshold\);\s*(?://[^\n]*\s*)*SetLastError\(0\);\s*"
                 + @"LONG_PTR probeExStyle = GetWindowLongPtrW\(WindowHandle, GWL_EXSTYLE\);\s*"
                 + @"if \(probeExStyle == 0 && GetLastError\(\) != 0\) \{\s*throw std::runtime_error\([^;]*;\s*\}\s*"
                 + @"ProbeAlpha = sampledAlpha;\s*ProbeExStyle = static_cast<std::uint32_t>\(probeExStyle\);\s*ProbeAlphaAvailable = true;\s*"

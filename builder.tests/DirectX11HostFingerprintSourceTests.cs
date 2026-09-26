@@ -4,9 +4,9 @@ namespace helengine.windows.builder.tests;
 
 /// <summary>
 /// Verifies the Windows player's opt-in host fingerprint: in <c>--frames</c> mode the player logs one
-/// <c>HOST_FINGERPRINT</c> line describing the swap chain, the window styles, the client size, the Present count and
-/// failures and the wall-clock time of the run, while a no-argument run never creates the fingerprint or inspects the
-/// Present result.
+/// <c>HOST_FINGERPRINT</c> line describing the window, the swap chain, the window styles, the client size, the
+/// Present count and failures, the DPI, the DPI awareness, the window rect and the wall-clock time of the run,
+/// while a no-argument run never creates the fingerprint or inspects the Present result.
 /// </summary>
 public sealed class DirectX11HostFingerprintSourceTests {
     /// <summary>
