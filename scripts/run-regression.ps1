@@ -1392,6 +1392,15 @@ foreach ($platform in $platformsDocument.platforms) {
 # missing generated-core folder as "not installed", so the moved folder is created. A default run (the manifest belongs
 # to -HelengineRoot) changes nothing.
 $outputPathPropertyNames = @('generatedCoreCppRootPath')
+# The manifest's grandparent folder is only a valid helengine root when the manifest sits directly under a
+# 'user_settings' folder, the layout this script itself always uses for its own default -PlatformsManifestPath
+# (<HelengineRoot>\user_settings\platforms.json). Any other layout (for example a manifest copied to an unrelated
+# scratch folder) would silently infer the wrong root here and move or fabricate generated-core output paths under
+# it, so throw instead of guessing.
+$platformsManifestParentFolderName = [System.IO.Path]::GetFileName($platformsManifestRootPath)
+if (-not [string]::Equals($platformsManifestParentFolderName, 'user_settings', [System.StringComparison]::OrdinalIgnoreCase)) {
+    throw "-PlatformsManifestPath '$PlatformsManifestPath' must live directly under a 'user_settings' folder so its helengine root can be inferred as the grandparent; its parent folder is '$platformsManifestRootPath'."
+}
 $platformsManifestHelengineRootPath = [System.IO.Path]::GetDirectoryName($platformsManifestRootPath).TrimEnd('\')
 if (-not [string]::Equals($platformsManifestHelengineRootPath, $HelengineRoot.TrimEnd('\'), [System.StringComparison]::OrdinalIgnoreCase)) {
     foreach ($platform in $platformsDocument.platforms) {

@@ -153,6 +153,29 @@ public sealed class RegressionScriptSourceTests {
     }
 
     /// <summary>
+    /// Ensures the script never silently infers the wrong helengine root from -PlatformsManifestPath: the manifest's
+    /// grandparent folder is only treated as a helengine root when the manifest sits directly under a 'user_settings'
+    /// folder (the layout scripts/run-regression.ps1 itself uses for its own default). Any other layout, for example a
+    /// manifest copied to an unrelated scratch folder, throws a clear error instead of silently re-rooting or
+    /// fabricating generated-core output paths under a fabricated root. A default run's manifest always sits directly
+    /// under its helengine root's 'user_settings' folder, so this check never fires for it.
+    /// </summary>
+    [Fact]
+    public void RegressionScript_ThrowsWhenPlatformsManifestIsNotUnderAUserSettingsFolder() {
+        string scriptSource = ReadRegressionScriptSource();
+
+        Assert.Contains("$platformsManifestParentFolderName = [System.IO.Path]::GetFileName($platformsManifestRootPath)", scriptSource, StringComparison.Ordinal);
+        Assert.Contains("if (-not [string]::Equals($platformsManifestParentFolderName, 'user_settings', [System.StringComparison]::OrdinalIgnoreCase)) {", scriptSource, StringComparison.Ordinal);
+        Assert.Contains("must live directly under a 'user_settings' folder", scriptSource, StringComparison.Ordinal);
+
+        int parentCheckIndex = scriptSource.IndexOf("$platformsManifestParentFolderName = [System.IO.Path]::GetFileName($platformsManifestRootPath)", StringComparison.Ordinal);
+        int throwIndex = scriptSource.IndexOf("must live directly under a 'user_settings' folder", StringComparison.Ordinal);
+        int grandparentIndex = scriptSource.IndexOf("$platformsManifestHelengineRootPath = [System.IO.Path]::GetDirectoryName($platformsManifestRootPath).TrimEnd('\\')", StringComparison.Ordinal);
+        Assert.True(parentCheckIndex >= 0 && throwIndex > parentCheckIndex, "The throw message must follow the parent folder name check.");
+        Assert.True(grandparentIndex > throwIndex, "The grandparent must only be inferred as the helengine root after the parent folder name has been validated.");
+    }
+
+    /// <summary>
     /// Ensures the regression README documents how to build the player against a detached helengine worktree, with the
     /// worktree, submodule and build commands spelled out.
     /// </summary>
