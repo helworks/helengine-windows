@@ -209,25 +209,50 @@ The goldens were first recorded on 2026-09-24 from commit `f8a92cb`, and re-reco
 `d7defda` (feature/regression-safety-net) to add the host fingerprints, the executed-test counts and the provenance
 hashes. They were re-recorded again on 2026-09-25 on the owner's development machine, from commit `b8e1197`
 (feature/idle-throttle), because the fingerprint gained `idleThrottle`, `idleFrames` and `activeFrames` and the
-manifest gained the idle entry. DemoDisc was at `5cc124eec06b8db729b2f9b15d99d26cb1ca8cc3` and helengine at
-`dd9ca693403d91b5e2fc52860a3511e6358ed776` with uncommitted changes (`helengineDirty: true`).
+manifest gained the idle entry. They were re-recorded once more on 2026-09-25 on the same machine, from commit
+`7089c4d` (feature/overlay-window), because the fingerprint gained `windowMode` and the manifest gained the overlay
+entry and the overlay golden `axis_test.overlay.png`. DemoDisc was at `5cc124eec06b8db729b2f9b15d99d26cb1ca8cc3` and
+helengine at `dd9ca693403d91b5e2fc52860a3511e6358ed776` with uncommitted changes (`helengineDirty: true`); the
+provenance hashes are unchanged from the idle-throttle record.
 
 - All 11 rendering scenes were stable across the two record runs (0 differing pixels), so every scene has a golden
-  and no scene is marked `unstable`. The re-recorded golden PNGs are byte-identical to the first record.
+  and no scene is marked `unstable`. The re-recorded golden PNGs are byte-identical to the first record
+  (`git diff --stat -- regression/golden/*.png` was empty after the overlay record; only `axis_test.overlay.png` is
+  new).
 - Every scene's fingerprint: `format=87 alpha=3 swapEffect=4 buffers=2 scaling=0 style=0x14CF0000
   exStyle=0x00000100 client=640x360 presentCount=30 presentFailures=0 frames=30 idleThrottle=off idleFrames=0
-  activeFrames=30`, `elapsedMs` 118 to 128.
-- The idle scenario on `axis_test` passed with `idleFrames=29 elapsedMs=3058`, and its capture matched the golden
+  activeFrames=30 windowMode=normal`, `elapsedMs` 118 to 127. Apart from the new `windowMode=normal`, every field is
+  the same as in the idle-throttle record.
+- The idle scenario on `axis_test` passed with `idleFrames=29 elapsedMs=3053`, and its capture matched the golden
   with 0 differing pixels.
-- Baselines: `helengine.editor.tests` 49 failing of 3134 executed, `helengine.render.validation.tests` 1 failing of
-  1 executed, `helengine.windows.builder.tests` 0 failing of 115 executed. The four known-flaky
-  `SceneHierarchyPanelKeyboardFocusTests` arrow-key tests happened to fail during this record, so they entered the
-  editor baseline (45 -> 49); they are also in the flaky list, and `-Verify` reports them as `FIXED` when they pass.
+- The overlay scenario on `axis_test`: fingerprint `format=87 alpha=1 swapEffect=4 buffers=2 scaling=0
+  style=0x94000000 exStyle=0x00280088 client=640x360 presentCount=30 presentFailures=0 frames=30 idleThrottle=off
+  idleFrames=0 activeFrames=30 windowMode=overlay`, `elapsedMs` 120; `check-premultiplied` reported 65.4% fully
+  transparent and 29.8% fully opaque pixels; `find-probes` chose `transparentProbe` `2,2` and `opaqueProbe` `393,2`,
+  which logged `alpha=0 clickThrough=on` and `alpha=255 clickThrough=off`, and both probe runs matched the overlay
+  golden with 0 differing pixels.
+- Baselines: `helengine.editor.tests` 50 failing of 3134 executed, `helengine.render.validation.tests` 1 failing of
+  1 executed, `helengine.windows.builder.tests` 0 failing of 161 executed. All five known-flaky keyboard-focus tests
+  (the four `SceneHierarchyPanelKeyboardFocusTests` arrow-key tests and
+  `EditorSessionUndoRedoIntegrationTests.Keyboard_focus_update_component_routes_delete_into_the_session_handler`)
+  happened to fail during this record, so they are all in the editor baseline (49 -> 50); they are also in the
+  flaky list, and `-Verify` reports them as `FIXED` when they pass.
 - DemoDisc's `user_settings\generated_code` holds only `obj` files, which the copy leaves out, so
   `generatedCodeHash` is the SHA-256 of an empty list.
-- After the record, `-Verify` passed twice with every golden at 0 differing pixels, every fingerprint matching and
-  the idle scenario passing. With the idle scenario's `--idle-fps 10` changed locally to 30, `-Verify` failed with
-  `FAIL idle axis_test elapsedMs=1279 is below 2400`.
+- After the record, `-Verify` passed three times with every golden at 0 differing pixels, every fingerprint
+  matching and the idle and overlay scenarios passing. With the overlay scenario's `--overlay-background transparent`
+  changed locally to `camera`, `-Verify` failed (`RESULT: FAIL (6 failing)`) with
+  `FAIL overlay axis_test transparent run premultiplied: FAIL transparent 0 below 0.01`, the transparent probe
+  reporting `alpha=255 clickThrough=off`, both captures differing from the overlay golden in 65.4% of their pixels,
+  and the builder source test `RegressionScript_RunsTheOverlayScenarioWithAlphaAwareChecks` failing on the changed
+  script. The earlier record history: the idle-throttle record also passed `-Verify` twice, and with its
+  `--idle-fps 10` changed locally to 30, `-Verify` failed with `FAIL idle axis_test elapsedMs=1279 is below 2400`.
+- Manual overlay proofs (no screenshots, the mouse was never moved): a full-monitor overlay
+  (`--window-mode overlay --overlay-bounds monitor --overlay-background transparent --scene axis_test`, no
+  `--frames`) left `GetForegroundWindow` unchanged, reported exStyle `0x002800A8` (TOPMOST, TOOLWINDOW, LAYERED,
+  NOREDIRECTIONBITMAP plus the click-through `WS_EX_TRANSPARENT`, because the cursor sat over a transparent pixel),
+  and `WindowFromPoint` at the cursor returned the browser window behind the overlay, not the overlay. A
+  no-argument boot was alive after 5 s, loaded `axis_test` and logged no overlay lines.
 
 ## How to run
 

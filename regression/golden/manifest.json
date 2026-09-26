@@ -34,9 +34,10 @@
                                            "frames":  "30",
                                            "idleThrottle":  "off",
                                            "idleFrames":  "0",
-                                           "activeFrames":  "30"
+                                           "activeFrames":  "30",
+                                           "windowMode":  "normal"
                                        },
-                       "elapsedMs":  119
+                       "elapsedMs":  118
                    },
                    {
                        "id":  "axis_test2",
@@ -56,9 +57,10 @@
                                            "frames":  "30",
                                            "idleThrottle":  "off",
                                            "idleFrames":  "0",
-                                           "activeFrames":  "30"
+                                           "activeFrames":  "30",
+                                           "windowMode":  "normal"
                                        },
-                       "elapsedMs":  120
+                       "elapsedMs":  119
                    },
                    {
                        "id":  "colored_cube_grid",
@@ -78,9 +80,10 @@
                                            "frames":  "30",
                                            "idleThrottle":  "off",
                                            "idleFrames":  "0",
-                                           "activeFrames":  "30"
+                                           "activeFrames":  "30",
+                                           "windowMode":  "normal"
                                        },
-                       "elapsedMs":  119
+                       "elapsedMs":  123
                    },
                    {
                        "id":  "cube_test",
@@ -100,9 +103,10 @@
                                            "frames":  "30",
                                            "idleThrottle":  "off",
                                            "idleFrames":  "0",
-                                           "activeFrames":  "30"
+                                           "activeFrames":  "30",
+                                           "windowMode":  "normal"
                                        },
-                       "elapsedMs":  122
+                       "elapsedMs":  120
                    },
                    {
                        "id":  "directional_shadow_plaza",
@@ -122,9 +126,10 @@
                                            "frames":  "30",
                                            "idleThrottle":  "off",
                                            "idleFrames":  "0",
-                                           "activeFrames":  "30"
+                                           "activeFrames":  "30",
+                                           "windowMode":  "normal"
                                        },
-                       "elapsedMs":  119
+                       "elapsedMs":  122
                    },
                    {
                        "id":  "pbr_material_gallery",
@@ -144,9 +149,10 @@
                                            "frames":  "30",
                                            "idleThrottle":  "off",
                                            "idleFrames":  "0",
-                                           "activeFrames":  "30"
+                                           "activeFrames":  "30",
+                                           "windowMode":  "normal"
                                        },
-                       "elapsedMs":  120
+                       "elapsedMs":  118
                    },
                    {
                        "id":  "pbr_shadow_theater",
@@ -166,9 +172,10 @@
                                            "frames":  "30",
                                            "idleThrottle":  "off",
                                            "idleFrames":  "0",
-                                           "activeFrames":  "30"
+                                           "activeFrames":  "30",
+                                           "windowMode":  "normal"
                                        },
-                       "elapsedMs":  124
+                       "elapsedMs":  127
                    },
                    {
                        "id":  "pbr_textured_showcase",
@@ -188,9 +195,10 @@
                                            "frames":  "30",
                                            "idleThrottle":  "off",
                                            "idleFrames":  "0",
-                                           "activeFrames":  "30"
+                                           "activeFrames":  "30",
+                                           "windowMode":  "normal"
                                        },
-                       "elapsedMs":  128
+                       "elapsedMs":  127
                    },
                    {
                        "id":  "software_path_tracer",
@@ -210,9 +218,10 @@
                                            "frames":  "30",
                                            "idleThrottle":  "off",
                                            "idleFrames":  "0",
-                                           "activeFrames":  "30"
+                                           "activeFrames":  "30",
+                                           "windowMode":  "normal"
                                        },
-                       "elapsedMs":  120
+                       "elapsedMs":  119
                    },
                    {
                        "id":  "test_scene_matrix_render",
@@ -232,9 +241,10 @@
                                            "frames":  "30",
                                            "idleThrottle":  "off",
                                            "idleFrames":  "0",
-                                           "activeFrames":  "30"
+                                           "activeFrames":  "30",
+                                           "windowMode":  "normal"
                                        },
-                       "elapsedMs":  118
+                       "elapsedMs":  121
                    },
                    {
                        "id":  "textured_cube_grid",
@@ -254,15 +264,40 @@
                                            "frames":  "30",
                                            "idleThrottle":  "off",
                                            "idleFrames":  "0",
-                                           "activeFrames":  "30"
+                                           "activeFrames":  "30",
+                                           "windowMode":  "normal"
                                        },
-                       "elapsedMs":  119
+                       "elapsedMs":  120
                    },
                    {
                        "id":  "axis_test",
                        "kind":  "idle",
                        "minIdleFrames":  25,
                        "minElapsedMs":  2400
+                   },
+                   {
+                       "id":  "axis_test",
+                       "kind":  "overlay",
+                       "transparentProbe":  "2,2",
+                       "opaqueProbe":  "393,2",
+                       "fingerprint":  {
+                                           "format":  "87",
+                                           "alpha":  "1",
+                                           "swapEffect":  "4",
+                                           "buffers":  "2",
+                                           "scaling":  "0",
+                                           "style":  "0x94000000",
+                                           "exStyle":  "0x00280088",
+                                           "client":  "640x360",
+                                           "presentCount":  "30",
+                                           "presentFailures":  "0",
+                                           "frames":  "30",
+                                           "idleThrottle":  "off",
+                                           "idleFrames":  "0",
+                                           "activeFrames":  "30",
+                                           "windowMode":  "overlay"
+                                       },
+                       "elapsedMs":  120
                    }
                ]
 }
