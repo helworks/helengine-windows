@@ -72,33 +72,37 @@ namespace helengine::windows {
         }
     }
 
-    /// Tries to read the alpha of the oldest unread capture by mapping its slot with D3D11_MAP_FLAG_DO_NOT_WAIT. Returns
-    /// false without waiting when nothing is pending or the GPU has not finished the copy yet
-    /// (DXGI_ERROR_WAS_STILL_DRAWING); the slot then stays pending for the next call. Any other failed Map throws
-    /// std::runtime_error carrying the HRESULT in hexadecimal.
+    /// Drains the ring to the newest completed capture: maps the unread slots from oldest to newest, each with
+    /// D3D11_MAP_FLAG_DO_NOT_WAIT, and stops at the first one the GPU has not finished yet
+    /// (DXGI_ERROR_WAS_STILL_DRAWING), which stays pending for the next call together with every newer slot. Every
+    /// slot read leaves the ring, so a backlog of completed captures cannot add permanent latency. Returns false
+    /// without waiting when nothing completed. Any other failed Map throws std::runtime_error carrying the HRESULT in
+    /// hexadecimal.
     bool DirectX11HitTestSampler::TryReadLatestAlpha(int& alpha) {
-        if (PendingCount == 0) {
-            return false;
-        }
-
-        int oldestSlot = (NextSlot - PendingCount + RingSize) % RingSize;
         ID3D11DeviceContext* deviceContext = Bootstrap.GetDeviceContext();
-        D3D11_MAPPED_SUBRESOURCE mapped = {};
-        HRESULT mapResult = deviceContext->Map(StagingTextures[oldestSlot].Get(), 0, D3D11_MAP_READ, D3D11_MAP_FLAG_DO_NOT_WAIT, &mapped);
-        if (mapResult == DXGI_ERROR_WAS_STILL_DRAWING) {
-            return false;
-        }
-        if (FAILED(mapResult)) {
-            std::ostringstream messageBuilder;
-            messageBuilder << "Hit-test sampler: ID3D11DeviceContext::Map failed with HRESULT "
-                           << DirectX11HResultFormatter::ToHex(mapResult) << ".";
-            throw std::runtime_error(messageBuilder.str());
+        bool sampleRead = false;
+        while (PendingCount > 0) {
+            int oldestSlot = (NextSlot - PendingCount + RingSize) % RingSize;
+            D3D11_MAPPED_SUBRESOURCE mapped = {};
+            HRESULT mapResult = deviceContext->Map(StagingTextures[oldestSlot].Get(), 0, D3D11_MAP_READ, D3D11_MAP_FLAG_DO_NOT_WAIT, &mapped);
+            if (mapResult == DXGI_ERROR_WAS_STILL_DRAWING) {
+                break;
+            }
+            if (FAILED(mapResult)) {
+                std::ostringstream messageBuilder;
+                messageBuilder << "Hit-test sampler: ID3D11DeviceContext::Map failed with HRESULT "
+                               << DirectX11HResultFormatter::ToHex(mapResult) << ".";
+                throw std::runtime_error(messageBuilder.str());
+            }
+
+            // The pixel is stored as B, G, R, A bytes, so the alpha is the fourth byte. A newer slot read later in
+            // this loop overwrites it, so the caller always receives the newest completed sample.
+            alpha = static_cast<int>(static_cast<const std::uint8_t*>(mapped.pData)[3]);
+            deviceContext->Unmap(StagingTextures[oldestSlot].Get(), 0);
+            PendingCount--;
+            sampleRead = true;
         }
 
-        // The pixel is stored as B, G, R, A bytes, so the alpha is the fourth byte.
-        alpha = static_cast<int>(static_cast<const std::uint8_t*>(mapped.pData)[3]);
-        deviceContext->Unmap(StagingTextures[oldestSlot].Get(), 0);
-        PendingCount--;
-        return true;
+        return sampleRead;
     }
 }

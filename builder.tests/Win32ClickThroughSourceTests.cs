@@ -44,20 +44,29 @@ public sealed class Win32ClickThroughSourceTests {
     }
 
     /// <summary>
-    /// Verifies the readback maps the oldest pending slot with <c>D3D11_MAP_FLAG_DO_NOT_WAIT</c>, reports a sample that
-    /// is still in flight as "not yet" instead of stalling, and throws on every other failure with the shared HRESULT
-    /// formatter.
+    /// Verifies the readback drains the ring: it maps the pending slots from oldest to newest in a loop, each with
+    /// <c>D3D11_MAP_FLAG_DO_NOT_WAIT</c>, stops at the first sample still in flight instead of stalling, returns the
+    /// newest alpha it read (so a backlog cannot add permanent latency), and throws on every other failure with the
+    /// shared HRESULT formatter.
     /// </summary>
     [Fact]
-    public void DirectX11HitTestSampler_reads_the_oldest_pending_slot_without_waiting() {
+    public void DirectX11HitTestSampler_drains_completed_slots_to_the_newest_without_waiting() {
         string samplerSource = ReadRepositoryFile("src", "platform", "windows", "directx11", "directx11_hit_test_sampler.cpp");
 
         string readBody = ExtractMethodBody(samplerSource, "bool DirectX11HitTestSampler::TryReadLatestAlpha(");
-        Assert.Contains("int oldestSlot = (NextSlot - PendingCount + RingSize) % RingSize;", readBody, StringComparison.Ordinal);
-        Assert.Contains("D3D11_MAP_READ, D3D11_MAP_FLAG_DO_NOT_WAIT, &mapped)", readBody, StringComparison.Ordinal);
-        Assert.Matches(new Regex(@"if \(mapResult == DXGI_ERROR_WAS_STILL_DRAWING\) \{\s*return false;\s*\}"), readBody);
+        int loopIndex = readBody.IndexOf("while (PendingCount > 0) {", StringComparison.Ordinal);
+        int oldestSlotIndex = readBody.IndexOf("int oldestSlot = (NextSlot - PendingCount + RingSize) % RingSize;", StringComparison.Ordinal);
+        int mapIndex = readBody.IndexOf("D3D11_MAP_READ, D3D11_MAP_FLAG_DO_NOT_WAIT, &mapped)", StringComparison.Ordinal);
+        int decrementIndex = readBody.IndexOf("PendingCount--;", StringComparison.Ordinal);
+        Assert.True(loopIndex >= 0, "TryReadLatestAlpha must loop over the pending slots.");
+        Assert.True(oldestSlotIndex > loopIndex, "The oldest pending slot must be picked inside the loop.");
+        Assert.True(mapIndex > oldestSlotIndex, "Each slot must be mapped with D3D11_MAP_FLAG_DO_NOT_WAIT inside the loop.");
+        Assert.True(decrementIndex > mapIndex, "Each read slot must leave the pending count inside the loop.");
+        Assert.Single(Regex.Matches(readBody, Regex.Escape("->Map(")));
+        Assert.Matches(new Regex(@"if \(mapResult == DXGI_ERROR_WAS_STILL_DRAWING\) \{\s*break;\s*\}"), readBody);
         Assert.Contains("DirectX11HResultFormatter::ToHex(mapResult)", readBody, StringComparison.Ordinal);
-        Assert.Contains("PendingCount--;", readBody, StringComparison.Ordinal);
+        Assert.Contains("sampleRead = true;", readBody, StringComparison.Ordinal);
+        Assert.Contains("return sampleRead;", readBody, StringComparison.Ordinal);
         Assert.DoesNotContain("D3D11_MAP_READ, 0,", samplerSource, StringComparison.Ordinal);
     }
 

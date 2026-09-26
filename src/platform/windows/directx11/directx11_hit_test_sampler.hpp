@@ -11,9 +11,10 @@ namespace helengine::windows {
 
     /// Reads the alpha of one back-buffer pixel for the overlay window's per-pixel click-through without ever stalling
     /// the frame. Each frame, Capture copies the pixel under the cursor (or the --hit-test-probe point) into the next
-    /// slot of a ring of three 1x1 CPU-readable staging textures, and TryReadLatestAlpha maps the oldest copy that is
-    /// still unread with D3D11_MAP_FLAG_DO_NOT_WAIT, so results arrive with one or two frames of latency instead of
-    /// making the CPU wait for the GPU. Only constructed in overlay mode.
+    /// slot of a ring of three 1x1 CPU-readable staging textures, and TryReadLatestAlpha maps the unread copies from
+    /// oldest to newest with D3D11_MAP_FLAG_DO_NOT_WAIT until one is still in flight and returns the newest alpha it
+    /// read, so results arrive with one or two frames of latency instead of making the CPU wait for the GPU. Only
+    /// constructed in overlay mode.
     class DirectX11HitTestSampler {
     public:
         /// Creates the three 1x1 B8G8R8A8 staging textures on the bootstrap's device. The format matches the swap
@@ -32,12 +33,15 @@ namespace helengine::windows {
         /// <param name="y">Client-area Y coordinate of the pixel.</param>
         void Capture(int x, int y);
 
-        /// Tries to read the alpha of the oldest unread capture by mapping its slot with D3D11_MAP_FLAG_DO_NOT_WAIT.
-        /// Returns false without waiting when nothing is pending or the GPU has not finished the copy yet
-        /// (DXGI_ERROR_WAS_STILL_DRAWING); the slot then stays pending for the next call. Any other failed Map throws
-        /// std::runtime_error carrying the HRESULT in hexadecimal.
-        /// <param name="alpha">Receives the pixel's alpha, 0 to 255, when the method returns true.</param>
-        /// <returns>True when a completed sample was read.</returns>
+        /// Drains the ring to the newest completed capture: maps the unread slots from oldest to newest, each with
+        /// D3D11_MAP_FLAG_DO_NOT_WAIT, and stops at the first one the GPU has not finished yet
+        /// (DXGI_ERROR_WAS_STILL_DRAWING), which stays pending for the next call together with every newer slot. Every
+        /// slot read leaves the ring, so a backlog of completed captures cannot add permanent latency. Returns false
+        /// without waiting when nothing completed. Any other failed Map throws std::runtime_error carrying the HRESULT
+        /// in hexadecimal.
+        /// <param name="alpha">Receives the newest completed pixel's alpha, 0 to 255, when the method returns
+        /// true.</param>
+        /// <returns>True when at least one completed sample was read.</returns>
         bool TryReadLatestAlpha(int& alpha);
 
     private:
