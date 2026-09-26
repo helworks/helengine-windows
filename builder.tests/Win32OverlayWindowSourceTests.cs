@@ -255,8 +255,7 @@ public sealed class Win32OverlayWindowSourceTests {
 
         Assert.Matches(
             new Regex(
-                @"MainWindow->Show\(\);\s*(?://[^
-]*\s*)*if \(windowModeSettings\.GetWindowMode\(\) == Win32WindowMode::Overlay\) \{\s*"
+                @"MainWindow->Show\(\);\s*(?://[^\n]*\s*)*if \(windowModeSettings\.GetWindowMode\(\) == Win32WindowMode::Overlay\) \{\s*"
                 + @"std::ostringstream messageBuilder;\s*messageBuilder << ""Main window configured to overlay client size ""\s*"
                 + @"<< MainWindow->GetClientWidth\(\)\s*<< ""x""\s*<< MainWindow->GetClientHeight\(\)\s*<< '\.';\s*"
                 + @"std::string message = messageBuilder\.str\(\);\s*WriteLifecycleLog\(message\.c_str\(\)\);\s*\} else \{\s*"
