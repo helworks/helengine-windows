@@ -20,254 +20,320 @@
                        "id":  "axis_test",
                        "kind":  "golden",
                        "status":  "stable",
-                       "fingerprint":  {
-                                           "format":  "87",
-                                           "alpha":  "3",
-                                           "swapEffect":  "4",
-                                           "buffers":  "2",
-                                           "scaling":  "0",
-                                           "style":  "0x14CF0000",
-                                           "exStyle":  "0x00000100",
-                                           "client":  "640x360",
-                                           "presentCount":  "30",
-                                           "presentFailures":  "0",
-                                           "frames":  "30",
-                                           "idleThrottle":  "off",
-                                           "idleFrames":  "0",
-                                           "activeFrames":  "30",
-                                           "windowMode":  "normal"
-                                       },
-                       "elapsedMs":  121
+                       "fingerprints":  {
+                                            "main":  {
+                                                         "format":  "87",
+                                                         "alpha":  "3",
+                                                         "swapEffect":  "4",
+                                                         "buffers":  "2",
+                                                         "scaling":  "0",
+                                                         "style":  "0x14CF0000",
+                                                         "exStyle":  "0x00000100",
+                                                         "client":  "640x360",
+                                                         "presentCount":  "30",
+                                                         "presentFailures":  "0",
+                                                         "frames":  "30",
+                                                         "idleThrottle":  "off",
+                                                         "idleFrames":  "0",
+                                                         "activeFrames":  "30",
+                                                         "windowMode":  "normal",
+                                                         "window":  "main",
+                                                         "dpi":  "96",
+                                                         "dpiAwareness":  "unaware",
+                                                         "windowRect":  "default",
+                                                         "elapsedMs":  119
+                                                     }
+                                        }
                    },
                    {
                        "id":  "axis_test2",
                        "kind":  "golden",
                        "status":  "stable",
-                       "fingerprint":  {
-                                           "format":  "87",
-                                           "alpha":  "3",
-                                           "swapEffect":  "4",
-                                           "buffers":  "2",
-                                           "scaling":  "0",
-                                           "style":  "0x14CF0000",
-                                           "exStyle":  "0x00000100",
-                                           "client":  "640x360",
-                                           "presentCount":  "30",
-                                           "presentFailures":  "0",
-                                           "frames":  "30",
-                                           "idleThrottle":  "off",
-                                           "idleFrames":  "0",
-                                           "activeFrames":  "30",
-                                           "windowMode":  "normal"
-                                       },
-                       "elapsedMs":  117
+                       "fingerprints":  {
+                                            "main":  {
+                                                         "format":  "87",
+                                                         "alpha":  "3",
+                                                         "swapEffect":  "4",
+                                                         "buffers":  "2",
+                                                         "scaling":  "0",
+                                                         "style":  "0x14CF0000",
+                                                         "exStyle":  "0x00000100",
+                                                         "client":  "640x360",
+                                                         "presentCount":  "30",
+                                                         "presentFailures":  "0",
+                                                         "frames":  "30",
+                                                         "idleThrottle":  "off",
+                                                         "idleFrames":  "0",
+                                                         "activeFrames":  "30",
+                                                         "windowMode":  "normal",
+                                                         "window":  "main",
+                                                         "dpi":  "96",
+                                                         "dpiAwareness":  "unaware",
+                                                         "windowRect":  "default",
+                                                         "elapsedMs":  119
+                                                     }
+                                        }
                    },
                    {
                        "id":  "colored_cube_grid",
                        "kind":  "golden",
                        "status":  "stable",
-                       "fingerprint":  {
-                                           "format":  "87",
-                                           "alpha":  "3",
-                                           "swapEffect":  "4",
-                                           "buffers":  "2",
-                                           "scaling":  "0",
-                                           "style":  "0x14CF0000",
-                                           "exStyle":  "0x00000100",
-                                           "client":  "640x360",
-                                           "presentCount":  "30",
-                                           "presentFailures":  "0",
-                                           "frames":  "30",
-                                           "idleThrottle":  "off",
-                                           "idleFrames":  "0",
-                                           "activeFrames":  "30",
-                                           "windowMode":  "normal"
-                                       },
-                       "elapsedMs":  118
+                       "fingerprints":  {
+                                            "main":  {
+                                                         "format":  "87",
+                                                         "alpha":  "3",
+                                                         "swapEffect":  "4",
+                                                         "buffers":  "2",
+                                                         "scaling":  "0",
+                                                         "style":  "0x14CF0000",
+                                                         "exStyle":  "0x00000100",
+                                                         "client":  "640x360",
+                                                         "presentCount":  "30",
+                                                         "presentFailures":  "0",
+                                                         "frames":  "30",
+                                                         "idleThrottle":  "off",
+                                                         "idleFrames":  "0",
+                                                         "activeFrames":  "30",
+                                                         "windowMode":  "normal",
+                                                         "window":  "main",
+                                                         "dpi":  "96",
+                                                         "dpiAwareness":  "unaware",
+                                                         "windowRect":  "default",
+                                                         "elapsedMs":  120
+                                                     }
+                                        }
                    },
                    {
                        "id":  "cube_test",
                        "kind":  "golden",
                        "status":  "stable",
-                       "fingerprint":  {
-                                           "format":  "87",
-                                           "alpha":  "3",
-                                           "swapEffect":  "4",
-                                           "buffers":  "2",
-                                           "scaling":  "0",
-                                           "style":  "0x14CF0000",
-                                           "exStyle":  "0x00000100",
-                                           "client":  "640x360",
-                                           "presentCount":  "30",
-                                           "presentFailures":  "0",
-                                           "frames":  "30",
-                                           "idleThrottle":  "off",
-                                           "idleFrames":  "0",
-                                           "activeFrames":  "30",
-                                           "windowMode":  "normal"
-                                       },
-                       "elapsedMs":  119
+                       "fingerprints":  {
+                                            "main":  {
+                                                         "format":  "87",
+                                                         "alpha":  "3",
+                                                         "swapEffect":  "4",
+                                                         "buffers":  "2",
+                                                         "scaling":  "0",
+                                                         "style":  "0x14CF0000",
+                                                         "exStyle":  "0x00000100",
+                                                         "client":  "640x360",
+                                                         "presentCount":  "30",
+                                                         "presentFailures":  "0",
+                                                         "frames":  "30",
+                                                         "idleThrottle":  "off",
+                                                         "idleFrames":  "0",
+                                                         "activeFrames":  "30",
+                                                         "windowMode":  "normal",
+                                                         "window":  "main",
+                                                         "dpi":  "96",
+                                                         "dpiAwareness":  "unaware",
+                                                         "windowRect":  "default",
+                                                         "elapsedMs":  121
+                                                     }
+                                        }
                    },
                    {
                        "id":  "directional_shadow_plaza",
                        "kind":  "golden",
                        "status":  "stable",
-                       "fingerprint":  {
-                                           "format":  "87",
-                                           "alpha":  "3",
-                                           "swapEffect":  "4",
-                                           "buffers":  "2",
-                                           "scaling":  "0",
-                                           "style":  "0x14CF0000",
-                                           "exStyle":  "0x00000100",
-                                           "client":  "640x360",
-                                           "presentCount":  "30",
-                                           "presentFailures":  "0",
-                                           "frames":  "30",
-                                           "idleThrottle":  "off",
-                                           "idleFrames":  "0",
-                                           "activeFrames":  "30",
-                                           "windowMode":  "normal"
-                                       },
-                       "elapsedMs":  118
+                       "fingerprints":  {
+                                            "main":  {
+                                                         "format":  "87",
+                                                         "alpha":  "3",
+                                                         "swapEffect":  "4",
+                                                         "buffers":  "2",
+                                                         "scaling":  "0",
+                                                         "style":  "0x14CF0000",
+                                                         "exStyle":  "0x00000100",
+                                                         "client":  "640x360",
+                                                         "presentCount":  "30",
+                                                         "presentFailures":  "0",
+                                                         "frames":  "30",
+                                                         "idleThrottle":  "off",
+                                                         "idleFrames":  "0",
+                                                         "activeFrames":  "30",
+                                                         "windowMode":  "normal",
+                                                         "window":  "main",
+                                                         "dpi":  "96",
+                                                         "dpiAwareness":  "unaware",
+                                                         "windowRect":  "default",
+                                                         "elapsedMs":  119
+                                                     }
+                                        }
                    },
                    {
                        "id":  "pbr_material_gallery",
                        "kind":  "golden",
                        "status":  "stable",
-                       "fingerprint":  {
-                                           "format":  "87",
-                                           "alpha":  "3",
-                                           "swapEffect":  "4",
-                                           "buffers":  "2",
-                                           "scaling":  "0",
-                                           "style":  "0x14CF0000",
-                                           "exStyle":  "0x00000100",
-                                           "client":  "640x360",
-                                           "presentCount":  "30",
-                                           "presentFailures":  "0",
-                                           "frames":  "30",
-                                           "idleThrottle":  "off",
-                                           "idleFrames":  "0",
-                                           "activeFrames":  "30",
-                                           "windowMode":  "normal"
-                                       },
-                       "elapsedMs":  120
+                       "fingerprints":  {
+                                            "main":  {
+                                                         "format":  "87",
+                                                         "alpha":  "3",
+                                                         "swapEffect":  "4",
+                                                         "buffers":  "2",
+                                                         "scaling":  "0",
+                                                         "style":  "0x14CF0000",
+                                                         "exStyle":  "0x00000100",
+                                                         "client":  "640x360",
+                                                         "presentCount":  "30",
+                                                         "presentFailures":  "0",
+                                                         "frames":  "30",
+                                                         "idleThrottle":  "off",
+                                                         "idleFrames":  "0",
+                                                         "activeFrames":  "30",
+                                                         "windowMode":  "normal",
+                                                         "window":  "main",
+                                                         "dpi":  "96",
+                                                         "dpiAwareness":  "unaware",
+                                                         "windowRect":  "default",
+                                                         "elapsedMs":  121
+                                                     }
+                                        }
                    },
                    {
                        "id":  "pbr_shadow_theater",
                        "kind":  "golden",
                        "status":  "stable",
-                       "fingerprint":  {
-                                           "format":  "87",
-                                           "alpha":  "3",
-                                           "swapEffect":  "4",
-                                           "buffers":  "2",
-                                           "scaling":  "0",
-                                           "style":  "0x14CF0000",
-                                           "exStyle":  "0x00000100",
-                                           "client":  "640x360",
-                                           "presentCount":  "30",
-                                           "presentFailures":  "0",
-                                           "frames":  "30",
-                                           "idleThrottle":  "off",
-                                           "idleFrames":  "0",
-                                           "activeFrames":  "30",
-                                           "windowMode":  "normal"
-                                       },
-                       "elapsedMs":  119
+                       "fingerprints":  {
+                                            "main":  {
+                                                         "format":  "87",
+                                                         "alpha":  "3",
+                                                         "swapEffect":  "4",
+                                                         "buffers":  "2",
+                                                         "scaling":  "0",
+                                                         "style":  "0x14CF0000",
+                                                         "exStyle":  "0x00000100",
+                                                         "client":  "640x360",
+                                                         "presentCount":  "30",
+                                                         "presentFailures":  "0",
+                                                         "frames":  "30",
+                                                         "idleThrottle":  "off",
+                                                         "idleFrames":  "0",
+                                                         "activeFrames":  "30",
+                                                         "windowMode":  "normal",
+                                                         "window":  "main",
+                                                         "dpi":  "96",
+                                                         "dpiAwareness":  "unaware",
+                                                         "windowRect":  "default",
+                                                         "elapsedMs":  121
+                                                     }
+                                        }
                    },
                    {
                        "id":  "pbr_textured_showcase",
                        "kind":  "golden",
                        "status":  "stable",
-                       "fingerprint":  {
-                                           "format":  "87",
-                                           "alpha":  "3",
-                                           "swapEffect":  "4",
-                                           "buffers":  "2",
-                                           "scaling":  "0",
-                                           "style":  "0x14CF0000",
-                                           "exStyle":  "0x00000100",
-                                           "client":  "640x360",
-                                           "presentCount":  "30",
-                                           "presentFailures":  "0",
-                                           "frames":  "30",
-                                           "idleThrottle":  "off",
-                                           "idleFrames":  "0",
-                                           "activeFrames":  "30",
-                                           "windowMode":  "normal"
-                                       },
-                       "elapsedMs":  119
+                       "fingerprints":  {
+                                            "main":  {
+                                                         "format":  "87",
+                                                         "alpha":  "3",
+                                                         "swapEffect":  "4",
+                                                         "buffers":  "2",
+                                                         "scaling":  "0",
+                                                         "style":  "0x14CF0000",
+                                                         "exStyle":  "0x00000100",
+                                                         "client":  "640x360",
+                                                         "presentCount":  "30",
+                                                         "presentFailures":  "0",
+                                                         "frames":  "30",
+                                                         "idleThrottle":  "off",
+                                                         "idleFrames":  "0",
+                                                         "activeFrames":  "30",
+                                                         "windowMode":  "normal",
+                                                         "window":  "main",
+                                                         "dpi":  "96",
+                                                         "dpiAwareness":  "unaware",
+                                                         "windowRect":  "default",
+                                                         "elapsedMs":  119
+                                                     }
+                                        }
                    },
                    {
                        "id":  "software_path_tracer",
                        "kind":  "golden",
                        "status":  "stable",
-                       "fingerprint":  {
-                                           "format":  "87",
-                                           "alpha":  "3",
-                                           "swapEffect":  "4",
-                                           "buffers":  "2",
-                                           "scaling":  "0",
-                                           "style":  "0x14CF0000",
-                                           "exStyle":  "0x00000100",
-                                           "client":  "640x360",
-                                           "presentCount":  "30",
-                                           "presentFailures":  "0",
-                                           "frames":  "30",
-                                           "idleThrottle":  "off",
-                                           "idleFrames":  "0",
-                                           "activeFrames":  "30",
-                                           "windowMode":  "normal"
-                                       },
-                       "elapsedMs":  121
+                       "fingerprints":  {
+                                            "main":  {
+                                                         "format":  "87",
+                                                         "alpha":  "3",
+                                                         "swapEffect":  "4",
+                                                         "buffers":  "2",
+                                                         "scaling":  "0",
+                                                         "style":  "0x14CF0000",
+                                                         "exStyle":  "0x00000100",
+                                                         "client":  "640x360",
+                                                         "presentCount":  "30",
+                                                         "presentFailures":  "0",
+                                                         "frames":  "30",
+                                                         "idleThrottle":  "off",
+                                                         "idleFrames":  "0",
+                                                         "activeFrames":  "30",
+                                                         "windowMode":  "normal",
+                                                         "window":  "main",
+                                                         "dpi":  "96",
+                                                         "dpiAwareness":  "unaware",
+                                                         "windowRect":  "default",
+                                                         "elapsedMs":  118
+                                                     }
+                                        }
                    },
                    {
                        "id":  "test_scene_matrix_render",
                        "kind":  "golden",
                        "status":  "stable",
-                       "fingerprint":  {
-                                           "format":  "87",
-                                           "alpha":  "3",
-                                           "swapEffect":  "4",
-                                           "buffers":  "2",
-                                           "scaling":  "0",
-                                           "style":  "0x14CF0000",
-                                           "exStyle":  "0x00000100",
-                                           "client":  "640x360",
-                                           "presentCount":  "30",
-                                           "presentFailures":  "0",
-                                           "frames":  "30",
-                                           "idleThrottle":  "off",
-                                           "idleFrames":  "0",
-                                           "activeFrames":  "30",
-                                           "windowMode":  "normal"
-                                       },
-                       "elapsedMs":  120
+                       "fingerprints":  {
+                                            "main":  {
+                                                         "format":  "87",
+                                                         "alpha":  "3",
+                                                         "swapEffect":  "4",
+                                                         "buffers":  "2",
+                                                         "scaling":  "0",
+                                                         "style":  "0x14CF0000",
+                                                         "exStyle":  "0x00000100",
+                                                         "client":  "640x360",
+                                                         "presentCount":  "30",
+                                                         "presentFailures":  "0",
+                                                         "frames":  "30",
+                                                         "idleThrottle":  "off",
+                                                         "idleFrames":  "0",
+                                                         "activeFrames":  "30",
+                                                         "windowMode":  "normal",
+                                                         "window":  "main",
+                                                         "dpi":  "96",
+                                                         "dpiAwareness":  "unaware",
+                                                         "windowRect":  "default",
+                                                         "elapsedMs":  120
+                                                     }
+                                        }
                    },
                    {
                        "id":  "textured_cube_grid",
                        "kind":  "golden",
                        "status":  "stable",
-                       "fingerprint":  {
-                                           "format":  "87",
-                                           "alpha":  "3",
-                                           "swapEffect":  "4",
-                                           "buffers":  "2",
-                                           "scaling":  "0",
-                                           "style":  "0x14CF0000",
-                                           "exStyle":  "0x00000100",
-                                           "client":  "640x360",
-                                           "presentCount":  "30",
-                                           "presentFailures":  "0",
-                                           "frames":  "30",
-                                           "idleThrottle":  "off",
-                                           "idleFrames":  "0",
-                                           "activeFrames":  "30",
-                                           "windowMode":  "normal"
-                                       },
-                       "elapsedMs":  120
+                       "fingerprints":  {
+                                            "main":  {
+                                                         "format":  "87",
+                                                         "alpha":  "3",
+                                                         "swapEffect":  "4",
+                                                         "buffers":  "2",
+                                                         "scaling":  "0",
+                                                         "style":  "0x14CF0000",
+                                                         "exStyle":  "0x00000100",
+                                                         "client":  "640x360",
+                                                         "presentCount":  "30",
+                                                         "presentFailures":  "0",
+                                                         "frames":  "30",
+                                                         "idleThrottle":  "off",
+                                                         "idleFrames":  "0",
+                                                         "activeFrames":  "30",
+                                                         "windowMode":  "normal",
+                                                         "window":  "main",
+                                                         "dpi":  "96",
+                                                         "dpiAwareness":  "unaware",
+                                                         "windowRect":  "default",
+                                                         "elapsedMs":  118
+                                                     }
+                                        }
                    },
                    {
                        "id":  "axis_test",
@@ -280,24 +346,86 @@
                        "kind":  "overlay",
                        "transparentProbe":  "2,2",
                        "opaqueProbe":  "393,2",
-                       "fingerprint":  {
-                                           "format":  "87",
-                                           "alpha":  "1",
-                                           "swapEffect":  "4",
-                                           "buffers":  "2",
-                                           "scaling":  "0",
-                                           "style":  "0x94000000",
-                                           "exStyle":  "0x002800A8",
-                                           "client":  "640x360",
-                                           "presentCount":  "30",
-                                           "presentFailures":  "0",
-                                           "frames":  "30",
-                                           "idleThrottle":  "off",
-                                           "idleFrames":  "0",
-                                           "activeFrames":  "30",
-                                           "windowMode":  "overlay"
-                                       },
-                       "elapsedMs":  119
+                       "transparentExStyle":  "0x002800A8",
+                       "opaqueExStyle":  "0x00280088",
+                       "fingerprintsByProbe":  {
+                                                   "transparent":  {
+                                                                       "main":  {
+                                                                                    "format":  "87",
+                                                                                    "alpha":  "1",
+                                                                                    "swapEffect":  "4",
+                                                                                    "buffers":  "2",
+                                                                                    "scaling":  "0",
+                                                                                    "style":  "0x94000000",
+                                                                                    "exStyle":  "0x002800A8",
+                                                                                    "client":  "640x360",
+                                                                                    "presentCount":  "30",
+                                                                                    "presentFailures":  "0",
+                                                                                    "frames":  "30",
+                                                                                    "idleThrottle":  "off",
+                                                                                    "idleFrames":  "0",
+                                                                                    "activeFrames":  "30",
+                                                                                    "windowMode":  "overlay",
+                                                                                    "window":  "main",
+                                                                                    "dpi":  "96",
+                                                                                    "dpiAwareness":  "unaware",
+                                                                                    "windowRect":  "0,0,640,360",
+                                                                                    "elapsedMs":  119
+                                                                                }
+                                                                   },
+                                                   "opaque":  {
+                                                                  "main":  {
+                                                                               "format":  "87",
+                                                                               "alpha":  "1",
+                                                                               "swapEffect":  "4",
+                                                                               "buffers":  "2",
+                                                                               "scaling":  "0",
+                                                                               "style":  "0x94000000",
+                                                                               "exStyle":  "0x00280088",
+                                                                               "client":  "640x360",
+                                                                               "presentCount":  "30",
+                                                                               "presentFailures":  "0",
+                                                                               "frames":  "30",
+                                                                               "idleThrottle":  "off",
+                                                                               "idleFrames":  "0",
+                                                                               "activeFrames":  "30",
+                                                                               "windowMode":  "overlay",
+                                                                               "window":  "main",
+                                                                               "dpi":  "96",
+                                                                               "dpiAwareness":  "unaware",
+                                                                               "windowRect":  "0,0,640,360",
+                                                                               "elapsedMs":  118
+                                                                           }
+                                                              }
+                                               }
+                   },
+                   {
+                       "id":  "axis_test",
+                       "kind":  "overlayIdle",
+                       "fingerprints":  {
+                                            "main":  {
+                                                         "format":  "87",
+                                                         "alpha":  "1",
+                                                         "swapEffect":  "4",
+                                                         "buffers":  "2",
+                                                         "scaling":  "0",
+                                                         "style":  "0x94000000",
+                                                         "exStyle":  "0x002800A8",
+                                                         "client":  "640x360",
+                                                         "presentCount":  "30",
+                                                         "presentFailures":  "0",
+                                                         "frames":  "30",
+                                                         "idleThrottle":  "on",
+                                                         "idleFrames":  "29",
+                                                         "activeFrames":  "1",
+                                                         "windowMode":  "overlay",
+                                                         "window":  "main",
+                                                         "dpi":  "96",
+                                                         "dpiAwareness":  "unaware",
+                                                         "windowRect":  "0,0,640,360",
+                                                         "elapsedMs":  3064
+                                                     }
+                                        }
                    }
                ]
 }
