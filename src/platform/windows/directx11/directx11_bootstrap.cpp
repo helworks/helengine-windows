@@ -1,7 +1,5 @@
 #include "platform/windows/directx11/directx11_bootstrap.hpp"
 
-#include <cstdint>
-#include <iomanip>
 #include <sstream>
 #include <stdexcept>
 
