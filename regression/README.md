@@ -236,6 +236,10 @@ an entry in the old shape prints `FAIL overlay <scene> overlay entry uses the ol
 and an entry without `transparentProbe`, `opaqueProbe`, `transparentExStyle`, `opaqueExStyle` or both probes'
 fingerprints prints
 `FAIL overlay <scene> overlay entry lacks transparentProbe, opaqueProbe, transparentExStyle, opaqueExStyle or fingerprintsByProbe.transparent/opaque (re-record required)`.
+A recorded `transparentExStyle` or `opaqueExStyle` that is not `0x<8 upper-case hex digits>` (an empty string
+included) prints `FAIL overlay <scene> overlay entry's transparentExStyle '<x>' or opaqueExStyle '<y>' is not 0x<8 upper-case hex digits> (re-record required)`,
+and neither the probe runs nor the overlay+idle run starts. Only Record's own probe runs accept any `exStyle` that
+passes the bit rule, through an explicit record mode; outside it an exact expected value is always required.
 The other check lines are `PASS|FAIL overlay <scene> <detail>`.
 
 **What it proves, and what it cannot see.** The scenario proves that overlay mode creates the overlay window and its
@@ -283,6 +287,8 @@ usual 30-frame arguments plus:
 The capture goes to `<WorkRoot>\captures\overlayIdle\<scene>.bmp`. The run must:
 
 - exit with code 0 and write its capture and `HOST_FINGERPRINT` lines;
+- describe the overlay window in every window's fingerprint (`windowMode=overlay`, `alpha=1` and the overlay `exStyle`
+  bits `0x00280088`), checked on its own because these fingerprints are never compared field by field;
 - pass `check-idle` on every window with the minimums of the manifest's `idle` entry (today 25 idle frames and
   2400 ms);
 - pass `check-premultiplied <capture.bmp> 0.01 0.01`;
