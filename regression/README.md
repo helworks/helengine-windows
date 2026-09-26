@@ -403,7 +403,9 @@ line per check (`PASS|FAIL|SKIP|WARN <kind> <name> <detail>`), then `RESULT: PAS
 Only `FAIL` lines count toward the result. It exits 0 only on PASS.
 
 Optional parameters: `-HelengineRoot` (default `C:\dev\helworks\helengine`), `-ProjectSource` (default
-`C:\dev\helprojs\demodisc`) and `-WorkRoot` (default `C:\dev\helworks\builds\helengine-windows\regression`). The
+`C:\dev\helprojs\demodisc`), `-WorkRoot` (default `C:\dev\helworks\builds\helengine-windows\regression`) and
+`-PlatformsManifestPath` (default `<HelengineRoot>\user_settings\platforms.json`; see "Building against a helengine
+worktree"). The
 work root must not overlap the project source, the helengine checkout or this checkout. The script marks every work
 root it uses with a `.helengine-regression-workroot` file and refuses a non-empty folder without that marker,
 because it deletes and rewrites folders under the work root.
@@ -495,6 +497,75 @@ Only re-record when a rendering or host change is **intended**, or when the WARN
 3. Run `-Verify` twice to confirm that the new goldens pass with no false failures.
 4. Commit `regression\golden\*.png`, `regression\golden\manifest.json`, `regression\baselines\*.failing.txt` and
    `regression\baselines\*.executed.txt` in a commit of their own, and say in the message why they changed.
+
+## Building against a helengine worktree
+
+To build the player against a clean helengine revision (for example the commit Helena's main checkout is on) without
+touching her main checkout or its uncommitted files, build against a detached helengine worktree. Creating the
+worktree adds git metadata only; everything else happens inside the worktree and the regression work root.
+
+1. Record the main checkout's state, so you can prove afterwards that it did not change:
+
+   ```powershell
+   git -C C:\dev\helworks\helengine rev-parse HEAD
+   git -C C:\dev\helworks\helengine status --porcelain > <work root>\main-status-before.txt
+   Get-FileHash <work root>\main-status-before.txt
+   ```
+
+2. Create the detached worktree at the main checkout's HEAD (stop if the path already exists):
+
+   ```powershell
+   git -C C:\dev\helworks\helengine worktree add --detach .worktrees\regression-reference <HEAD>
+   ```
+
+3. Initialize the two submodules the build needs, inside the worktree only (uses the pinned commits and your SSH keys):
+
+   ```powershell
+   git -C C:\dev\helworks\helengine\.worktrees\regression-reference submodule update --init engine/vendor/csharpcodegen engine/vendor/bepuphysics2
+   ```
+
+   **If the pinned submodule commit is not on origin, fetch it from the main checkout's submodule.** This happens
+   when helengine pins a csharpcodegen commit that was never pushed (`upload-pack: not our ref <sha>`). Reading the
+   main checkout's submodule as a fetch source writes nothing there:
+
+   ```powershell
+   git -C C:\dev\helworks\helengine\.worktrees\regression-reference\engine\vendor\csharpcodegen fetch C:\dev\helworks\helengine\engine\vendor\csharpcodegen <pinned sha>
+   git -C C:\dev\helworks\helengine\.worktrees\regression-reference submodule update engine/vendor/csharpcodegen
+   git -C C:\dev\helworks\helengine\.worktrees\regression-reference submodule status
+   ```
+
+   `submodule status` must show both pinned commits with no leading `+`. Never copy files instead.
+
+4. Build. `user_settings\platforms.json` is git-ignored, so the worktree has none; pass the main checkout's file with
+   `-PlatformsManifestPath` (default `<HelengineRoot>\user_settings\platforms.json`). Its relative paths are made
+   absolute against that file's folder. Generated output paths in it (`generatedCoreCppRootPath`) that lie under the
+   main checkout are moved to the same relative path under `-HelengineRoot` (and created, because the engine reports a
+   platform whose generated-core folder is missing as not installed), and the script prints the one the windows build
+   uses as `GENERATED_CORE_ROOT=`, so nothing points the build into the main checkout. (Today's engine writes the
+   generated core itself into its build cache under `C:\dev\helworks\builds\helengine\cache`.) A default run
+   (the manifest belongs to `-HelengineRoot`) writes exactly the same isolated `platforms.json` as before. Pass the
+   manifest's `projectCommit` so the build matches the goldens:
+
+   ```powershell
+   powershell -NoProfile -File scripts\run-regression.ps1 -BuildOnly -HelengineRoot C:\dev\helworks\helengine\.worktrees\regression-reference -PlatformsManifestPath C:\dev\helworks\helengine\user_settings\platforms.json -ProjectCommit <manifest projectCommit> > <log> 2>&1
+   ```
+
+   It must exit 0 and print `PLAYER=`, and `GENERATED_CORE_ROOT=` must lie under the worktree.
+
+5. Check one scene against its golden with that player (write the profile first, because a build may remove it):
+
+   ```powershell
+   $player = 'C:\dev\helworks\builds\helengine-windows\regression\player'
+   [System.IO.File]::WriteAllText("$player\profile.json", '{"resolutionWidth":640,"resolutionHeight":360}')
+   & scripts\launch_in_emulator.ps1 -ArtifactPath "$player\helengine_windows.exe" -ArgumentList @('--scene', 'axis_test', '--frames', '30', '--fixed-delta', '0.016666', '--capture', '<capture>.bmp') -Wait -TimeoutSeconds 120
+   & tools\regression\bin\Release\net9.0-windows\helengine.windows.regression.exe compare <capture>.bmp regression\golden\axis_test.png <diff>.png
+   ```
+
+   The compare must print `PASS 0`.
+
+6. Check that the main checkout's `rev-parse HEAD` and the hash of its `status --porcelain` are unchanged. Keep the
+   worktree for later runs, or remove it with
+   `git -C C:\dev\helworks\helengine worktree remove --force .worktrees\regression-reference`.
 
 ## Known limitations
 

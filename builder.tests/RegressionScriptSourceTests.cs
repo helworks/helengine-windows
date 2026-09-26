@@ -153,6 +153,23 @@ public sealed class RegressionScriptSourceTests {
     }
 
     /// <summary>
+    /// Ensures the regression README documents how to build the player against a detached helengine worktree, with the
+    /// worktree, submodule and build commands spelled out.
+    /// </summary>
+    [Fact]
+    public void RegressionReadme_DocumentsBuildingAgainstAHelengineWorktree() {
+        string repositoryRootPath = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", ".."));
+        string readmeSource = File.ReadAllText(Path.Combine(repositoryRootPath, "regression", "README.md"));
+
+        Assert.Contains("## Building against a helengine worktree", readmeSource, StringComparison.Ordinal);
+        Assert.Contains("worktree add --detach .worktrees\\regression-reference", readmeSource, StringComparison.Ordinal);
+        Assert.Contains("submodule update --init engine/vendor/csharpcodegen engine/vendor/bepuphysics2", readmeSource, StringComparison.Ordinal);
+        Assert.Contains("If the pinned submodule commit is not on origin, fetch it from the main checkout's submodule.", readmeSource, StringComparison.Ordinal);
+        Assert.Contains("-PlatformsManifestPath C:\\dev\\helworks\\helengine\\user_settings\\platforms.json", readmeSource, StringComparison.Ordinal);
+        Assert.Contains("GENERATED_CORE_ROOT=", readmeSource, StringComparison.Ordinal);
+    }
+
+    /// <summary>
     /// Ensures the regression README documents that Verify is pinned to the recorded project commit and how to move the
     /// pin forward deliberately.
     /// </summary>
