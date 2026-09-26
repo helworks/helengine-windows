@@ -333,9 +333,8 @@ idle throttle, and how quickly a move from a transparent to an opaque pixel is n
 
 ## Current record
 
-The committed `manifest.json` below still has the old single-`fingerprint` shape, has no `window`, `dpi`,
-`dpiAwareness` or `windowRect` fields and no overlayIdle entry, so `-Verify` fails it with "re-record required" until
-the one-time re-record described in "Migration (re-record once)".
+The committed `manifest.json` is current as of the `d79c9fd` re-record described below: `-Verify` passes against it
+as committed, with every golden entry in the per-window `fingerprints` shape and an `overlayIdle` entry present.
 
 The goldens were first recorded on 2026-09-24 from commit `f8a92cb`, and re-recorded on 2026-09-25 from commit
 `d7defda` (feature/regression-safety-net) to add the host fingerprints, the executed-test counts and the provenance
@@ -343,13 +342,28 @@ hashes. They were re-recorded again on 2026-09-25 on the owner's development mac
 (feature/idle-throttle), because the fingerprint gained `idleThrottle`, `idleFrames` and `activeFrames` and the
 manifest gained the idle entry. They were re-recorded once more on 2026-09-25 on the same machine, from commit
 `7089c4d` (feature/overlay-window), because the fingerprint gained `windowMode` and the manifest gained the overlay
-entry and the overlay golden `axis_test.overlay.png`. They were re-recorded a last time on 2026-09-26 on the same
+entry and the overlay golden `axis_test.overlay.png`. They were re-recorded again on 2026-09-26 on the same
 machine, from commit `f807ee6` (feature/overlay-window), because the overlay window is now created click-through
 (`WS_EX_TRANSPARENT`), which changed only the overlay entry's `exStyle` from `0x00280088` to `0x002800A8`: every golden
 PNG (including `axis_test.overlay.png`) was byte-identical, every normal fingerprint differed only in `elapsedMs`, and
 the probes stayed `2,2` and `393,2`. DemoDisc was at `5cc124eec06b8db729b2f9b15d99d26cb1ca8cc3` and
 helengine at `dd9ca693403d91b5e2fc52860a3511e6358ed776` with uncommitted changes (`helengineDirty: true`); the
 provenance hashes are unchanged from the idle-throttle record.
+
+They were re-recorded a last time on 2026-09-26, as commit `d79c9fd` (feature/net-extensions, subproject 3a),
+pinned to the same DemoDisc commit via `-ProjectCommit 5cc124eec06b8db729b2f9b15d99d26cb1ca8cc3` (the project header
+fields were unchanged from the previous record). This re-record replaced every scene's single `fingerprint` object
+with a `fingerprints` map keyed by window name (`main` today) and added four fields inside each per-window
+fingerprint: `window`, `dpi`, `dpiAwareness` and `windowRect` (`default` for the normal-window scenes, `0,0,640,360`
+for the overlay window). The overlay entry's `transparentExStyle` (`0x002800A8`) and `opaqueExStyle` (`0x00280088`)
+became top-level fields validated as `0x` plus 8 upper-case hex digits, alongside a `fingerprintsByProbe.transparent`
+/ `fingerprintsByProbe.opaque` map (each keyed by window name) in place of the old single probe fingerprint. A new
+`{ "id": "axis_test", "kind": "overlayIdle" }` entry was added with `fingerprints.main` recording
+`idleThrottle=on idleFrames=29 activeFrames=1`. Every golden PNG (including `axis_test.overlay.png`) stayed
+byte-identical to the previous record, and every pre-existing fingerprint field kept its value (only `elapsedMs`
+jittered by a few ms). `-Verify` passed twice against the re-recorded manifest, and a hand-edited negative check
+(flipping `transparentExStyle` to the opaque value) correctly FAILed both the overlay and overlayIdle checks on the
+exStyle mismatch before the manifest was restored and re-verified clean.
 
 - All 11 rendering scenes were stable across the two record runs (0 differing pixels), so every scene has a golden
   and no scene is marked `unstable`. The re-recorded golden PNGs are byte-identical to the first record
@@ -368,12 +382,13 @@ provenance hashes are unchanged from the idle-throttle record.
   transparent and 29.8% fully opaque pixels; `find-probes` chose `transparentProbe` `2,2` and `opaqueProbe` `393,2`,
   which logged `alpha=0 clickThrough=on` and `alpha=255 clickThrough=off`, and both probe runs matched the overlay
   golden with 0 differing pixels.
-- Baselines: `helengine.editor.tests` 50 failing of 3134 executed, `helengine.render.validation.tests` 1 failing of
-  1 executed, `helengine.windows.builder.tests` 0 failing of 164 executed (161 before the final-review source tests). All five known-flaky keyboard-focus tests
-  (the four `SceneHierarchyPanelKeyboardFocusTests` arrow-key tests and
-  `EditorSessionUndoRedoIntegrationTests.Keyboard_focus_update_component_routes_delete_into_the_session_handler`)
-  happened to fail during this record, so they are all in the editor baseline (49 -> 50); they are also in the
-  flaky list, and `-Verify` reports them as `FIXED` when they pass.
+- Baselines as of the `d79c9fd` re-record: `helengine.editor.tests` 49 failing of 3134 executed,
+  `helengine.render.validation.tests` 1 failing of 1 executed, `helengine.windows.builder.tests` 0 failing of 179
+  executed (up from 164, the 15 tests added across Tasks 1-4 of subproject 3a). Of the five known-flaky
+  keyboard-focus tests (the four `SceneHierarchyPanelKeyboardFocusTests` arrow-key tests and
+  `EditorSessionUndoRedoIntegrationTests.Keyboard_focus_update_component_routes_delete_into_the_session_handler`),
+  `EditorSessionUndoRedoIntegrationTests...` happened to pass during this record, dropping the editor baseline from
+  50 to 49 failing; all five stay in the flaky list, and `-Verify` reports one as `FIXED` when it passes.
 - DemoDisc's `user_settings\generated_code` holds only `obj` files, which the copy leaves out, so
   `generatedCodeHash` is the SHA-256 of an empty list.
 - After the record, `-Verify` passed three times with every golden at 0 differing pixels, every fingerprint
@@ -455,7 +470,8 @@ Every mode also prints `PROJECT_HEAD=<DemoDisc HEAD>`.
 
 `manifest.json` records the provenance of the goldens and baselines:
 
-- `projectSource` and `projectCommit` (DemoDisc's HEAD);
+- `projectSource` and `projectCommit` (the commit `-Record` built: DemoDisc's HEAD, or the resolved `-ProjectCommit`
+  pin; `-Verify` builds this same recorded commit rather than DemoDisc's current HEAD);
 - `buildConfigSourceHash`: the SHA-256 of DemoDisc's own `user_settings\build_config.json`, read before the copy's
   build config is overridden;
 - `generatedCodeHash`: the SHA-256 of DemoDisc's `user_settings\generated_code` tree (every file's relative path and
@@ -536,7 +552,8 @@ worktree adds git metadata only; everything else happens inside the worktree and
 
    `submodule status` must show both pinned commits with no leading `+`. Never copy files instead.
 
-4. Build. `user_settings\platforms.json` is git-ignored, so the worktree has none; pass the main checkout's file with
+4. Build, from this helengine-windows checkout's root (the `scripts\...` path below is relative to it).
+   `user_settings\platforms.json` is git-ignored, so the worktree has none; pass the main checkout's file with
    `-PlatformsManifestPath` (default `<HelengineRoot>\user_settings\platforms.json`). Its relative paths are made
    absolute against that file's folder. Generated output paths in it (`generatedCoreCppRootPath`) that lie under the
    main checkout are moved to the same relative path under `-HelengineRoot` (and created, because the engine reports a
@@ -552,7 +569,9 @@ worktree adds git metadata only; everything else happens inside the worktree and
 
    It must exit 0 and print `PLAYER=`, and `GENERATED_CORE_ROOT=` must lie under the worktree.
 
-5. Check one scene against its golden with that player (write the profile first, because a build may remove it):
+5. Check one scene against its golden with that player, also from this helengine-windows checkout's root (the
+   `tools\regression\...` and `regression\golden\...` paths below are relative to it; write the profile first,
+   because a build may remove it):
 
    ```powershell
    $player = 'C:\dev\helworks\builds\helengine-windows\regression\player'
@@ -569,9 +588,13 @@ worktree adds git metadata only; everything else happens inside the worktree and
 
 ## Known limitations
 
-- The build goes through helengine's canonical build script, which regenerates core output under `helengine\tmp`.
-  That folder is shared with normal builds, so do not run the regression net while another helengine build is
-  running.
+- The build goes through helengine's canonical build script. The generated C++ core is written into the build
+  cache (`C:\dev\helworks\builds\helengine\cache\v2\<project-hash>\...\generated-core`), keyed by the project's
+  build-cache work root; it is wiped and regenerated on every build, and a per-project-hash lock serializes runs
+  against the same project so a concurrent build cannot interleave with one already in progress. `platforms.json`'s
+  `generatedCoreCppRootPath` (for example under `helengine\tmp`) is used only for the engine's "is installed" check
+  today and is left empty on disk; see "Building against a helengine worktree" step 4 for how a non-default
+  `-HelengineRoot` isolates that path.
 - The editor-side suites run against `-HelengineRoot` as it is on disk, including uncommitted work there. Their
   bin/obj output is written into that checkout as for any normal `dotnet test`.
 - The project source must not use Git LFS: `git archive` would export pointer files, so the script stops when the
