@@ -110,8 +110,75 @@ public sealed class RegressionScriptSourceTests {
         Assert.Contains("HOST_FINGERPRINT", scriptSource, StringComparison.Ordinal);
         Assert.Contains("'check-fingerprint'", scriptSource, StringComparison.Ordinal);
         Assert.Contains("'compare-fingerprint'", scriptSource, StringComparison.Ordinal);
-        Assert.Contains("fingerprint = ", scriptSource, StringComparison.Ordinal);
-        Assert.Contains("elapsedMs = ", scriptSource, StringComparison.Ordinal);
+        Assert.Contains("fingerprints = (ConvertTo-ManifestFingerprints -FingerprintsByWindow $runA.FingerprintsByWindow)", scriptSource, StringComparison.Ordinal);
+        Assert.DoesNotContain("fingerprint = $fingerprintFields", scriptSource, StringComparison.Ordinal);
+        Assert.DoesNotContain("elapsedMs = $sceneElapsedMilliseconds", scriptSource, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// Ensures a scene run collects every HOST_FINGERPRINT line of its startup log into an ordered map keyed by the
+    /// line's window tag, and that a run with no fingerprint line, a line without a window tag or two lines for the same
+    /// window is a FAIL rather than a silently dropped fingerprint.
+    /// </summary>
+    [Fact]
+    public void RegressionScript_CollectsEveryFingerprintLineByWindow() {
+        string scriptSource = ReadRegressionScriptSource();
+
+        string playerSceneSource = ReadFunctionSource(scriptSource, "Invoke-PlayerScene");
+        Assert.Contains("$fingerprintLines.Add($Matches[1])", playerSceneSource, StringComparison.Ordinal);
+        Assert.Contains("Get-FingerprintsByWindow -FingerprintLines $fingerprintLines.ToArray()", playerSceneSource, StringComparison.Ordinal);
+        Assert.Contains("FingerprintsByWindow = $fingerprintCollection.FingerprintsByWindow", playerSceneSource, StringComparison.Ordinal);
+        Assert.Contains("FingerprintProblem = $fingerprintCollection.Problem", playerSceneSource, StringComparison.Ordinal);
+        Assert.DoesNotContain("$fingerprintLine = $Matches[1]", playerSceneSource, StringComparison.Ordinal);
+
+        string collectionSource = ReadFunctionSource(scriptSource, "Get-FingerprintsByWindow");
+        Assert.Contains("New-Object System.Collections.Specialized.OrderedDictionary", collectionSource, StringComparison.Ordinal);
+        Assert.Contains("'(?:^| )window=(\\S+)(?: |$)'", collectionSource, StringComparison.Ordinal);
+        Assert.Contains("missing: the startup log has no HOST_FINGERPRINT line", collectionSource, StringComparison.Ordinal);
+        Assert.Contains("duplicate window", collectionSource, StringComparison.Ordinal);
+        Assert.Contains("has no window field", collectionSource, StringComparison.Ordinal);
+
+        string runSucceededSource = ReadFunctionSource(scriptSource, "Test-PlayerRunSucceeded");
+        Assert.Contains("$null -ne $PlayerRun.FingerprintProblem", runSucceededSource, StringComparison.Ordinal);
+        Assert.Contains("-Kind fingerprint -Name $SceneId -Detail $PlayerRun.FingerprintProblem", runSucceededSource, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// Ensures fingerprints are stored and compared per window: Record checks run a's windows, compares run b's windows
+    /// with run a's and stores a <c>fingerprints</c> map (window tag to fields, each window with its own elapsedMs);
+    /// Verify fails a manifest entry in the old single-<c>fingerprint</c> shape with a re-record request, fails a missing
+    /// or extra window by name and compares the fields of every window through compare-fingerprint.
+    /// </summary>
+    [Fact]
+    public void RegressionScript_StoresAndComparesFingerprintsPerWindow() {
+        string scriptSource = ReadRegressionScriptSource();
+
+        string compareSource = ReadFunctionSource(scriptSource, "Compare-FingerprintsByWindow");
+        Assert.Contains("window missing", compareSource, StringComparison.Ordinal);
+        Assert.Contains("window extra", compareSource, StringComparison.Ordinal);
+        Assert.Contains("@('compare-fingerprint', \"$Name@$windowName\"", compareSource, StringComparison.Ordinal);
+
+        string healthSource = ReadFunctionSource(scriptSource, "Invoke-FingerprintHealthCheck");
+        Assert.Contains("@('check-fingerprint', \"$Name@$windowName\"", healthSource, StringComparison.Ordinal);
+
+        string manifestSource = ReadFunctionSource(scriptSource, "ConvertTo-ManifestFingerprints");
+        Assert.Contains("ConvertTo-FingerprintFields -FingerprintLine $FingerprintsByWindow[$windowName]", manifestSource, StringComparison.Ordinal);
+        Assert.Contains("[long]$windowFields['elapsedMs']", manifestSource, StringComparison.Ordinal);
+
+        string recordedSource = ReadFunctionSource(scriptSource, "ConvertTo-RecordedFingerprintsByWindow");
+        Assert.Contains("$RecordedFingerprints.PSObject.Properties", recordedSource, StringComparison.Ordinal);
+        Assert.DoesNotContain("function ConvertTo-RecordedFingerprintLine", scriptSource, StringComparison.Ordinal);
+
+        int recordIndex = scriptSource.IndexOf("# 11R.", StringComparison.Ordinal);
+        int verifyIndex = scriptSource.IndexOf("# 11V.", StringComparison.Ordinal);
+        string recordSource = scriptSource.Substring(recordIndex, verifyIndex - recordIndex);
+        Assert.Contains("Invoke-FingerprintHealthCheck -Name $sceneId -FingerprintsByWindow $runA.FingerprintsByWindow -PassDetail 'run a healthy'", recordSource, StringComparison.Ordinal);
+        Assert.Contains("Compare-FingerprintsByWindow -Name $sceneId -RecordedFingerprintsByWindow $runA.FingerprintsByWindow -ActualFingerprintsByWindow $runB.FingerprintsByWindow -PassDetail 'run b matches run a'", recordSource, StringComparison.Ordinal);
+
+        string verifySource = scriptSource.Substring(verifyIndex);
+        Assert.Contains("$null -ne $recordedScene.PSObject.Properties['fingerprint'] -or $null -eq $recordedScene.fingerprints", verifySource, StringComparison.Ordinal);
+        Assert.Contains("uses the old single 'fingerprint' shape or has no 'fingerprints' (re-record required)", verifySource, StringComparison.Ordinal);
+        Assert.Contains("Compare-FingerprintsByWindow -Name $sceneId -RecordedFingerprintsByWindow (ConvertTo-RecordedFingerprintsByWindow -RecordedFingerprints $recordedScene.fingerprints) -ActualFingerprintsByWindow $verifyRun.FingerprintsByWindow -PassDetail 'matches record'", verifySource, StringComparison.Ordinal);
     }
 
     /// <summary>
@@ -169,7 +236,7 @@ public sealed class RegressionScriptSourceTests {
 
         Assert.Contains("[string]$MinimumIdleFrames", scriptSource, StringComparison.Ordinal);
         Assert.Contains("[string]$MinimumElapsedMilliseconds", scriptSource, StringComparison.Ordinal);
-        Assert.Contains("@('check-idle', $idleRun.Fingerprint, $MinimumIdleFrames, $MinimumElapsedMilliseconds)", scriptSource, StringComparison.Ordinal);
+        Assert.Contains("@('check-idle', $FingerprintsByWindow[$windowName], $MinimumIdleFrames, $MinimumElapsedMilliseconds)", scriptSource, StringComparison.Ordinal);
         Assert.DoesNotContain("$script:idleMinimumIdleFrames, $script:idleMinimumElapsedMilliseconds)", scriptSource, StringComparison.Ordinal);
 
         Assert.Contains("minIdleFrames = [int]$idleMinimumIdleFrames; minElapsedMs = [int]$idleMinimumElapsedMilliseconds", scriptSource, StringComparison.Ordinal);
@@ -203,22 +270,46 @@ public sealed class RegressionScriptSourceTests {
         string scriptSource = ReadRegressionScriptSource();
 
         Assert.Contains("$overlayPlayerArguments = @('--window-mode', 'overlay', '--overlay-bounds', 'profile', '--overlay-background', 'transparent')", scriptSource, StringComparison.Ordinal);
-        Assert.Contains("-ExtraArguments ($script:overlayPlayerArguments + @('--hit-test-probe', $Probe))", scriptSource, StringComparison.Ordinal);
+        Assert.Contains("-ExtraArguments ($script:overlayPlayerArguments + $ExtraArguments + @('--hit-test-probe', $Probe))", scriptSource, StringComparison.Ordinal);
         Assert.Contains("'(HIT_TEST .+)$'", scriptSource, StringComparison.Ordinal);
         Assert.Contains("HitTest = $hitTestLine", scriptSource, StringComparison.Ordinal);
-        Assert.Contains("clickThrough=$ExpectedClickThrough$", scriptSource, StringComparison.Ordinal);
         Assert.Contains("@('check-premultiplied', $CapturePath, '0.01', '0.01')", scriptSource, StringComparison.Ordinal);
 
         string overlayScenarioSource = ReadFunctionSource(scriptSource, "Invoke-OverlayScenario");
-        Assert.Contains("@('compare-rgba', $CapturePath, $GoldenPath, $DiffPath)", overlayScenarioSource, StringComparison.Ordinal);
-        Assert.DoesNotContain("@('compare',", overlayScenarioSource, StringComparison.Ordinal);
-        Assert.Contains("'compare-fingerprint'", overlayScenarioSource, StringComparison.Ordinal);
+        Assert.Contains("Invoke-OverlayProbeRun -Kind overlay", overlayScenarioSource, StringComparison.Ordinal);
+        Assert.Contains("Test-CaptureMatchesGolden -Kind overlay -SceneId $SceneId -CompareCommand compare-rgba", overlayScenarioSource, StringComparison.Ordinal);
+        Assert.DoesNotContain("-CompareCommand compare ", overlayScenarioSource, StringComparison.Ordinal);
+        Assert.Contains("Compare-FingerprintsByWindow", overlayScenarioSource, StringComparison.Ordinal);
         Assert.Contains("Test-OverlayPremultiplied", overlayScenarioSource, StringComparison.Ordinal);
         Assert.Contains("Test-OverlayHitTest", overlayScenarioSource, StringComparison.Ordinal);
 
-        int staleDiffRemovalIndex = overlayScenarioSource.IndexOf("Remove-Item -LiteralPath $DiffPath -Force", StringComparison.Ordinal);
-        int overlayRunIndex = overlayScenarioSource.IndexOf("$overlayRun = Invoke-PlayerScene", StringComparison.Ordinal);
-        Assert.True(staleDiffRemovalIndex >= 0 && overlayRunIndex > staleDiffRemovalIndex, "Invoke-OverlayScenario must delete a stale diff image before the run.");
+        string captureSource = ReadFunctionSource(scriptSource, "Test-CaptureMatchesGolden");
+        Assert.Contains("[ValidateSet('compare', 'compare-rgba')]", captureSource, StringComparison.Ordinal);
+        Assert.Contains("@($CompareCommand, $CapturePath, $GoldenPath, $DiffPath)", captureSource, StringComparison.Ordinal);
+
+        string probeRunSource = ReadFunctionSource(scriptSource, "Invoke-OverlayProbeRun");
+        int staleDiffRemovalIndex = probeRunSource.IndexOf("Remove-Item -LiteralPath $DiffPath -Force", StringComparison.Ordinal);
+        int overlayRunIndex = probeRunSource.IndexOf("$overlayRun = Invoke-PlayerScene", StringComparison.Ordinal);
+        Assert.True(staleDiffRemovalIndex >= 0 && overlayRunIndex > staleDiffRemovalIndex, "Invoke-OverlayProbeRun must delete a stale diff image before the run.");
+    }
+
+    /// <summary>
+    /// Ensures the HIT_TEST check is an exact match that includes the window's extended style after the probe's
+    /// click-through toggle: eight upper-case hexadecimal digits, WS_EX_TRANSPARENT (0x20) set for clickThrough=on and
+    /// cleared for clickThrough=off, and equal to the recorded value when one is given (a damaged recorded value is a FAIL
+    /// asking for a re-record).
+    /// </summary>
+    [Fact]
+    public void RegressionScript_MatchesTheHitTestExStyleExactly() {
+        string scriptSource = ReadRegressionScriptSource();
+
+        string hitTestSource = ReadFunctionSource(scriptSource, "Test-OverlayHitTest");
+        Assert.Contains("clickThrough=$ExpectedClickThrough exStyle=(0x[0-9A-F]{8})$", hitTestSource, StringComparison.Ordinal);
+        Assert.Contains("$HitTestLine -cnotmatch $expectedHitTestPattern", hitTestSource, StringComparison.Ordinal);
+        Assert.Contains("-band 0x20", hitTestSource, StringComparison.Ordinal);
+        Assert.Contains("$ExpectedExStyle -cnotmatch '^0x[0-9A-F]{8}$'", hitTestSource, StringComparison.Ordinal);
+        Assert.Contains("$observedExStyle -cne $ExpectedExStyle", hitTestSource, StringComparison.Ordinal);
+        Assert.Contains("return $observedExStyle", hitTestSource, StringComparison.Ordinal);
     }
 
     /// <summary>
@@ -230,13 +321,13 @@ public sealed class RegressionScriptSourceTests {
     public void RegressionScript_ValidatesOverlayProbesBeforeUsingThem() {
         string scriptSource = ReadRegressionScriptSource();
 
-        string overlayScenarioSource = ReadFunctionSource(scriptSource, "Invoke-OverlayScenario");
-        int validationIndex = overlayScenarioSource.IndexOf("if ($Probe -notmatch '^\\d+,\\d+$') {", StringComparison.Ordinal);
-        int overlayRunIndex = overlayScenarioSource.IndexOf("$overlayRun = Invoke-PlayerScene", StringComparison.Ordinal);
-        Assert.True(validationIndex >= 0, "Invoke-OverlayScenario must validate the probe with ^\\d+,\\d+$.");
+        string probeRunSource = ReadFunctionSource(scriptSource, "Invoke-OverlayProbeRun");
+        int validationIndex = probeRunSource.IndexOf("if ($Probe -notmatch '^\\d+,\\d+$') {", StringComparison.Ordinal);
+        int overlayRunIndex = probeRunSource.IndexOf("$overlayRun = Invoke-PlayerScene", StringComparison.Ordinal);
+        Assert.True(validationIndex >= 0, "Invoke-OverlayProbeRun must validate the probe with ^\\d+,\\d+$.");
         Assert.True(overlayRunIndex > validationIndex, "The probe must be validated before it is passed to the player.");
-        string validationBlock = overlayScenarioSource.Substring(validationIndex, overlayRunIndex - validationIndex);
-        Assert.Contains("Add-CheckResult -Status FAIL -Kind overlay", validationBlock, StringComparison.Ordinal);
+        string validationBlock = probeRunSource.Substring(validationIndex, overlayRunIndex - validationIndex);
+        Assert.Contains("Add-CheckResult -Status FAIL -Kind $Kind", validationBlock, StringComparison.Ordinal);
         Assert.Contains("(re-record required)", validationBlock, StringComparison.Ordinal);
         Assert.Contains("return", validationBlock, StringComparison.Ordinal);
 
@@ -251,8 +342,9 @@ public sealed class RegressionScriptSourceTests {
     /// <summary>
     /// Ensures Record runs the overlay scenario in the ruled order: one run to record the alpha-preserving overlay golden
     /// into the staging folder, find-probes on that golden, then a transparent-probe run that must report clickThrough=on
-    /// and an opaque-probe run that must report clickThrough=off, each compared with the first run's fingerprint, and only
-    /// then the manifest's overlay entry with both probes and the fingerprint.
+    /// and an opaque-probe run that must report clickThrough=off (each checked for health and overlay shape in record
+    /// mode), and only then the manifest's overlay entry with both probes, both observed exStyle values and one
+    /// fingerprint map per probe.
     /// </summary>
     [Fact]
     public void RegressionScript_RecordsTheOverlayGoldenProbesAndFingerprint() {
@@ -262,7 +354,9 @@ public sealed class RegressionScriptSourceTests {
         Assert.Contains("$overlayGoldenFileName = \"$($smokeSceneId.Replace('/', '__')).overlay.png\"", scriptSource, StringComparison.Ordinal);
         Assert.Contains("'^TRANSPARENT (\\d+,\\d+)$'", scriptSource, StringComparison.Ordinal);
         Assert.Contains("'^OPAQUE (\\d+,\\d+)$'", scriptSource, StringComparison.Ordinal);
-        Assert.Contains("kind = 'overlay'; transparentProbe = $overlayTransparentProbe; opaqueProbe = $overlayOpaqueProbe; fingerprint = $overlayFingerprintFields; elapsedMs = $overlayElapsedMilliseconds", scriptSource, StringComparison.Ordinal);
+        Assert.Contains("kind = 'overlay'; transparentProbe = $overlayTransparentProbe; opaqueProbe = $overlayOpaqueProbe; transparentExStyle = $overlayTransparentResult.ExStyle; opaqueExStyle = $overlayOpaqueResult.ExStyle; fingerprintsByProbe = $overlayFingerprintsByProbe", scriptSource, StringComparison.Ordinal);
+        Assert.Contains("transparent = (ConvertTo-ManifestFingerprints -FingerprintsByWindow $overlayTransparentResult.FingerprintsByWindow)", scriptSource, StringComparison.Ordinal);
+        Assert.Contains("opaque = (ConvertTo-ManifestFingerprints -FingerprintsByWindow $overlayOpaqueResult.FingerprintsByWindow)", scriptSource, StringComparison.Ordinal);
 
         int recordIndex = scriptSource.IndexOf("# 11R.", StringComparison.Ordinal);
         int verifyIndex = scriptSource.IndexOf("# 11V.", StringComparison.Ordinal);
@@ -270,13 +364,13 @@ public sealed class RegressionScriptSourceTests {
         string recordSource = scriptSource.Substring(recordIndex, verifyIndex - recordIndex);
 
         int recordRunIndex = recordSource.IndexOf("$overlayRecordRun = Invoke-PlayerScene", StringComparison.Ordinal);
-        int healthIndex = recordSource.IndexOf("@('check-fingerprint', \"$smokeSceneId.overlay\", $overlayRecordRun.Fingerprint)", StringComparison.Ordinal);
-        int shapeIndex = recordSource.IndexOf("Test-OverlayFingerprintShape -SceneId $smokeSceneId -FingerprintLine $overlayRecordRun.Fingerprint", StringComparison.Ordinal);
-        int premultipliedIndex = recordSource.IndexOf("Test-OverlayPremultiplied -SceneId $smokeSceneId -ProbeName record", StringComparison.Ordinal);
+        int healthIndex = recordSource.IndexOf("Invoke-FingerprintHealthCheck -Name \"$smokeSceneId.overlay\" -FingerprintsByWindow $overlayRecordRun.FingerprintsByWindow", StringComparison.Ordinal);
+        int shapeIndex = recordSource.IndexOf("Test-OverlayFingerprintShape -SceneId $smokeSceneId -FingerprintLine $overlayRecordRun.FingerprintsByWindow[$overlayWindowName]", StringComparison.Ordinal);
+        int premultipliedIndex = recordSource.IndexOf("Test-OverlayPremultiplied -Kind overlay -SceneId $smokeSceneId -ProbeName record", StringComparison.Ordinal);
         int recordGoldenIndex = recordSource.IndexOf("@('record-golden-rgba', $overlayRecordCapturePath, $overlayStagingGoldenPath)", StringComparison.Ordinal);
         int findProbesIndex = recordSource.IndexOf("@('find-probes', $overlayStagingGoldenPath)", StringComparison.Ordinal);
-        int transparentRunIndex = recordSource.IndexOf("-ProbeName transparent -Probe $overlayTransparentProbe -ExpectedClickThrough on", StringComparison.Ordinal);
-        int opaqueRunIndex = recordSource.IndexOf("-ProbeName opaque -Probe $overlayOpaqueProbe -ExpectedClickThrough off", StringComparison.Ordinal);
+        int transparentRunIndex = recordSource.IndexOf("-ProbeName transparent -Probe $overlayTransparentProbe -ExpectedClickThrough on -ExpectedExStyle '' -RecordMode", StringComparison.Ordinal);
+        int opaqueRunIndex = recordSource.IndexOf("-ProbeName opaque -Probe $overlayOpaqueProbe -ExpectedClickThrough off -ExpectedExStyle '' -RecordMode", StringComparison.Ordinal);
         int manifestEntryIndex = recordSource.IndexOf("kind = 'overlay'", StringComparison.Ordinal);
 
         Assert.True(recordRunIndex >= 0, "Record must run the overlay scenario once to record its golden.");
@@ -288,15 +382,20 @@ public sealed class RegressionScriptSourceTests {
         Assert.True(transparentRunIndex > findProbesIndex, "Record must run the transparent probe after finding the probes.");
         Assert.True(opaqueRunIndex > transparentRunIndex, "Record must run the opaque probe after the transparent probe.");
         Assert.True(manifestEntryIndex > opaqueRunIndex, "Record must add the overlay manifest entry after both probe runs.");
-        Assert.Contains("-RecordedFingerprintLine $overlayRecordRun.Fingerprint", recordSource, StringComparison.Ordinal);
         Assert.Contains("-GoldenPath $overlayStagingGoldenPath", recordSource, StringComparison.Ordinal);
+
+        string overlayScenarioSource = ReadFunctionSource(scriptSource, "Invoke-OverlayScenario");
+        Assert.Contains("[switch]$RecordMode", overlayScenarioSource, StringComparison.Ordinal);
+        Assert.Contains("Invoke-FingerprintHealthCheck -Name $fingerprintName", overlayScenarioSource, StringComparison.Ordinal);
+        Assert.Contains("Test-OverlayFingerprintShape", overlayScenarioSource, StringComparison.Ordinal);
     }
 
     /// <summary>
-    /// Ensures Verify reads the manifest's overlay entry, fails with a re-record request when the entry or any of its
-    /// probes or fingerprint fields is missing, and otherwise runs the transparent probe (clickThrough=on) and then the
-    /// opaque probe (clickThrough=off) against the committed overlay golden, compares each run's fingerprint exactly with
-    /// the recorded one, and writes the overlay diffs into the diffs folder it wipes at the start.
+    /// Ensures Verify reads the manifest's overlay entry, fails with a re-record request when the entry is missing, uses
+    /// the old single-fingerprint shape or lacks a probe, a recorded exStyle or a probe's fingerprint map, and otherwise
+    /// runs the transparent probe (clickThrough=on) and then the opaque probe (clickThrough=off) against the committed
+    /// overlay golden, each with its own recorded exStyle and fingerprint map, and writes the overlay diffs into the diffs
+    /// folder it wipes at the start.
     /// </summary>
     [Fact]
     public void RegressionScript_VerifiesTheOverlayScenarioFromTheManifest() {
@@ -304,8 +403,10 @@ public sealed class RegressionScriptSourceTests {
 
         Assert.Contains("-eq 'overlay'", scriptSource, StringComparison.Ordinal);
         Assert.Contains("overlay entry missing from manifest (re-record required)", scriptSource, StringComparison.Ordinal);
-        Assert.Contains("$null -eq $recordedOverlayScene.transparentProbe -or $null -eq $recordedOverlayScene.opaqueProbe -or $null -eq $recordedOverlayScene.fingerprint -or $null -eq $recordedOverlayScene.elapsedMs", scriptSource, StringComparison.Ordinal);
-        Assert.Contains("overlay entry lacks transparentProbe, opaqueProbe, fingerprint or elapsedMs (re-record required)", scriptSource, StringComparison.Ordinal);
+        Assert.Contains("$null -ne $recordedOverlayScene.PSObject.Properties['fingerprint']", scriptSource, StringComparison.Ordinal);
+        Assert.Contains("overlay entry uses the old single 'fingerprint' shape (re-record required)", scriptSource, StringComparison.Ordinal);
+        Assert.Contains("$null -eq $recordedOverlayScene.transparentProbe -or $null -eq $recordedOverlayScene.opaqueProbe -or $null -eq $recordedOverlayScene.transparentExStyle -or $null -eq $recordedOverlayScene.opaqueExStyle -or $null -eq $recordedOverlayScene.fingerprintsByProbe.transparent -or $null -eq $recordedOverlayScene.fingerprintsByProbe.opaque", scriptSource, StringComparison.Ordinal);
+        Assert.Contains("overlay entry lacks transparentProbe, opaqueProbe, transparentExStyle, opaqueExStyle or fingerprintsByProbe.transparent/opaque (re-record required)", scriptSource, StringComparison.Ordinal);
 
         int verifyIndex = scriptSource.IndexOf("# 11V.", StringComparison.Ordinal);
         Assert.True(verifyIndex >= 0, "The script must have a Verify branch.");
@@ -313,13 +414,94 @@ public sealed class RegressionScriptSourceTests {
 
         int diffsWipeIndex = verifySource.IndexOf("Remove-Item -LiteralPath $diffsRootPath -Recurse -Force", StringComparison.Ordinal);
         int overlayDiffIndex = verifySource.IndexOf("$overlayTransparentDiffPath = Join-Path $diffsRootPath", StringComparison.Ordinal);
-        int transparentRunIndex = verifySource.IndexOf("-ProbeName transparent -Probe \"$($recordedOverlayScene.transparentProbe)\" -ExpectedClickThrough on", StringComparison.Ordinal);
-        int opaqueRunIndex = verifySource.IndexOf("-ProbeName opaque -Probe \"$($recordedOverlayScene.opaqueProbe)\" -ExpectedClickThrough off", StringComparison.Ordinal);
+        int transparentRunIndex = verifySource.IndexOf("-ProbeName transparent -Probe \"$($recordedOverlayScene.transparentProbe)\" -ExpectedClickThrough on -ExpectedExStyle \"$($recordedOverlayScene.transparentExStyle)\"", StringComparison.Ordinal);
+        int opaqueRunIndex = verifySource.IndexOf("-ProbeName opaque -Probe \"$($recordedOverlayScene.opaqueProbe)\" -ExpectedClickThrough off -ExpectedExStyle \"$($recordedOverlayScene.opaqueExStyle)\"", StringComparison.Ordinal);
         Assert.True(diffsWipeIndex >= 0 && overlayDiffIndex > diffsWipeIndex, "Verify must write the overlay diffs into the diffs folder it wipes.");
         Assert.True(transparentRunIndex > overlayDiffIndex, "Verify must run the transparent probe.");
         Assert.True(opaqueRunIndex > transparentRunIndex, "Verify must run the opaque probe after the transparent probe.");
         Assert.Contains("-GoldenPath (Join-Path $goldenRootPath $overlayGoldenFileName)", verifySource, StringComparison.Ordinal);
-        Assert.Contains("-RecordedFingerprintLine (ConvertTo-RecordedFingerprintLine -RecordedScene $recordedOverlayScene)", verifySource, StringComparison.Ordinal);
+        Assert.Contains("-RecordedFingerprintsByWindow (ConvertTo-RecordedFingerprintsByWindow -RecordedFingerprints $recordedOverlayScene.fingerprintsByProbe.transparent)", verifySource, StringComparison.Ordinal);
+        Assert.Contains("-RecordedFingerprintsByWindow (ConvertTo-RecordedFingerprintsByWindow -RecordedFingerprints $recordedOverlayScene.fingerprintsByProbe.opaque)", verifySource, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// Ensures the overlay+idle scenario runs the smoke scene in the overlay window with the idle-throttle flags and the
+    /// recorded transparent probe, and checks it with check-idle, check-premultiplied, compare-rgba against the overlay
+    /// golden and an exact HIT_TEST (clickThrough=on, the recorded transparent exStyle) but never compares its
+    /// fingerprint; Record adds an overlayIdle entry with its fingerprints for reference, and Verify fails a manifest
+    /// without that entry and takes the check-idle minimums from the idle entry.
+    /// </summary>
+    [Fact]
+    public void RegressionScript_RunsTheOverlayIdleScenario() {
+        string scriptSource = ReadRegressionScriptSource();
+
+        string overlayIdleSource = ReadFunctionSource(scriptSource, "Invoke-OverlayIdleScenario");
+        Assert.Contains("Invoke-OverlayProbeRun -Kind overlayIdle -SceneId $SceneId -ProbeName transparent -Probe $Probe -CapturePath $CapturePath -DiffPath $DiffPath -ExtraArguments $script:idlePlayerArguments", overlayIdleSource, StringComparison.Ordinal);
+        Assert.Contains("Test-OverlayHitTest -Kind overlayIdle -SceneId $SceneId -ProbeName transparent -Probe $Probe -ExpectedClickThrough on -ExpectedExStyle $ExpectedExStyle", overlayIdleSource, StringComparison.Ordinal);
+        Assert.Contains("Test-IdleFingerprints -Kind overlayIdle", overlayIdleSource, StringComparison.Ordinal);
+        Assert.Contains("Test-OverlayPremultiplied -Kind overlayIdle", overlayIdleSource, StringComparison.Ordinal);
+        Assert.Contains("Test-CaptureMatchesGolden -Kind overlayIdle -SceneId $SceneId -CompareCommand compare-rgba", overlayIdleSource, StringComparison.Ordinal);
+        Assert.DoesNotContain("Compare-FingerprintsByWindow", overlayIdleSource, StringComparison.Ordinal);
+        Assert.DoesNotContain("Invoke-PlayerScene", overlayIdleSource, StringComparison.Ordinal);
+
+        int recordIndex = scriptSource.IndexOf("# 11R.", StringComparison.Ordinal);
+        int verifyIndex = scriptSource.IndexOf("# 11V.", StringComparison.Ordinal);
+        string recordSource = scriptSource.Substring(recordIndex, verifyIndex - recordIndex);
+        Assert.Contains("Invoke-OverlayIdleScenario -SceneId $smokeSceneId -Probe $overlayTransparentProbe -ExpectedExStyle $overlayTransparentResult.ExStyle", recordSource, StringComparison.Ordinal);
+        Assert.Contains("-MinimumIdleFrames $idleMinimumIdleFrames -MinimumElapsedMilliseconds $idleMinimumElapsedMilliseconds", recordSource, StringComparison.Ordinal);
+        Assert.Contains("kind = 'overlayIdle'; fingerprints = (ConvertTo-ManifestFingerprints -FingerprintsByWindow $overlayIdleFingerprintsByWindow)", recordSource, StringComparison.Ordinal);
+
+        string verifySource = scriptSource.Substring(verifyIndex);
+        Assert.Contains("-eq 'overlayIdle'", verifySource, StringComparison.Ordinal);
+        Assert.Contains("overlayIdle entry missing from manifest (re-record required)", verifySource, StringComparison.Ordinal);
+        Assert.Contains("Invoke-OverlayIdleScenario -SceneId $smokeSceneId -Probe \"$($recordedOverlayScene.transparentProbe)\" -ExpectedExStyle \"$($recordedOverlayScene.transparentExStyle)\"", verifySource, StringComparison.Ordinal);
+        Assert.Contains("-GoldenPath (Join-Path $goldenRootPath $overlayGoldenFileName) -MinimumIdleFrames \"$($recordedIdleScene.minIdleFrames)\" -MinimumElapsedMilliseconds \"$($recordedIdleScene.minElapsedMs)\"", verifySource, StringComparison.Ordinal);
+        int diffsWipeIndex = verifySource.IndexOf("Remove-Item -LiteralPath $diffsRootPath -Recurse -Force", StringComparison.Ordinal);
+        int overlayIdleDiffIndex = verifySource.IndexOf("$overlayIdleDiffPath = Join-Path $diffsRootPath", StringComparison.Ordinal);
+        Assert.True(diffsWipeIndex >= 0 && overlayIdleDiffIndex > diffsWipeIndex, "Verify must write the overlayIdle diff into the diffs folder it wipes.");
+    }
+
+    /// <summary>
+    /// Ensures the idle, overlay and overlay+idle scenarios share their launch and check logic instead of copying it:
+    /// check-idle is called in one function, the capture comparison in one function, and the overlay launches go through
+    /// one probe-run function.
+    /// </summary>
+    [Fact]
+    public void RegressionScript_SharesScenarioChecksInsteadOfCopyingThem() {
+        string scriptSource = ReadRegressionScriptSource();
+
+        Assert.Equal(1, CountOccurrences(scriptSource, "@('check-idle',"));
+        Assert.Equal(1, CountOccurrences(scriptSource, "@($CompareCommand, $CapturePath, $GoldenPath, $DiffPath)"));
+        Assert.Equal(1, CountOccurrences(scriptSource, "$script:overlayPlayerArguments + $ExtraArguments"));
+
+        string idleScenarioSource = ReadFunctionSource(scriptSource, "Invoke-IdleScenario");
+        Assert.Contains("Test-IdleFingerprints -Kind idle", idleScenarioSource, StringComparison.Ordinal);
+        Assert.Contains("Test-CaptureMatchesGolden -Kind idle -SceneId $SceneId -CompareCommand compare", idleScenarioSource, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// Ensures the regression README documents the per-window and per-probe fingerprints, the exStyle in HIT_TEST, the
+    /// overlay+idle scenario, the one-time migration of the manifest shape and the live-cursor blind spot.
+    /// </summary>
+    [Fact]
+    public void RegressionReadme_DocumentsPerWindowFingerprintsAndTheOverlayIdleScenario() {
+        string repositoryRootPath = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", ".."));
+        string readmeSource = File.ReadAllText(Path.Combine(repositoryRootPath, "regression", "README.md"));
+
+        Assert.Contains("## Overlay + idle scenario", readmeSource, StringComparison.Ordinal);
+        Assert.Contains("\"fingerprints\"", readmeSource, StringComparison.Ordinal);
+        Assert.Contains("fingerprintsByProbe", readmeSource, StringComparison.Ordinal);
+        Assert.Contains("transparentExStyle", readmeSource, StringComparison.Ordinal);
+        Assert.Contains("opaqueExStyle", readmeSource, StringComparison.Ordinal);
+        Assert.Contains("clickThrough=on exStyle=0x", readmeSource, StringComparison.Ordinal);
+        Assert.Contains("window missing", readmeSource, StringComparison.Ordinal);
+        Assert.Contains("window extra", readmeSource, StringComparison.Ordinal);
+        Assert.Contains("duplicate window", readmeSource, StringComparison.Ordinal);
+        Assert.Contains("overlayIdle entry missing from manifest (re-record required)", readmeSource, StringComparison.Ordinal);
+        Assert.Contains("uses the old single 'fingerprint' shape", readmeSource, StringComparison.Ordinal);
+        Assert.Contains("live cursor", readmeSource, StringComparison.Ordinal);
+        Assert.Contains("windowRect", readmeSource, StringComparison.Ordinal);
+        Assert.Contains("dpiAwareness", readmeSource, StringComparison.Ordinal);
     }
 
     /// <summary>
@@ -461,5 +643,23 @@ public sealed class RegressionScriptSourceTests {
         }
 
         return scriptSource.Substring(functionIndex, nextFunctionIndex - functionIndex);
+    }
+
+    /// <summary>
+    /// Counts the non-overlapping ordinal occurrences of a text in the script source, so a test can require that a piece
+    /// of logic exists in exactly one place.
+    /// </summary>
+    /// <param name="scriptSource">The full text of scripts/run-regression.ps1.</param>
+    /// <param name="text">The exact text to count.</param>
+    /// <returns>How many times the text occurs.</returns>
+    static int CountOccurrences(string scriptSource, string text) {
+        int count = 0;
+        int searchIndex = scriptSource.IndexOf(text, StringComparison.Ordinal);
+        while (searchIndex >= 0) {
+            count++;
+            searchIndex = scriptSource.IndexOf(text, searchIndex + text.Length, StringComparison.Ordinal);
+        }
+
+        return count;
     }
 }

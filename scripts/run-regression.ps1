@@ -12,10 +12,16 @@ Modes (exactly one is required):
               <WorkRoot>\record-staging first and copied into regression\golden and regression\baselines only when
               the whole record had no FAIL.
   -Verify     Builds, runs every scene once, checks that the smoke scene is not blank, compares every stable scene
-              with its golden and every scene's host fingerprint with the recorded one, runs the idle-throttle
-              scenario (see below), and compares each test suite's failing-test set and executed-test count with its
-              baseline. Prints one line per check, then RESULT: PASS or RESULT: FAIL (<n> failing), and exits 0 only
-              on PASS.
+              with its golden and every scene's host fingerprints with the recorded ones, runs the idle-throttle,
+              overlay and overlay+idle scenarios (see below), and compares each test suite's failing-test set and
+              executed-test count with its baseline. Prints one line per check, then RESULT: PASS or RESULT: FAIL
+              (<n> failing), and exits 0 only on PASS.
+
+Host fingerprints are kept per window: every HOST_FINGERPRINT line of a run's startup log is collected into a map keyed
+by its window=<tag> field (a run without a line, a line without a window tag or two lines for one window is a FAIL).
+The manifest stores that map as "fingerprints": { "<window>": { <fields>, "elapsedMs": <n> } }, and Verify fails a
+missing or an extra window by name before it compares every window's fields. A manifest entry in the older single
+"fingerprint" shape is a FAIL asking for a re-record.
 
 Record and Verify both run the opt-in idle-throttle scenario once on the smoke scene (30 frames with --idle-throttle on
 --idle-after-ms 1 --idle-fps 10): the run must pass the regression tool's check-idle command (throttle on, no Present
@@ -27,8 +33,16 @@ Record and Verify both run the opt-in overlay scenario on the smoke scene (30 fr
 --overlay-bounds profile --overlay-background transparent --hit-test-probe <x,y>). Record runs it once to record the
 alpha-preserving overlay golden (<smoke scene>.overlay.png), finds one fully transparent and one fully opaque probe
 pixel in that golden, then runs it once per probe. Verify runs it once per recorded probe. Every probe run must pass
-check-premultiplied (1% transparent, 1% opaque), match the overlay golden with compare-rgba, match the recorded host
-fingerprint exactly and log a HIT_TEST line with clickThrough=on (transparent probe) or clickThrough=off (opaque probe).
+check-premultiplied (1% transparent, 1% opaque), match the overlay golden with compare-rgba and log a HIT_TEST line
+"clickThrough=on exStyle=0x<8 hex>" with WS_EX_TRANSPARENT (0x20) set (transparent probe) or "clickThrough=off
+exStyle=0x<8 hex>" with it cleared (opaque probe). Record stores each probe's observed exStyle (transparentExStyle,
+opaqueExStyle) and host fingerprints (fingerprintsByProbe.transparent, fingerprintsByProbe.opaque); Verify requires the
+exact exStyle and compares each probe run's fingerprints with its own probe's record.
+
+Record and Verify both run the opt-in overlay+idle scenario once on the smoke scene: the overlay flags plus the
+idle-throttle flags and the transparent probe. It must pass check-idle with the idle entry's minimums,
+check-premultiplied and compare-rgba against the overlay golden, and log HIT_TEST clickThrough=on with the transparent
+probe's exStyle. Its fingerprints are recorded in the overlayIdle entry for reference but never compared.
 
 Every scene run is limited to 120 seconds; a hung player is killed and reported as FAIL scene <id> timeout.
 The work root is marked with a .helengine-regression-workroot file; a non-empty folder without it is refused.
@@ -71,7 +85,8 @@ if ($selectedModeCount -ne 1) {
 }
 
 # The functions below read these script-level values: $RepoRoot, $WorkRoot, $utf8WithoutBom, $CheckResults,
-# $playerOutputPath, $playerExecutablePath, $regressionToolPath, $idlePlayerArguments and $overlayPlayerArguments. Progress lines use Write-Host
+# $playerOutputPath, $playerExecutablePath, $regressionToolPath, $idlePlayerArguments and $overlayPlayerArguments.
+# Check lines and progress lines use Write-Host
 # so that they never become part of a function's return value.
 
 <#
@@ -153,14 +168,15 @@ Rewrites the player's profile.json first (a profile left by an earlier run would
 window), creates the capture folder (the player's BMP writer does not create folders) and deletes any capture and
 startup log left by an earlier run so that a stale file is never checked. The launcher kills a run that takes longer
 than 120 seconds. On a timeout or a non-zero exit code it prints the tail of the startup log. After the run it reads
-the player's HOST_FINGERPRINT and HIT_TEST lines from the startup log. FrameCount (default '30', the frame every golden
+every HOST_FINGERPRINT line and the HIT_TEST line from the startup log. FrameCount (default '30', the frame every golden
 is captured at) and ExtraArguments (default none; the idle scenario passes the idle-throttle flags and the overlay
-scenario the overlay window flags plus one --hit-test-probe) extend the player's fixed arguments.
+scenarios the overlay window flags plus one --hit-test-probe) extend the player's fixed arguments.
 .OUTPUTS
 A [pscustomobject] with TimedOut (whether the launcher killed the run), ExitCode (the player's exit code; $null on a
-timeout), CaptureExists (whether the capture file was written), Fingerprint (the HOST_FINGERPRINT line without the
-log prefix, or $null when the log has none) and HitTest (the HIT_TEST line of a --hit-test-probe run without the log
-prefix, or $null when the log has none).
+timeout), CaptureExists (whether the capture file was written), FingerprintsByWindow (every HOST_FINGERPRINT line,
+without the log prefix, keyed by its window tag; see Get-FingerprintsByWindow), FingerprintProblem ($null, or why the
+fingerprint lines cannot be used) and HitTest (the HIT_TEST line of a --hit-test-probe run without the log prefix, or
+$null when the log has none).
 #>
 function Invoke-PlayerScene {
     param(
@@ -219,27 +235,65 @@ function Invoke-PlayerScene {
         }
     }
 
-    $fingerprintLine = $null
+    $fingerprintLines = New-Object System.Collections.Generic.List[string]
     $hitTestLine = $null
     if (Test-Path -LiteralPath $startupLogPath -PathType Leaf) {
         foreach ($startupLogLine in (Get-Content -LiteralPath $startupLogPath)) {
             if ("$startupLogLine" -match '(HOST_FINGERPRINT .+)$') {
-                $fingerprintLine = $Matches[1]
+                $fingerprintLines.Add($Matches[1])
             }
             elseif ("$startupLogLine" -match '(HIT_TEST .+)$') {
                 $hitTestLine = $Matches[1]
             }
         }
     }
+    $fingerprintCollection = Get-FingerprintsByWindow -FingerprintLines $fingerprintLines.ToArray()
 
-    return [pscustomobject]@{ TimedOut = $timedOut; ExitCode = $playerExitCode; CaptureExists = (Test-Path -LiteralPath $CapturePath -PathType Leaf); Fingerprint = $fingerprintLine; HitTest = $hitTestLine }
+    return [pscustomobject]@{ TimedOut = $timedOut; ExitCode = $playerExitCode; CaptureExists = (Test-Path -LiteralPath $CapturePath -PathType Leaf); FingerprintsByWindow = $fingerprintCollection.FingerprintsByWindow; FingerprintProblem = $fingerprintCollection.Problem; HitTest = $hitTestLine }
 }
 
 <#
 .SYNOPSIS
-Records a FAIL for a scene run that timed out, did not exit cleanly, wrote no capture or logged no host fingerprint.
+Collects a run's HOST_FINGERPRINT lines into an ordered map keyed by each line's window=<tag> field.
+.DESCRIPTION
+The player writes one HOST_FINGERPRINT line per window it presented (today only "main"). The map keeps the lines in
+log order and compares window tags case-sensitively. The lines cannot be used, and Problem says why, when there is no
+line at all, when a line has no window field (a player that predates per-window fingerprints) or when two lines carry
+the same window tag.
 .OUTPUTS
-$true when the run succeeded and its capture and fingerprint can be checked; otherwise $false, after recording a FAIL.
+A [pscustomobject] with FingerprintsByWindow (an OrderedDictionary from window tag to the full HOST_FINGERPRINT line)
+and Problem ($null when the lines are usable, otherwise the FAIL detail).
+#>
+function Get-FingerprintsByWindow {
+    param(
+        [Parameter(Mandatory = $true)]
+        [AllowEmptyCollection()]
+        [string[]]$FingerprintLines
+    )
+
+    $fingerprintsByWindow = New-Object System.Collections.Specialized.OrderedDictionary
+    if ($FingerprintLines.Count -eq 0) {
+        return [pscustomobject]@{ FingerprintsByWindow = $fingerprintsByWindow; Problem = 'missing: the startup log has no HOST_FINGERPRINT line' }
+    }
+    foreach ($fingerprintLine in $FingerprintLines) {
+        if ($fingerprintLine -cnotmatch '(?:^| )window=(\S+)(?: |$)') {
+            return [pscustomobject]@{ FingerprintsByWindow = $fingerprintsByWindow; Problem = "HOST_FINGERPRINT line has no window field (rebuild the player): $fingerprintLine" }
+        }
+        $windowName = $Matches[1]
+        if ($fingerprintsByWindow.Contains($windowName)) {
+            return [pscustomobject]@{ FingerprintsByWindow = $fingerprintsByWindow; Problem = "duplicate window '$windowName': the startup log has more than one HOST_FINGERPRINT line for it" }
+        }
+        $fingerprintsByWindow[$windowName] = $fingerprintLine
+    }
+    return [pscustomobject]@{ FingerprintsByWindow = $fingerprintsByWindow; Problem = $null }
+}
+
+<#
+.SYNOPSIS
+Records a FAIL for a scene run that timed out, did not exit cleanly, wrote no capture or logged no usable host
+fingerprints (none at all, a line without a window tag or a duplicate window tag).
+.OUTPUTS
+$true when the run succeeded and its capture and fingerprints can be checked; otherwise $false, after recording a FAIL.
 #>
 function Test-PlayerRunSucceeded {
     param(
@@ -268,8 +322,8 @@ function Test-PlayerRunSucceeded {
         Add-CheckResult -Status FAIL -Kind $Kind -Name $SceneId -Detail "capture missing: $CapturePath"
         return $false
     }
-    if ($null -eq $PlayerRun.Fingerprint) {
-        Add-CheckResult -Status FAIL -Kind fingerprint -Name $SceneId -Detail 'missing: the startup log has no HOST_FINGERPRINT line'
+    if ($null -ne $PlayerRun.FingerprintProblem) {
+        Add-CheckResult -Status FAIL -Kind fingerprint -Name $SceneId -Detail $PlayerRun.FingerprintProblem
         return $false
     }
     return $true
@@ -314,15 +368,175 @@ function Invoke-FingerprintCheck {
 
 <#
 .SYNOPSIS
+Checks every window's fingerprint of one run on its own with the regression tool's check-fingerprint command.
+.DESCRIPTION
+Each window is checked under the name <Name>@<window> (for example axis_test@main), so a finding always names the
+window it belongs to. The run must have presented at least once per frame with no Present failures in every window.
+#>
+function Invoke-FingerprintHealthCheck {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Name,
+
+        [Parameter(Mandatory = $true)]
+        [System.Collections.Specialized.OrderedDictionary]$FingerprintsByWindow,
+
+        [Parameter(Mandatory = $true)]
+        [string]$PassDetail
+    )
+
+    foreach ($windowName in $FingerprintsByWindow.Keys) {
+        Invoke-FingerprintCheck -SceneId "$Name@$windowName" -ToolArguments @('check-fingerprint', "$Name@$windowName", $FingerprintsByWindow[$windowName]) -PassDetail $PassDetail
+    }
+}
+
+<#
+.SYNOPSIS
+Compares a run's per-window fingerprints with recorded ones: the window sets must be equal and every window's fields
+must match.
+.DESCRIPTION
+A recorded window the run did not log is "FAIL fingerprint <Name>@<window> window missing ...", and a window the run
+logged but the record does not have is "FAIL fingerprint <Name>@<window> window extra ...". Every window present on both
+sides goes through compare-fingerprint under the name <Name>@<window>, which fails each differing field and keeps the
+coarse pacing WARN on that window's elapsedMs.
+#>
+function Compare-FingerprintsByWindow {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Name,
+
+        [Parameter(Mandatory = $true)]
+        [System.Collections.Specialized.OrderedDictionary]$RecordedFingerprintsByWindow,
+
+        [Parameter(Mandatory = $true)]
+        [System.Collections.Specialized.OrderedDictionary]$ActualFingerprintsByWindow,
+
+        [Parameter(Mandatory = $true)]
+        [string]$PassDetail
+    )
+
+    foreach ($windowName in $RecordedFingerprintsByWindow.Keys) {
+        if (-not $ActualFingerprintsByWindow.Contains($windowName)) {
+            Add-CheckResult -Status FAIL -Kind fingerprint -Name "$Name@$windowName" -Detail "window missing: the record has window '$windowName' but the run logged no HOST_FINGERPRINT line for it"
+        }
+        else {
+            Invoke-FingerprintCheck -SceneId "$Name@$windowName" -ToolArguments @('compare-fingerprint', "$Name@$windowName", $RecordedFingerprintsByWindow[$windowName], $ActualFingerprintsByWindow[$windowName]) -PassDetail $PassDetail
+        }
+    }
+    foreach ($windowName in $ActualFingerprintsByWindow.Keys) {
+        if (-not $RecordedFingerprintsByWindow.Contains($windowName)) {
+            Add-CheckResult -Status FAIL -Kind fingerprint -Name "$Name@$windowName" -Detail "window extra: the run logged window '$windowName', which the record does not have"
+        }
+    }
+}
+
+<#
+.SYNOPSIS
+Runs the regression tool's check-idle command on every window's fingerprint of an idle-throttle run and records one
+check line per window.
+.DESCRIPTION
+Each window must report the idle throttle on, no Present failures, at least MinimumIdleFrames idle frames and at least
+MinimumElapsedMilliseconds elapsed. The check lines are "<PASS|FAIL> <Kind> <scene> window <window>: <detail>".
+#>
+function Test-IdleFingerprints {
+    param(
+        [Parameter(Mandatory = $true)]
+        [ValidateSet('idle', 'overlayIdle')]
+        [string]$Kind,
+
+        [Parameter(Mandatory = $true)]
+        [string]$SceneId,
+
+        [Parameter(Mandatory = $true)]
+        [System.Collections.Specialized.OrderedDictionary]$FingerprintsByWindow,
+
+        [Parameter(Mandatory = $true)]
+        [string]$MinimumIdleFrames,
+
+        [Parameter(Mandatory = $true)]
+        [string]$MinimumElapsedMilliseconds
+    )
+
+    foreach ($windowName in $FingerprintsByWindow.Keys) {
+        $checkIdleRun = Invoke-RegressionTool -ToolArguments @('check-idle', $FingerprintsByWindow[$windowName], $MinimumIdleFrames, $MinimumElapsedMilliseconds)
+        if ($checkIdleRun.ExitCode -eq 0 -and "$($checkIdleRun.Lines -join ' ')" -match '^PASS (.+)$') {
+            Add-CheckResult -Status PASS -Kind $Kind -Name $SceneId -Detail "window ${windowName}: $($Matches[1])"
+        }
+        elseif ($checkIdleRun.ExitCode -eq 1) {
+            foreach ($checkIdleLine in $checkIdleRun.Lines) {
+                if ("$checkIdleLine" -notmatch '^FAIL (.+)$') {
+                    throw "The regression tool printed an unexpected check-idle line for scene '$SceneId': $checkIdleLine"
+                }
+                Add-CheckResult -Status FAIL -Kind $Kind -Name $SceneId -Detail "window ${windowName}: $($Matches[1])"
+            }
+        }
+        else {
+            Add-CheckResult -Status FAIL -Kind $Kind -Name $SceneId -Detail "window ${windowName}: $($checkIdleRun.Lines -join ' ')"
+        }
+    }
+}
+
+<#
+.SYNOPSIS
+Compares a capture with a golden through the regression tool and records one check line.
+.DESCRIPTION
+CompareCommand is "compare" for opaque goldens (alpha is ignored) or "compare-rgba" for the alpha-preserving overlay
+golden. A missing golden is a FAIL. The detail reads "<Description> matches <GoldenLabel>: <tool output>" or
+"<Description> differs from <GoldenLabel>: <tool output>"; on a difference the tool writes DiffPath.
+#>
+function Test-CaptureMatchesGolden {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Kind,
+
+        [Parameter(Mandatory = $true)]
+        [string]$SceneId,
+
+        [Parameter(Mandatory = $true)]
+        [ValidateSet('compare', 'compare-rgba')]
+        [string]$CompareCommand,
+
+        [Parameter(Mandatory = $true)]
+        [string]$CapturePath,
+
+        [Parameter(Mandatory = $true)]
+        [string]$GoldenPath,
+
+        [Parameter(Mandatory = $true)]
+        [string]$DiffPath,
+
+        [Parameter(Mandatory = $true)]
+        [string]$Description,
+
+        [Parameter(Mandatory = $true)]
+        [string]$GoldenLabel
+    )
+
+    if (-not (Test-Path -LiteralPath $GoldenPath -PathType Leaf)) {
+        Add-CheckResult -Status FAIL -Kind $Kind -Name $SceneId -Detail "$GoldenLabel missing: $GoldenPath"
+        return
+    }
+    $compareRun = Invoke-RegressionTool -ToolArguments @($CompareCommand, $CapturePath, $GoldenPath, $DiffPath)
+    $compareDetail = $compareRun.Lines -join ' '
+    if ($compareRun.ExitCode -eq 0) {
+        Add-CheckResult -Status PASS -Kind $Kind -Name $SceneId -Detail "$Description matches ${GoldenLabel}: $compareDetail"
+    }
+    else {
+        Add-CheckResult -Status FAIL -Kind $Kind -Name $SceneId -Detail "$Description differs from ${GoldenLabel}: $compareDetail"
+    }
+}
+
+<#
+.SYNOPSIS
 Runs the opt-in idle-throttle scenario once on a scene and records its checks as "idle" check lines.
 .DESCRIPTION
 Launches the player with the fixed 30-frame arguments plus the idle-throttle flags ($script:idlePlayerArguments), then
-runs the regression tool's check-idle command on the run's HOST_FINGERPRINT line (idle throttle on, no Present
+runs the regression tool's check-idle command on every window's HOST_FINGERPRINT line (idle throttle on, no Present
 failures, at least MinimumIdleFrames idle frames and MinimumElapsedMilliseconds elapsed) and
 compares the capture with the scene's golden, because throttling must never change what a frame renders. The
-fingerprint is deliberately not compared with a recorded one: its idle and active frame counts and its elapsed time
-differ from a normal run by design. When GoldenPath is empty the scene has no golden (it was recorded unstable), so the
-capture comparison is reported as SKIP.
+fingerprints are deliberately not compared with recorded ones: their idle and active frame counts and their elapsed
+time differ from a normal run by design. When GoldenPath is empty the scene has no golden (it was recorded unstable),
+so the capture comparison is reported as SKIP.
 #>
 function Invoke-IdleScenario {
     param(
@@ -355,38 +569,13 @@ function Invoke-IdleScenario {
         return
     }
 
-    $checkIdleRun = Invoke-RegressionTool -ToolArguments @('check-idle', $idleRun.Fingerprint, $MinimumIdleFrames, $MinimumElapsedMilliseconds)
-    if ($checkIdleRun.ExitCode -eq 0 -and "$($checkIdleRun.Lines -join ' ')" -match '^PASS (.+)$') {
-        Add-CheckResult -Status PASS -Kind idle -Name $SceneId -Detail $Matches[1]
-    }
-    elseif ($checkIdleRun.ExitCode -eq 1) {
-        foreach ($checkIdleLine in $checkIdleRun.Lines) {
-            if ("$checkIdleLine" -notmatch '^FAIL (.+)$') {
-                throw "The regression tool printed an unexpected check-idle line for scene '$SceneId': $checkIdleLine"
-            }
-            Add-CheckResult -Status FAIL -Kind idle -Name $SceneId -Detail $Matches[1]
-        }
-    }
-    else {
-        Add-CheckResult -Status FAIL -Kind idle -Name $SceneId -Detail ($checkIdleRun.Lines -join ' ')
-    }
+    Test-IdleFingerprints -Kind idle -SceneId $SceneId -FingerprintsByWindow $idleRun.FingerprintsByWindow -MinimumIdleFrames $MinimumIdleFrames -MinimumElapsedMilliseconds $MinimumElapsedMilliseconds
 
     if ($GoldenPath.Length -eq 0) {
         Add-CheckResult -Status SKIP -Kind idle -Name $SceneId -Detail 'capture not compared: the scene has no golden (unstable)'
         return
     }
-    if (-not (Test-Path -LiteralPath $GoldenPath -PathType Leaf)) {
-        Add-CheckResult -Status FAIL -Kind idle -Name $SceneId -Detail "golden missing: $GoldenPath"
-        return
-    }
-    $compareRun = Invoke-RegressionTool -ToolArguments @('compare', $CapturePath, $GoldenPath, $DiffPath)
-    $compareDetail = $compareRun.Lines -join ' '
-    if ($compareRun.ExitCode -eq 0) {
-        Add-CheckResult -Status PASS -Kind idle -Name $SceneId -Detail "capture matches golden: $compareDetail"
-    }
-    else {
-        Add-CheckResult -Status FAIL -Kind idle -Name $SceneId -Detail "capture differs from golden: $compareDetail"
-    }
+    Test-CaptureMatchesGolden -Kind idle -SceneId $SceneId -CompareCommand compare -CapturePath $CapturePath -GoldenPath $GoldenPath -DiffPath $DiffPath -Description 'capture' -GoldenLabel 'golden'
 }
 
 <#
@@ -414,23 +603,57 @@ function ConvertTo-FingerprintFields {
 
 <#
 .SYNOPSIS
-Rebuilds a recorded HOST_FINGERPRINT line from a manifest entry's fingerprint fields (in their recorded order) plus its
-elapsedMs, so that the regression tool's compare-fingerprint command can compare it with a run's line.
+Turns a run's per-window fingerprint lines into the manifest's "fingerprints" value.
+.DESCRIPTION
+Each window becomes an object of its fields in the order the player wrote them, ending with elapsedMs, which is stored
+as a number (it is only a pacing signal, never compared exactly). A line without elapsedMs cannot be recorded and
+throws; Record's check-fingerprint has already failed such a line.
 .OUTPUTS
-The "name=value name=value ... elapsedMs=<n>" line (without the HOST_FINGERPRINT marker).
+An OrderedDictionary from window tag to that window's ordered fields.
 #>
-function ConvertTo-RecordedFingerprintLine {
+function ConvertTo-ManifestFingerprints {
     param(
         [Parameter(Mandatory = $true)]
-        [pscustomobject]$RecordedScene
+        [System.Collections.Specialized.OrderedDictionary]$FingerprintsByWindow
     )
 
-    $recordedFingerprintTokens = New-Object System.Collections.Generic.List[string]
-    foreach ($recordedFingerprintField in $RecordedScene.fingerprint.PSObject.Properties) {
-        $recordedFingerprintTokens.Add("$($recordedFingerprintField.Name)=$($recordedFingerprintField.Value)")
+    $manifestFingerprints = New-Object System.Collections.Specialized.OrderedDictionary
+    foreach ($windowName in $FingerprintsByWindow.Keys) {
+        $windowFields = ConvertTo-FingerprintFields -FingerprintLine $FingerprintsByWindow[$windowName]
+        if (-not $windowFields.Contains('elapsedMs')) {
+            throw "Host fingerprint of window '$windowName' has no elapsedMs field: $($FingerprintsByWindow[$windowName])"
+        }
+        $windowFields['elapsedMs'] = [long]$windowFields['elapsedMs']
+        $manifestFingerprints[$windowName] = $windowFields
     }
-    $recordedFingerprintTokens.Add("elapsedMs=$($RecordedScene.elapsedMs)")
-    return ($recordedFingerprintTokens -join ' ')
+    return $manifestFingerprints
+}
+
+<#
+.SYNOPSIS
+Rebuilds the recorded HOST_FINGERPRINT line of every window from a manifest "fingerprints" value, so that the
+regression tool's compare-fingerprint command can compare each one with a run's line.
+.DESCRIPTION
+Every window's fields are joined in their recorded order (elapsedMs, recorded last, included), as
+"name=value name=value ... elapsedMs=<n>" without the HOST_FINGERPRINT marker.
+.OUTPUTS
+An OrderedDictionary from window tag to the rebuilt line, in the manifest's window order.
+#>
+function ConvertTo-RecordedFingerprintsByWindow {
+    param(
+        [Parameter(Mandatory = $true)]
+        [pscustomobject]$RecordedFingerprints
+    )
+
+    $recordedFingerprintsByWindow = New-Object System.Collections.Specialized.OrderedDictionary
+    foreach ($recordedWindow in $RecordedFingerprints.PSObject.Properties) {
+        $recordedFingerprintTokens = New-Object System.Collections.Generic.List[string]
+        foreach ($recordedFingerprintField in $recordedWindow.Value.PSObject.Properties) {
+            $recordedFingerprintTokens.Add("$($recordedFingerprintField.Name)=$($recordedFingerprintField.Value)")
+        }
+        $recordedFingerprintsByWindow[$recordedWindow.Name] = ($recordedFingerprintTokens -join ' ')
+    }
+    return $recordedFingerprintsByWindow
 }
 
 <#
@@ -470,7 +693,8 @@ function Test-OverlayFingerprintShape {
 
 <#
 .SYNOPSIS
-Runs the regression tool's check-premultiplied command on an overlay capture and records one "overlay" check line.
+Runs the regression tool's check-premultiplied command on an overlay capture and records one check line of Kind
+(overlay or overlayIdle).
 .DESCRIPTION
 The capture is read with its real alpha: every pixel must have B, G and R at most A (valid premultiplied alpha), at
 least 1% of the pixels must be fully transparent (the transparent background exists) and at least 1% fully opaque.
@@ -478,6 +702,10 @@ ProbeName (record, transparent or opaque) names the run in the check line.
 #>
 function Test-OverlayPremultiplied {
     param(
+        [Parameter(Mandatory = $true)]
+        [ValidateSet('overlay', 'overlayIdle')]
+        [string]$Kind,
+
         [Parameter(Mandatory = $true)]
         [string]$SceneId,
 
@@ -491,25 +719,37 @@ function Test-OverlayPremultiplied {
     $premultipliedRun = Invoke-RegressionTool -ToolArguments @('check-premultiplied', $CapturePath, '0.01', '0.01')
     $premultipliedDetail = $premultipliedRun.Lines -join ' '
     if ($premultipliedRun.ExitCode -eq 0) {
-        Add-CheckResult -Status PASS -Kind overlay -Name $SceneId -Detail "$ProbeName run premultiplied: $premultipliedDetail"
+        Add-CheckResult -Status PASS -Kind $Kind -Name $SceneId -Detail "$ProbeName run premultiplied: $premultipliedDetail"
     }
     else {
-        Add-CheckResult -Status FAIL -Kind overlay -Name $SceneId -Detail "$ProbeName run premultiplied: $premultipliedDetail"
+        Add-CheckResult -Status FAIL -Kind $Kind -Name $SceneId -Detail "$ProbeName run premultiplied: $premultipliedDetail"
     }
 }
 
 <#
 .SYNOPSIS
-Checks an overlay probe run's HIT_TEST line and records one "overlay" check line.
+Checks an overlay probe run's HIT_TEST line exactly, including the window's extended style, and records one check line
+of Kind (overlay or overlayIdle).
 .DESCRIPTION
-The player logs "HIT_TEST x=<x> y=<y> alpha=<a> clickThrough=<on|off>" after the last frame of a --hit-test-probe run.
+The player logs "HIT_TEST x=<x> y=<y> alpha=<a> clickThrough=<on|off> exStyle=0x<8 upper-case hex digits>" after the
+last frame of a --hit-test-probe run, where exStyle is GWL_EXSTYLE read back after the probe's click-through toggle.
 The line must name the probe's coordinates and report the expected click-through state: on for the transparent probe
-(the sampled alpha is below 8) and off for the opaque probe. A missing line (an empty HitTestLine) is a FAIL, and so
-is a Probe that is not "x,y" with base-10 coordinates (re-record required); the coordinates are regex-escaped in the
+(the sampled alpha is below 8) and off for the opaque probe. WS_EX_TRANSPARENT (0x20) must be set in exStyle for
+clickThrough=on and cleared for clickThrough=off, which proves the toggle really changed the window style. When
+ExpectedExStyle is given (Verify, and the overlay+idle run) exStyle must also equal it exactly; when it is empty
+(Record's probe runs) any exStyle that passes the bit rule is accepted and returned for the manifest.
+A missing line (an empty HitTestLine) is a FAIL, and so is a Probe that is not "x,y" with base-10 coordinates or an
+ExpectedExStyle that is not 0x<8 upper-case hex digits (re-record required); the coordinates are regex-escaped in the
 expected pattern.
+.OUTPUTS
+The observed exStyle text (for example 0x002800A8) when the check passed; otherwise $null, after recording a FAIL.
 #>
 function Test-OverlayHitTest {
     param(
+        [Parameter(Mandatory = $true)]
+        [ValidateSet('overlay', 'overlayIdle')]
+        [string]$Kind,
+
         [Parameter(Mandatory = $true)]
         [string]$SceneId,
 
@@ -525,40 +765,121 @@ function Test-OverlayHitTest {
 
         [Parameter(Mandatory = $true)]
         [AllowEmptyString()]
+        [string]$ExpectedExStyle,
+
+        [Parameter(Mandatory = $true)]
+        [AllowEmptyString()]
         [string]$HitTestLine
     )
 
     if ($HitTestLine.Length -eq 0) {
-        Add-CheckResult -Status FAIL -Kind overlay -Name $SceneId -Detail "$ProbeName probe ${Probe}: the startup log has no HIT_TEST line"
-        return
+        Add-CheckResult -Status FAIL -Kind $Kind -Name $SceneId -Detail "$ProbeName probe ${Probe}: the startup log has no HIT_TEST line"
+        return $null
     }
     # The probe text goes into the expected pattern, so it must be two base-10 coordinates; the coordinates are also
     # escaped so that the pattern can only ever match them literally.
     if ($Probe -notmatch '^\d+,\d+$') {
-        Add-CheckResult -Status FAIL -Kind overlay -Name $SceneId -Detail "$ProbeName probe '$Probe' is not x,y (re-record required)"
-        return
+        Add-CheckResult -Status FAIL -Kind $Kind -Name $SceneId -Detail "$ProbeName probe '$Probe' is not x,y (re-record required)"
+        return $null
+    }
+    if ($ExpectedExStyle.Length -gt 0 -and $ExpectedExStyle -cnotmatch '^0x[0-9A-F]{8}$') {
+        Add-CheckResult -Status FAIL -Kind $Kind -Name $SceneId -Detail "$ProbeName recorded exStyle '$ExpectedExStyle' is not 0x<8 upper-case hex digits> (re-record required)"
+        return $null
     }
     $probeCoordinates = $Probe.Split(',')
-    $expectedHitTestPattern = "^HIT_TEST x=$([regex]::Escape($probeCoordinates[0])) y=$([regex]::Escape($probeCoordinates[1])) alpha=\d+ clickThrough=$ExpectedClickThrough$"
-    if ($HitTestLine -cmatch $expectedHitTestPattern) {
-        Add-CheckResult -Status PASS -Kind overlay -Name $SceneId -Detail "$ProbeName probe: $HitTestLine"
+    $expectedHitTestPattern = "^HIT_TEST x=$([regex]::Escape($probeCoordinates[0])) y=$([regex]::Escape($probeCoordinates[1])) alpha=\d+ clickThrough=$ExpectedClickThrough exStyle=(0x[0-9A-F]{8})$"
+    if ($HitTestLine -cnotmatch $expectedHitTestPattern) {
+        Add-CheckResult -Status FAIL -Kind $Kind -Name $SceneId -Detail "$ProbeName probe ${Probe} expected clickThrough=${ExpectedClickThrough} exStyle=0x<8 hex digits>: $HitTestLine"
+        return $null
     }
-    else {
-        Add-CheckResult -Status FAIL -Kind overlay -Name $SceneId -Detail "$ProbeName probe ${Probe} expected clickThrough=${ExpectedClickThrough}: $HitTestLine"
+    $observedExStyle = $Matches[1]
+    $transparentBitSet = ([System.Convert]::ToInt64($observedExStyle.Substring(2), 16) -band 0x20) -ne 0
+    if ($transparentBitSet -ne ($ExpectedClickThrough -eq 'on')) {
+        Add-CheckResult -Status FAIL -Kind $Kind -Name $SceneId -Detail "$ProbeName probe clickThrough=${ExpectedClickThrough} requires WS_EX_TRANSPARENT (0x20) to be $(if ($ExpectedClickThrough -eq 'on') { 'set' } else { 'cleared' }): $HitTestLine"
+        return $null
     }
+    if ($ExpectedExStyle.Length -gt 0 -and $observedExStyle -cne $ExpectedExStyle) {
+        Add-CheckResult -Status FAIL -Kind $Kind -Name $SceneId -Detail "$ProbeName probe exStyle recorded=$ExpectedExStyle actual=${observedExStyle}: $HitTestLine"
+        return $null
+    }
+    Add-CheckResult -Status PASS -Kind $Kind -Name $SceneId -Detail "$ProbeName probe: $HitTestLine"
+    return $observedExStyle
+}
+
+<#
+.SYNOPSIS
+Launches one overlay probe run of the smoke scene and checks that it ran: the launch shared by the overlay and
+overlay+idle scenarios.
+.DESCRIPTION
+Deletes a diff image left by an earlier run (so it is never mistaken for this run's), validates the probe and launches
+the player with the fixed 30-frame arguments plus the overlay window flags ($script:overlayPlayerArguments),
+ExtraArguments (none for the overlay scenario, the idle-throttle flags for the overlay+idle scenario) and
+--hit-test-probe <Probe>. A Probe that is not "x,y" with base-10 coordinates is a FAIL (re-record required) and the
+player is not launched. A run that timed out, exited non-zero, wrote no capture or logged no usable fingerprints is a
+FAIL (see Test-PlayerRunSucceeded). All check lines use Kind.
+.OUTPUTS
+The run (see Invoke-PlayerScene) when it can be checked; otherwise $null, after recording a FAIL.
+#>
+function Invoke-OverlayProbeRun {
+    param(
+        [Parameter(Mandatory = $true)]
+        [ValidateSet('overlay', 'overlayIdle')]
+        [string]$Kind,
+
+        [Parameter(Mandatory = $true)]
+        [string]$SceneId,
+
+        [Parameter(Mandatory = $true)]
+        [ValidateSet('transparent', 'opaque')]
+        [string]$ProbeName,
+
+        [Parameter(Mandatory = $true)]
+        [string]$Probe,
+
+        [Parameter(Mandatory = $true)]
+        [string]$CapturePath,
+
+        [Parameter(Mandatory = $true)]
+        [string]$DiffPath,
+
+        [Parameter(Mandatory = $true)]
+        [AllowEmptyCollection()]
+        [string[]]$ExtraArguments
+    )
+
+    # A diff image left by an earlier run must never be mistaken for this run's, so it is deleted before the run.
+    if (Test-Path -LiteralPath $DiffPath -PathType Leaf) {
+        Remove-Item -LiteralPath $DiffPath -Force
+    }
+    # The probe comes from the manifest (Verify) or find-probes (Record) and is passed to the player as
+    # --hit-test-probe, so anything but two base-10 coordinates means the record is damaged: a FAIL, never a launch.
+    if ($Probe -notmatch '^\d+,\d+$') {
+        Add-CheckResult -Status FAIL -Kind $Kind -Name $SceneId -Detail "$ProbeName probe '$Probe' is not x,y (re-record required)"
+        return $null
+    }
+    $overlayRun = Invoke-PlayerScene -SceneId $SceneId -CapturePath $CapturePath -ExtraArguments ($script:overlayPlayerArguments + $ExtraArguments + @('--hit-test-probe', $Probe))
+    if (-not (Test-PlayerRunSucceeded -PlayerRun $overlayRun -Kind $Kind -SceneId $SceneId -CapturePath $CapturePath)) {
+        return $null
+    }
+    return $overlayRun
 }
 
 <#
 .SYNOPSIS
 Runs the opt-in overlay scenario once on a scene with one hit-test probe and records its checks as "overlay" check lines.
 .DESCRIPTION
-Launches the player with the fixed 30-frame arguments plus the overlay window flags ($script:overlayPlayerArguments)
-and --hit-test-probe <Probe>. The run must exit 0; its HIT_TEST line must report ExpectedClickThrough at the probe; its
-capture, read with alpha, must pass check-premultiplied and match the overlay golden with compare-rgba (the
-four-channel comparison; the opaque-forcing compare is never used on an overlay capture); and its fingerprint must
-match RecordedFingerprintLine field for field through compare-fingerprint. Fingerprint lines are reported under the
-name <scene>.overlay.<probe name>, so that they are never confused with the scene's normal-run fingerprint lines. A
-Probe that is not "x,y" with base-10 coordinates is a FAIL (re-record required) and the player is not launched.
+Launches the player through Invoke-OverlayProbeRun (overlay window flags and --hit-test-probe <Probe>). The run's
+HIT_TEST line must report ExpectedClickThrough at the probe with the matching WS_EX_TRANSPARENT bit (and, when
+ExpectedExStyle is given, exactly that exStyle; see Test-OverlayHitTest); its capture, read with alpha, must pass
+check-premultiplied and match the overlay golden with compare-rgba (the four-channel comparison; the opaque-forcing
+compare is never used on an overlay capture). Fingerprint lines are reported under the name
+<scene>.overlay.<probe name>@<window>, so that they are never confused with the scene's normal-run fingerprint lines.
+With -RecordMode (Record's probe runs, before anything is recorded for the probe) every window's fingerprint must be
+healthy and describe the overlay window (Test-OverlayFingerprintShape); otherwise the run's fingerprints must match
+RecordedFingerprintsByWindow, this probe's recorded fingerprints, window for window and field for field.
+.OUTPUTS
+A [pscustomobject] with FingerprintsByWindow (the run's fingerprints) and ExStyle (the observed HIT_TEST exStyle) when
+the run and its HIT_TEST check passed, for Record to store; otherwise $null.
 #>
 function Invoke-OverlayScenario {
     param(
@@ -577,6 +898,86 @@ function Invoke-OverlayScenario {
         [string]$ExpectedClickThrough,
 
         [Parameter(Mandatory = $true)]
+        [AllowEmptyString()]
+        [string]$ExpectedExStyle,
+
+        [Parameter(Mandatory = $true)]
+        [string]$CapturePath,
+
+        [Parameter(Mandatory = $true)]
+        [string]$DiffPath,
+
+        [Parameter(Mandatory = $true)]
+        [string]$GoldenPath,
+
+        [Parameter()]
+        [switch]$RecordMode,
+
+        [Parameter()]
+        [System.Collections.Specialized.OrderedDictionary]$RecordedFingerprintsByWindow
+    )
+
+    if ($RecordMode -and $null -ne $RecordedFingerprintsByWindow) {
+        throw "Invoke-OverlayScenario takes either -RecordMode or -RecordedFingerprintsByWindow, not both."
+    }
+    if (-not $RecordMode -and $null -eq $RecordedFingerprintsByWindow) {
+        throw "Invoke-OverlayScenario requires -RecordedFingerprintsByWindow outside -RecordMode."
+    }
+
+    $overlayRun = Invoke-OverlayProbeRun -Kind overlay -SceneId $SceneId -ProbeName $ProbeName -Probe $Probe -CapturePath $CapturePath -DiffPath $DiffPath -ExtraArguments @()
+    if ($null -eq $overlayRun) {
+        return $null
+    }
+
+    $observedExStyle = Test-OverlayHitTest -Kind overlay -SceneId $SceneId -ProbeName $ProbeName -Probe $Probe -ExpectedClickThrough $ExpectedClickThrough -ExpectedExStyle $ExpectedExStyle -HitTestLine "$($overlayRun.HitTest)"
+    Test-OverlayPremultiplied -Kind overlay -SceneId $SceneId -ProbeName $ProbeName -CapturePath $CapturePath
+    Test-CaptureMatchesGolden -Kind overlay -SceneId $SceneId -CompareCommand compare-rgba -CapturePath $CapturePath -GoldenPath $GoldenPath -DiffPath $DiffPath -Description "$ProbeName run capture" -GoldenLabel 'overlay golden'
+
+    $fingerprintName = "$SceneId.overlay.$ProbeName"
+    if ($RecordMode) {
+        Invoke-FingerprintHealthCheck -Name $fingerprintName -FingerprintsByWindow $overlayRun.FingerprintsByWindow -PassDetail "$ProbeName probe run healthy"
+        foreach ($overlayWindowName in $overlayRun.FingerprintsByWindow.Keys) {
+            Test-OverlayFingerprintShape -SceneId $SceneId -FingerprintLine $overlayRun.FingerprintsByWindow[$overlayWindowName]
+        }
+    }
+    else {
+        Compare-FingerprintsByWindow -Name $fingerprintName -RecordedFingerprintsByWindow $RecordedFingerprintsByWindow -ActualFingerprintsByWindow $overlayRun.FingerprintsByWindow -PassDetail 'matches record'
+    }
+
+    if ($null -eq $observedExStyle) {
+        return $null
+    }
+    return [pscustomobject]@{ FingerprintsByWindow = $overlayRun.FingerprintsByWindow; ExStyle = $observedExStyle }
+}
+
+<#
+.SYNOPSIS
+Runs the opt-in overlay+idle scenario once on a scene with the transparent probe and records its checks as
+"overlayIdle" check lines.
+.DESCRIPTION
+Launches the player through Invoke-OverlayProbeRun with the overlay window flags plus the idle-throttle flags
+($script:idlePlayerArguments) and --hit-test-probe <Probe>, the recorded transparent probe. The run must exit 0 and:
+log HIT_TEST clickThrough=on with WS_EX_TRANSPARENT (0x20) set and exactly ExpectedExStyle, the transparent probe's
+recorded exStyle; pass check-idle on every window with MinimumIdleFrames and MinimumElapsedMilliseconds (the idle
+entry's minimums); pass check-premultiplied; and match the overlay golden with compare-rgba, because neither the idle
+throttle nor the overlay window may change what a frame renders. Its fingerprints are never compared with recorded
+ones: the idle and active frame counts and the elapsed time differ from a normal run by design, and check-idle already
+checks them.
+.OUTPUTS
+The run's FingerprintsByWindow (Record stores them in the overlayIdle entry for reference); $null when the run failed.
+#>
+function Invoke-OverlayIdleScenario {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$SceneId,
+
+        [Parameter(Mandatory = $true)]
+        [string]$Probe,
+
+        [Parameter(Mandatory = $true)]
+        [string]$ExpectedExStyle,
+
+        [Parameter(Mandatory = $true)]
         [string]$CapturePath,
 
         [Parameter(Mandatory = $true)]
@@ -586,42 +987,22 @@ function Invoke-OverlayScenario {
         [string]$GoldenPath,
 
         [Parameter(Mandatory = $true)]
-        [string]$RecordedFingerprintLine
+        [string]$MinimumIdleFrames,
+
+        [Parameter(Mandatory = $true)]
+        [string]$MinimumElapsedMilliseconds
     )
 
-    # A diff image left by an earlier run must never be mistaken for this run's, so it is deleted before the run.
-    if (Test-Path -LiteralPath $DiffPath -PathType Leaf) {
-        Remove-Item -LiteralPath $DiffPath -Force
-    }
-    # The probe comes from the manifest (Verify) or find-probes (Record) and is passed to the player as
-    # --hit-test-probe, so anything but two base-10 coordinates means the record is damaged: a FAIL, never a launch.
-    if ($Probe -notmatch '^\d+,\d+$') {
-        Add-CheckResult -Status FAIL -Kind overlay -Name $SceneId -Detail "$ProbeName probe '$Probe' is not x,y (re-record required)"
-        return
-    }
-    $overlayRun = Invoke-PlayerScene -SceneId $SceneId -CapturePath $CapturePath -ExtraArguments ($script:overlayPlayerArguments + @('--hit-test-probe', $Probe))
-    if (-not (Test-PlayerRunSucceeded -PlayerRun $overlayRun -Kind overlay -SceneId $SceneId -CapturePath $CapturePath)) {
-        return
+    $overlayIdleRun = Invoke-OverlayProbeRun -Kind overlayIdle -SceneId $SceneId -ProbeName transparent -Probe $Probe -CapturePath $CapturePath -DiffPath $DiffPath -ExtraArguments $script:idlePlayerArguments
+    if ($null -eq $overlayIdleRun) {
+        return $null
     }
 
-    Test-OverlayHitTest -SceneId $SceneId -ProbeName $ProbeName -Probe $Probe -ExpectedClickThrough $ExpectedClickThrough -HitTestLine "$($overlayRun.HitTest)"
-    Test-OverlayPremultiplied -SceneId $SceneId -ProbeName $ProbeName -CapturePath $CapturePath
-
-    if (-not (Test-Path -LiteralPath $GoldenPath -PathType Leaf)) {
-        Add-CheckResult -Status FAIL -Kind overlay -Name $SceneId -Detail "overlay golden missing: $GoldenPath"
-    }
-    else {
-        $compareRun = Invoke-RegressionTool -ToolArguments @('compare-rgba', $CapturePath, $GoldenPath, $DiffPath)
-        $compareDetail = $compareRun.Lines -join ' '
-        if ($compareRun.ExitCode -eq 0) {
-            Add-CheckResult -Status PASS -Kind overlay -Name $SceneId -Detail "$ProbeName run capture matches overlay golden: $compareDetail"
-        }
-        else {
-            Add-CheckResult -Status FAIL -Kind overlay -Name $SceneId -Detail "$ProbeName run capture differs from overlay golden: $compareDetail"
-        }
-    }
-
-    Invoke-FingerprintCheck -SceneId "$SceneId.overlay.$ProbeName" -ToolArguments @('compare-fingerprint', "$SceneId.overlay.$ProbeName", $RecordedFingerprintLine, $overlayRun.Fingerprint) -PassDetail 'matches record'
+    $null = Test-OverlayHitTest -Kind overlayIdle -SceneId $SceneId -ProbeName transparent -Probe $Probe -ExpectedClickThrough on -ExpectedExStyle $ExpectedExStyle -HitTestLine "$($overlayIdleRun.HitTest)"
+    Test-IdleFingerprints -Kind overlayIdle -SceneId $SceneId -FingerprintsByWindow $overlayIdleRun.FingerprintsByWindow -MinimumIdleFrames $MinimumIdleFrames -MinimumElapsedMilliseconds $MinimumElapsedMilliseconds
+    Test-OverlayPremultiplied -Kind overlayIdle -SceneId $SceneId -ProbeName transparent -CapturePath $CapturePath
+    Test-CaptureMatchesGolden -Kind overlayIdle -SceneId $SceneId -CompareCommand compare-rgba -CapturePath $CapturePath -GoldenPath $GoldenPath -DiffPath $DiffPath -Description 'overlay idle run capture' -GoldenLabel 'overlay golden'
+    return $overlayIdleRun.FingerprintsByWindow
 }
 
 <#
@@ -1085,6 +1466,10 @@ $overlayGoldenFileName = "$($smokeSceneId.Replace('/', '__')).overlay.png"
 $overlayCaptureRootPath = Join-Path $capturesRootPath 'overlay'
 $overlayTransparentCapturePath = Join-Path $overlayCaptureRootPath "$($smokeSceneId.Replace('/', '__')).transparent.bmp"
 $overlayOpaqueCapturePath = Join-Path $overlayCaptureRootPath "$($smokeSceneId.Replace('/', '__')).opaque.bmp"
+# The opt-in overlay+idle scenario: the overlay flags plus the idle-throttle flags and the transparent probe. Record
+# writes its diff beside its capture; Verify redirects it into its wiped diffs folder.
+$overlayIdleCapturePath = Join-Path $capturesRootPath "overlayIdle\$($smokeSceneId.Replace('/', '__')).bmp"
+$overlayIdleDiffPath = Join-Path $capturesRootPath "overlayIdle\$($smokeSceneId.Replace('/', '__')).diff.png"
 $testSuites = @(
     [pscustomobject]@{ Name = 'helengine.editor.tests'; ProjectPath = "$HelengineRoot\engine\helengine.editor.tests\helengine.editor.tests.csproj"; ExtraArguments = @() },
     [pscustomobject]@{ Name = 'helengine.render.validation.tests'; ProjectPath = "$HelengineRoot\engine\helengine.render.validation.tests\helengine.render.validation.tests.csproj"; ExtraArguments = @() },
@@ -1094,8 +1479,8 @@ $testSuites = @(
 if ($Record) {
     # 11R. Record into <WorkRoot>\record-staging; the committed goldens and baselines are only replaced at the end,
     #      when the whole record had no FAIL. Run every scene twice; a scene whose two captures are not stable is
-    #      marked unstable and never becomes a golden. Each scene's host fingerprint (run a) goes into the manifest;
-    #      run a must be healthy and run b must match it.
+    #      marked unstable and never becomes a golden. Each scene's per-window host fingerprints (run a) go into the
+    #      manifest; every window of run a must be healthy and run b must log the same windows with matching fields.
     if (Test-Path -LiteralPath $recordStagingRootPath) {
         Remove-Item -LiteralPath $recordStagingRootPath -Recurse -Force
     }
@@ -1117,8 +1502,8 @@ if ($Record) {
             continue
         }
 
-        Invoke-FingerprintCheck -SceneId $sceneId -ToolArguments @('check-fingerprint', $sceneId, $runA.Fingerprint) -PassDetail 'run a healthy'
-        Invoke-FingerprintCheck -SceneId $sceneId -ToolArguments @('compare-fingerprint', $sceneId, $runA.Fingerprint, $runB.Fingerprint) -PassDetail 'run b matches run a'
+        Invoke-FingerprintHealthCheck -Name $sceneId -FingerprintsByWindow $runA.FingerprintsByWindow -PassDetail 'run a healthy'
+        Compare-FingerprintsByWindow -Name $sceneId -RecordedFingerprintsByWindow $runA.FingerprintsByWindow -ActualFingerprintsByWindow $runB.FingerprintsByWindow -PassDetail 'run b matches run a'
 
         if ($sceneId -eq $smokeSceneId) {
             Test-SmokeCapture -SceneId $sceneId -CapturePath $captureAPath
@@ -1147,13 +1532,10 @@ if ($Record) {
             continue
         }
 
-        $fingerprintFields = ConvertTo-FingerprintFields -FingerprintLine $runA.Fingerprint
-        $sceneElapsedMilliseconds = [long]$fingerprintFields['elapsedMs']
-        $fingerprintFields.Remove('elapsedMs')
         if ($sceneId -eq $smokeSceneId) {
             $manifestScenes.Add([ordered]@{ id = $sceneId; kind = 'smoke'; status = $sceneStatus })
         }
-        $manifestScenes.Add([ordered]@{ id = $sceneId; kind = 'golden'; status = $sceneStatus; fingerprint = $fingerprintFields; elapsedMs = $sceneElapsedMilliseconds })
+        $manifestScenes.Add([ordered]@{ id = $sceneId; kind = 'golden'; status = $sceneStatus; fingerprints = (ConvertTo-ManifestFingerprints -FingerprintsByWindow $runA.FingerprintsByWindow) })
     }
 
     # 11R-idle. Run the idle-throttle scenario once on the smoke scene and compare its capture with the smoke golden
@@ -1169,15 +1551,19 @@ if ($Record) {
     # 11R-overlay. Run the overlay scenario on the smoke scene: one record run records the alpha-preserving overlay
     #              golden into the staging folder (after its fingerprint and premultiplied checks), find-probes picks
     #              a fully transparent and a fully opaque probe pixel from that golden, and one run per probe must
-    #              report clickThrough=on and clickThrough=off, match the staged golden and match the record run's
-    #              fingerprint. The manifest's overlay entry stores both probes and the record run's fingerprint.
+    #              report clickThrough=on (WS_EX_TRANSPARENT set) and clickThrough=off (cleared), match the staged
+    #              golden and have healthy overlay fingerprints. Because the probe's click-through toggle changes the
+    #              window's exStyle, each probe run's fingerprints are recorded for that probe. The manifest's overlay
+    #              entry stores both probes, both observed HIT_TEST exStyle values and both probes' fingerprints.
     $overlayRecordCapturePath = Join-Path $overlayCaptureRootPath "$($smokeSceneId.Replace('/', '__')).record.bmp"
     $overlayStagingGoldenPath = Join-Path $stagingGoldenRootPath $overlayGoldenFileName
     $overlayRecordRun = Invoke-PlayerScene -SceneId $smokeSceneId -CapturePath $overlayRecordCapturePath -ExtraArguments ($overlayPlayerArguments + @('--hit-test-probe', $overlayRecordProbe))
     if (Test-PlayerRunSucceeded -PlayerRun $overlayRecordRun -Kind overlay -SceneId $smokeSceneId -CapturePath $overlayRecordCapturePath) {
-        Invoke-FingerprintCheck -SceneId "$smokeSceneId.overlay" -ToolArguments @('check-fingerprint', "$smokeSceneId.overlay", $overlayRecordRun.Fingerprint) -PassDetail 'overlay record run healthy'
-        Test-OverlayFingerprintShape -SceneId $smokeSceneId -FingerprintLine $overlayRecordRun.Fingerprint
-        Test-OverlayPremultiplied -SceneId $smokeSceneId -ProbeName record -CapturePath $overlayRecordCapturePath
+        Invoke-FingerprintHealthCheck -Name "$smokeSceneId.overlay" -FingerprintsByWindow $overlayRecordRun.FingerprintsByWindow -PassDetail 'overlay record run healthy'
+        foreach ($overlayWindowName in $overlayRecordRun.FingerprintsByWindow.Keys) {
+            Test-OverlayFingerprintShape -SceneId $smokeSceneId -FingerprintLine $overlayRecordRun.FingerprintsByWindow[$overlayWindowName]
+        }
+        Test-OverlayPremultiplied -Kind overlay -SceneId $smokeSceneId -ProbeName record -CapturePath $overlayRecordCapturePath
         $overlayRecordGoldenRun = Invoke-RegressionTool -ToolArguments @('record-golden-rgba', $overlayRecordCapturePath, $overlayStagingGoldenPath)
         if ($overlayRecordGoldenRun.ExitCode -ne 0) {
             Add-CheckResult -Status FAIL -Kind overlay -Name $smokeSceneId -Detail ($overlayRecordGoldenRun.Lines -join ' ')
@@ -1200,17 +1586,31 @@ if ($Record) {
             }
             else {
                 Add-CheckResult -Status PASS -Kind overlay -Name $smokeSceneId -Detail "probes transparent=$overlayTransparentProbe opaque=$overlayOpaqueProbe"
-                Invoke-OverlayScenario -SceneId $smokeSceneId -ProbeName transparent -Probe $overlayTransparentProbe -ExpectedClickThrough on -CapturePath $overlayTransparentCapturePath -DiffPath (Join-Path $overlayCaptureRootPath "$($smokeSceneId.Replace('/', '__')).transparent.diff.png") -GoldenPath $overlayStagingGoldenPath -RecordedFingerprintLine $overlayRecordRun.Fingerprint
-                Invoke-OverlayScenario -SceneId $smokeSceneId -ProbeName opaque -Probe $overlayOpaqueProbe -ExpectedClickThrough off -CapturePath $overlayOpaqueCapturePath -DiffPath (Join-Path $overlayCaptureRootPath "$($smokeSceneId.Replace('/', '__')).opaque.diff.png") -GoldenPath $overlayStagingGoldenPath -RecordedFingerprintLine $overlayRecordRun.Fingerprint
-                $overlayFingerprintFields = ConvertTo-FingerprintFields -FingerprintLine $overlayRecordRun.Fingerprint
-                $overlayElapsedMilliseconds = [long]$overlayFingerprintFields['elapsedMs']
-                $overlayFingerprintFields.Remove('elapsedMs')
-                $manifestScenes.Add([ordered]@{ id = $smokeSceneId; kind = 'overlay'; transparentProbe = $overlayTransparentProbe; opaqueProbe = $overlayOpaqueProbe; fingerprint = $overlayFingerprintFields; elapsedMs = $overlayElapsedMilliseconds })
+                $overlayTransparentResult = Invoke-OverlayScenario -SceneId $smokeSceneId -ProbeName transparent -Probe $overlayTransparentProbe -ExpectedClickThrough on -ExpectedExStyle '' -RecordMode -CapturePath $overlayTransparentCapturePath -DiffPath (Join-Path $overlayCaptureRootPath "$($smokeSceneId.Replace('/', '__')).transparent.diff.png") -GoldenPath $overlayStagingGoldenPath
+                $overlayOpaqueResult = Invoke-OverlayScenario -SceneId $smokeSceneId -ProbeName opaque -Probe $overlayOpaqueProbe -ExpectedClickThrough off -ExpectedExStyle '' -RecordMode -CapturePath $overlayOpaqueCapturePath -DiffPath (Join-Path $overlayCaptureRootPath "$($smokeSceneId.Replace('/', '__')).opaque.diff.png") -GoldenPath $overlayStagingGoldenPath
+                if ($null -eq $overlayTransparentResult -or $null -eq $overlayOpaqueResult) {
+                    Add-CheckResult -Status FAIL -Kind overlayIdle -Name $smokeSceneId -Detail 'not run: the overlay probe runs did not both pass, so no transparent exStyle was recorded'
+                }
+                else {
+                    $overlayFingerprintsByProbe = [ordered]@{
+                        transparent = (ConvertTo-ManifestFingerprints -FingerprintsByWindow $overlayTransparentResult.FingerprintsByWindow)
+                        opaque = (ConvertTo-ManifestFingerprints -FingerprintsByWindow $overlayOpaqueResult.FingerprintsByWindow)
+                    }
+                    $manifestScenes.Add([ordered]@{ id = $smokeSceneId; kind = 'overlay'; transparentProbe = $overlayTransparentProbe; opaqueProbe = $overlayOpaqueProbe; transparentExStyle = $overlayTransparentResult.ExStyle; opaqueExStyle = $overlayOpaqueResult.ExStyle; fingerprintsByProbe = $overlayFingerprintsByProbe })
+
+                    # 11R-overlayIdle. Run the overlay+idle scenario with the transparent probe just recorded; its
+                    #                  HIT_TEST must report exactly the transparent probe's exStyle. Its fingerprints
+                    #                  are stored for reference only; Verify checks them with check-idle.
+                    $overlayIdleFingerprintsByWindow = Invoke-OverlayIdleScenario -SceneId $smokeSceneId -Probe $overlayTransparentProbe -ExpectedExStyle $overlayTransparentResult.ExStyle -CapturePath $overlayIdleCapturePath -DiffPath $overlayIdleDiffPath -GoldenPath $overlayStagingGoldenPath -MinimumIdleFrames $idleMinimumIdleFrames -MinimumElapsedMilliseconds $idleMinimumElapsedMilliseconds
+                    if ($null -ne $overlayIdleFingerprintsByWindow) {
+                        $manifestScenes.Add([ordered]@{ id = $smokeSceneId; kind = 'overlayIdle'; fingerprints = (ConvertTo-ManifestFingerprints -FingerprintsByWindow $overlayIdleFingerprintsByWindow) })
+                    }
+                }
             }
         }
     }
 
-    # 12R. Write the staged manifest: run settings, each scene's check kind, status and host fingerprint, and the
+    # 12R. Write the staged manifest: run settings, each scene's check kind, status and host fingerprints, and the
     #      provenance of the record (commits and the hashes of every other input that changes the output).
     $manifestDocument = [ordered]@{
         frames = 30
@@ -1256,6 +1656,7 @@ else {
     $recordedGoldenScenesById = @{}
     $recordedIdleScene = $null
     $recordedOverlayScene = $null
+    $recordedOverlayIdleScene = $null
     if (-not (Test-Path -LiteralPath $manifestPath -PathType Leaf)) {
         Add-CheckResult -Status FAIL -Kind manifest -Name manifest.json -Detail "golden missing: $manifestPath"
     }
@@ -1293,6 +1694,9 @@ else {
             elseif ($manifestScene.kind -eq 'overlay') {
                 $recordedOverlayScene = $manifestScene
             }
+            elseif ($manifestScene.kind -eq 'overlayIdle') {
+                $recordedOverlayIdleScene = $manifestScene
+            }
         }
         foreach ($recordedSceneId in $recordedGoldenSceneIds) {
             if (-not $sceneIds.Contains($recordedSceneId)) {
@@ -1320,13 +1724,17 @@ else {
             continue
         }
 
-        # The recorded fingerprint line is rebuilt from the manifest's fields (in their recorded order) plus elapsedMs.
+        # Each window's recorded fingerprint line is rebuilt from the manifest's fields, in their recorded order. An entry
+        # from before per-window fingerprints (a single "fingerprint" object) can only be fixed by a re-record.
         $recordedScene = $recordedGoldenScenesById[$sceneId]
-        if ($null -eq $recordedScene -or $null -eq $recordedScene.fingerprint -or $null -eq $recordedScene.elapsedMs) {
+        if ($null -eq $recordedScene) {
             Add-CheckResult -Status FAIL -Kind fingerprint -Name $sceneId -Detail "not recorded in the manifest: $manifestPath"
         }
+        elseif ($null -ne $recordedScene.PSObject.Properties['fingerprint'] -or $null -eq $recordedScene.fingerprints) {
+            Add-CheckResult -Status FAIL -Kind fingerprint -Name $sceneId -Detail "manifest entry uses the old single 'fingerprint' shape or has no 'fingerprints' (re-record required): $manifestPath"
+        }
         else {
-            Invoke-FingerprintCheck -SceneId $sceneId -ToolArguments @('compare-fingerprint', $sceneId, (ConvertTo-RecordedFingerprintLine -RecordedScene $recordedScene), $verifyRun.Fingerprint) -PassDetail 'matches record'
+            Compare-FingerprintsByWindow -Name $sceneId -RecordedFingerprintsByWindow (ConvertTo-RecordedFingerprintsByWindow -RecordedFingerprints $recordedScene.fingerprints) -ActualFingerprintsByWindow $verifyRun.FingerprintsByWindow -PassDetail 'matches record'
         }
 
         if ($sceneId -eq $smokeSceneId) {
@@ -1356,6 +1764,7 @@ else {
     # 12V-idle. Run the idle-throttle scenario once on the smoke scene. A manifest without an idle entry predates the
     #          scenario (or was recorded for another smoke scene) and must be re-recorded, so that is a FAIL rather than a
     #          silent skip.
+    $idleEntryComplete = $false
     if ($null -eq $recordedIdleScene -or $recordedIdleScene.id -ne $smokeSceneId) {
         Add-CheckResult -Status FAIL -Kind idle -Name $smokeSceneId -Detail "idle entry missing from manifest (re-record required): $manifestPath"
     }
@@ -1363,6 +1772,7 @@ else {
         Add-CheckResult -Status FAIL -Kind idle -Name $smokeSceneId -Detail "idle entry lacks minIdleFrames or minElapsedMs (re-record required): $manifestPath"
     }
     else {
+        $idleEntryComplete = $true
         # The idle diff goes into the diffs folder wiped above, beside the scene diffs.
         $idleDiffPath = Join-Path $diffsRootPath "$($smokeSceneId.Replace('/', '__')).idle.diff.png"
         $idleGoldenPath = Join-Path $goldenRootPath "$($smokeSceneId.Replace('/', '__')).png"
@@ -1375,21 +1785,45 @@ else {
     }
 
     # 12V-overlay. Run the overlay scenario on the smoke scene once per recorded probe: the transparent probe must
-    #              report clickThrough=on and the opaque probe clickThrough=off, and both runs must match the committed
-    #              overlay golden and the recorded overlay fingerprint. A manifest without a complete overlay entry
-    #              predates the scenario and must be re-recorded, so that is a FAIL rather than a silent skip.
+    #              report clickThrough=on and the opaque probe clickThrough=off, each with exactly its recorded exStyle,
+    #              and both runs must match the committed overlay golden and their own probe's recorded fingerprints.
+    #              A manifest without a complete overlay entry (or with the old single "fingerprint" shape) must be
+    #              re-recorded, so that is a FAIL rather than a silent skip.
+    $overlayEntryComplete = $false
     if ($null -eq $recordedOverlayScene -or $recordedOverlayScene.id -ne $smokeSceneId) {
         Add-CheckResult -Status FAIL -Kind overlay -Name $smokeSceneId -Detail "overlay entry missing from manifest (re-record required): $manifestPath"
     }
-    elseif ($null -eq $recordedOverlayScene.transparentProbe -or $null -eq $recordedOverlayScene.opaqueProbe -or $null -eq $recordedOverlayScene.fingerprint -or $null -eq $recordedOverlayScene.elapsedMs) {
-        Add-CheckResult -Status FAIL -Kind overlay -Name $smokeSceneId -Detail "overlay entry lacks transparentProbe, opaqueProbe, fingerprint or elapsedMs (re-record required): $manifestPath"
+    elseif ($null -ne $recordedOverlayScene.PSObject.Properties['fingerprint']) {
+        Add-CheckResult -Status FAIL -Kind overlay -Name $smokeSceneId -Detail "overlay entry uses the old single 'fingerprint' shape (re-record required): $manifestPath"
+    }
+    elseif ($null -eq $recordedOverlayScene.transparentProbe -or $null -eq $recordedOverlayScene.opaqueProbe -or $null -eq $recordedOverlayScene.transparentExStyle -or $null -eq $recordedOverlayScene.opaqueExStyle -or $null -eq $recordedOverlayScene.fingerprintsByProbe.transparent -or $null -eq $recordedOverlayScene.fingerprintsByProbe.opaque) {
+        Add-CheckResult -Status FAIL -Kind overlay -Name $smokeSceneId -Detail "overlay entry lacks transparentProbe, opaqueProbe, transparentExStyle, opaqueExStyle or fingerprintsByProbe.transparent/opaque (re-record required): $manifestPath"
     }
     else {
+        $overlayEntryComplete = $true
         # The overlay diffs go into the diffs folder wiped above, beside the scene diffs.
         $overlayTransparentDiffPath = Join-Path $diffsRootPath "$($smokeSceneId.Replace('/', '__')).overlay.transparent.diff.png"
         $overlayOpaqueDiffPath = Join-Path $diffsRootPath "$($smokeSceneId.Replace('/', '__')).overlay.opaque.diff.png"
-        Invoke-OverlayScenario -SceneId $smokeSceneId -ProbeName transparent -Probe "$($recordedOverlayScene.transparentProbe)" -ExpectedClickThrough on -CapturePath $overlayTransparentCapturePath -DiffPath $overlayTransparentDiffPath -GoldenPath (Join-Path $goldenRootPath $overlayGoldenFileName) -RecordedFingerprintLine (ConvertTo-RecordedFingerprintLine -RecordedScene $recordedOverlayScene)
-        Invoke-OverlayScenario -SceneId $smokeSceneId -ProbeName opaque -Probe "$($recordedOverlayScene.opaqueProbe)" -ExpectedClickThrough off -CapturePath $overlayOpaqueCapturePath -DiffPath $overlayOpaqueDiffPath -GoldenPath (Join-Path $goldenRootPath $overlayGoldenFileName) -RecordedFingerprintLine (ConvertTo-RecordedFingerprintLine -RecordedScene $recordedOverlayScene)
+        $null = Invoke-OverlayScenario -SceneId $smokeSceneId -ProbeName transparent -Probe "$($recordedOverlayScene.transparentProbe)" -ExpectedClickThrough on -ExpectedExStyle "$($recordedOverlayScene.transparentExStyle)" -CapturePath $overlayTransparentCapturePath -DiffPath $overlayTransparentDiffPath -GoldenPath (Join-Path $goldenRootPath $overlayGoldenFileName) -RecordedFingerprintsByWindow (ConvertTo-RecordedFingerprintsByWindow -RecordedFingerprints $recordedOverlayScene.fingerprintsByProbe.transparent)
+        $null = Invoke-OverlayScenario -SceneId $smokeSceneId -ProbeName opaque -Probe "$($recordedOverlayScene.opaqueProbe)" -ExpectedClickThrough off -ExpectedExStyle "$($recordedOverlayScene.opaqueExStyle)" -CapturePath $overlayOpaqueCapturePath -DiffPath $overlayOpaqueDiffPath -GoldenPath (Join-Path $goldenRootPath $overlayGoldenFileName) -RecordedFingerprintsByWindow (ConvertTo-RecordedFingerprintsByWindow -RecordedFingerprints $recordedOverlayScene.fingerprintsByProbe.opaque)
+    }
+
+    # 12V-overlayIdle. Run the overlay+idle scenario once with the recorded transparent probe. It needs the overlay
+    #                  entry (probe and transparent exStyle) and the idle entry (check-idle minimums); its own entry's
+    #                  fingerprints are reference only and never compared. A missing entry is a FAIL.
+    if ($null -eq $recordedOverlayIdleScene -or $recordedOverlayIdleScene.id -ne $smokeSceneId) {
+        Add-CheckResult -Status FAIL -Kind overlayIdle -Name $smokeSceneId -Detail "overlayIdle entry missing from manifest (re-record required): $manifestPath"
+    }
+    elseif (-not $overlayEntryComplete) {
+        Add-CheckResult -Status FAIL -Kind overlayIdle -Name $smokeSceneId -Detail 'not run: it needs a complete overlay entry (see the overlay check lines)'
+    }
+    elseif (-not $idleEntryComplete) {
+        Add-CheckResult -Status FAIL -Kind overlayIdle -Name $smokeSceneId -Detail 'not run: it needs a complete idle entry for its check-idle minimums (see the idle check lines)'
+    }
+    else {
+        # The overlayIdle diff goes into the diffs folder wiped above, beside the scene diffs.
+        $overlayIdleDiffPath = Join-Path $diffsRootPath "$($smokeSceneId.Replace('/', '__')).overlayIdle.diff.png"
+        $null = Invoke-OverlayIdleScenario -SceneId $smokeSceneId -Probe "$($recordedOverlayScene.transparentProbe)" -ExpectedExStyle "$($recordedOverlayScene.transparentExStyle)" -CapturePath $overlayIdleCapturePath -DiffPath $overlayIdleDiffPath -GoldenPath (Join-Path $goldenRootPath $overlayGoldenFileName) -MinimumIdleFrames "$($recordedIdleScene.minIdleFrames)" -MinimumElapsedMilliseconds "$($recordedIdleScene.minElapsedMs)"
     }
 
     # 13V. Check each suite run's outcome and executed-test count against the recorded count (an errored, aborted or
