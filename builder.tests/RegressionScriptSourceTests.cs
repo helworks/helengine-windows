@@ -524,7 +524,7 @@ public sealed class RegressionScriptSourceTests {
         string scriptSource = ReadRegressionScriptSource();
 
         string shapeSource = ReadFunctionSource(scriptSource, "Test-OverlayFingerprintShape");
-        Assert.Contains("[ValidateSet('overlay', 'overlayIdle')]", shapeSource, StringComparison.Ordinal);
+        Assert.Contains("[ValidateSet('overlay', 'overlayIdle', 'dpiAware')]", shapeSource, StringComparison.Ordinal);
         Assert.DoesNotContain("-Kind overlay -Name", shapeSource, StringComparison.Ordinal);
 
         string overlayIdleSource = ReadFunctionSource(scriptSource, "Invoke-OverlayIdleScenario");
@@ -679,6 +679,121 @@ public sealed class RegressionScriptSourceTests {
         int diffsWipeIndex = verifySource.IndexOf("Remove-Item -LiteralPath $diffsRootPath -Recurse -Force", StringComparison.Ordinal);
         int overlayIdleDiffIndex = verifySource.IndexOf("$overlayIdleDiffPath = Join-Path $diffsRootPath", StringComparison.Ordinal);
         Assert.True(diffsWipeIndex >= 0 && overlayIdleDiffIndex > diffsWipeIndex, "Verify must write the overlayIdle diff into the diffs folder it wipes.");
+    }
+
+    /// <summary>
+    /// Ensures the dpiAware scenario runs the smoke scene twice with <c>--dpi-awareness permonitorv2</c>, reusing the shared
+    /// launch and check functions: a normal run compared with the smoke golden (<c>compare</c>) and an overlay run with the
+    /// recorded transparent probe, checked with an exact HIT_TEST, the overlay shape, check-premultiplied and
+    /// <c>compare-rgba</c> against the overlay golden. Both runs' fingerprints are kept per window under the name
+    /// &lt;scene&gt;.dpiAware.&lt;run&gt;.
+    /// </summary>
+    [Fact]
+    public void RegressionScript_RunsTheDpiAwareScenario() {
+        string scriptSource = ReadRegressionScriptSource();
+
+        Assert.Contains("$dpiAwarePlayerArguments = @('--dpi-awareness', 'permonitorv2')", scriptSource, StringComparison.Ordinal);
+
+        string normalRunSource = ReadFunctionSource(scriptSource, "Invoke-DpiAwareNormalRun");
+        int staleDiffRemovalIndex = normalRunSource.IndexOf("Remove-Item -LiteralPath $DiffPath -Force", StringComparison.Ordinal);
+        int normalLaunchIndex = normalRunSource.IndexOf("$normalRun = Invoke-PlayerScene -SceneId $SceneId -CapturePath $CapturePath -ExtraArguments $script:dpiAwarePlayerArguments", StringComparison.Ordinal);
+        Assert.True(staleDiffRemovalIndex >= 0 && normalLaunchIndex > staleDiffRemovalIndex, "Invoke-DpiAwareNormalRun must delete a stale diff image before it launches the player with the dpi-awareness flag.");
+        Assert.Contains("Test-PlayerRunSucceeded -PlayerRun $normalRun -Kind dpiAware", normalRunSource, StringComparison.Ordinal);
+        Assert.Contains("Test-CaptureMatchesGolden -Kind dpiAware -SceneId $SceneId -CompareCommand compare -CapturePath", normalRunSource, StringComparison.Ordinal);
+        Assert.Contains("Test-DpiAwareRunFingerprints -SceneId $SceneId -RunName normal", normalRunSource, StringComparison.Ordinal);
+
+        string overlayRunSource = ReadFunctionSource(scriptSource, "Invoke-DpiAwareOverlayRun");
+        Assert.Contains("Invoke-OverlayProbeRun -Kind dpiAware -SceneId $SceneId -ProbeName transparent -Probe $Probe -CapturePath $CapturePath -DiffPath $DiffPath -ExtraArguments $script:dpiAwarePlayerArguments", overlayRunSource, StringComparison.Ordinal);
+        Assert.Contains("Test-OverlayHitTest -Kind dpiAware -SceneId $SceneId -ProbeName transparent -Probe $Probe -ExpectedClickThrough on -ExpectedExStyle $ExpectedExStyle", overlayRunSource, StringComparison.Ordinal);
+        Assert.Contains("Test-OverlayFingerprintShape -SceneId $SceneId -FingerprintLine $overlayRun.FingerprintsByWindow[$overlayWindowName] -Kind dpiAware", overlayRunSource, StringComparison.Ordinal);
+        Assert.Contains("Test-OverlayPremultiplied -Kind dpiAware", overlayRunSource, StringComparison.Ordinal);
+        Assert.Contains("Test-CaptureMatchesGolden -Kind dpiAware -SceneId $SceneId -CompareCommand compare-rgba", overlayRunSource, StringComparison.Ordinal);
+        Assert.Contains("Test-DpiAwareRunFingerprints -SceneId $SceneId -RunName overlay", overlayRunSource, StringComparison.Ordinal);
+        Assert.DoesNotContain("Invoke-PlayerScene", overlayRunSource, StringComparison.Ordinal);
+        int exStyleGuardIndex = overlayRunSource.IndexOf("if ($ExpectedExStyle -cnotmatch '^0x[0-9A-F]{8}$') {", StringComparison.Ordinal);
+        int overlayLaunchIndex = overlayRunSource.IndexOf("Invoke-OverlayProbeRun -Kind dpiAware", StringComparison.Ordinal);
+        Assert.True(exStyleGuardIndex >= 0 && overlayLaunchIndex > exStyleGuardIndex, "Invoke-DpiAwareOverlayRun must validate ExpectedExStyle before launching the player.");
+
+        foreach (string sharedFunctionName in new[] { "Invoke-OverlayProbeRun", "Test-OverlayFingerprintShape", "Test-OverlayPremultiplied", "Test-OverlayHitTest" }) {
+            Assert.Contains("[ValidateSet('overlay', 'overlayIdle', 'dpiAware')]", ReadFunctionSource(scriptSource, sharedFunctionName), StringComparison.Ordinal);
+        }
+
+        string runFingerprintsSource = ReadFunctionSource(scriptSource, "Test-DpiAwareRunFingerprints");
+        Assert.Contains("$fingerprintName = \"$SceneId.dpiAware.$RunName\"", runFingerprintsSource, StringComparison.Ordinal);
+        Assert.Contains("Invoke-FingerprintHealthCheck -Name $fingerprintName", runFingerprintsSource, StringComparison.Ordinal);
+        Assert.Contains("Compare-FingerprintsByWindow -Name $fingerprintName -RecordedFingerprintsByWindow $RecordedFingerprintsByWindow -ActualFingerprintsByWindow $FingerprintsByWindow", runFingerprintsSource, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// Ensures neither Record nor Verify can silently pass a skipped or unaware dpiAware check: every window of both runs
+    /// must report <c>dpiAwareness=permonitorv2</c> in both modes (a FAIL naming the run and the window otherwise), Record
+    /// stores the entry only when both runs produced fingerprints and fails when the overlay probes it needs are missing,
+    /// and Verify fails a manifest without the entry, an entry without either run's fingerprints and an overlay run that
+    /// cannot start for lack of a complete overlay entry.
+    /// </summary>
+    [Fact]
+    public void RegressionScript_FailsEveryDpiAwareRunThatIsNotPerMonitorV2() {
+        string scriptSource = ReadRegressionScriptSource();
+
+        string awarenessSource = ReadFunctionSource(scriptSource, "Test-DpiAwarenessFingerprints");
+        Assert.Contains("ConvertTo-FingerprintFields -FingerprintLine $FingerprintsByWindow[$windowName]", awarenessSource, StringComparison.Ordinal);
+        Assert.Contains("-cne 'permonitorv2'", awarenessSource, StringComparison.Ordinal);
+        Assert.Contains("Add-CheckResult -Status FAIL -Kind dpiAware -Name $SceneId -Detail \"$RunName run window ${windowName}: dpiAwareness=", awarenessSource, StringComparison.Ordinal);
+
+        // The awareness check runs after the record/verify branch, so it applies in both modes.
+        string runFingerprintsSource = ReadFunctionSource(scriptSource, "Test-DpiAwareRunFingerprints");
+        Assert.Equal(1, CountOccurrences(runFingerprintsSource, "Test-DpiAwarenessFingerprints -SceneId $SceneId -RunName $RunName -FingerprintsByWindow $FingerprintsByWindow"));
+        string modeBlock = ExtractBraceBlock(runFingerprintsSource, "if ($RecordMode) {");
+        int modeBlockEndIndex = runFingerprintsSource.IndexOf(modeBlock, StringComparison.Ordinal) + modeBlock.Length;
+        string elseBlock = ExtractBraceBlock(runFingerprintsSource.Substring(modeBlockEndIndex), "else {");
+        int elseBlockEndIndex = runFingerprintsSource.IndexOf(elseBlock, modeBlockEndIndex, StringComparison.Ordinal) + elseBlock.Length;
+        int awarenessCallIndex = runFingerprintsSource.IndexOf("Test-DpiAwarenessFingerprints -SceneId", StringComparison.Ordinal);
+        Assert.True(awarenessCallIndex > elseBlockEndIndex, "The dpiAwareness check must run after the record/verify branch, in both modes.");
+
+        int recordIndex = scriptSource.IndexOf("# 11R.", StringComparison.Ordinal);
+        int verifyIndex = scriptSource.IndexOf("# 11V.", StringComparison.Ordinal);
+        string recordSource = scriptSource.Substring(recordIndex, verifyIndex - recordIndex);
+        Assert.Contains("Invoke-DpiAwareNormalRun -SceneId $smokeSceneId", recordSource, StringComparison.Ordinal);
+        Assert.Contains("Invoke-DpiAwareOverlayRun -SceneId $smokeSceneId -Probe $overlayTransparentProbe -ExpectedExStyle $overlayTransparentResult.ExStyle", recordSource, StringComparison.Ordinal);
+        Assert.Contains("-GoldenPath $overlayStagingGoldenPath -RecordMode", recordSource, StringComparison.Ordinal);
+        Assert.Contains("if ($null -ne $dpiAwareNormalFingerprintsByWindow -and $null -ne $dpiAwareOverlayFingerprintsByWindow) {", recordSource, StringComparison.Ordinal);
+        Assert.Contains("kind = 'dpiAware'; fingerprintsByRun = $dpiAwareFingerprintsByRun", recordSource, StringComparison.Ordinal);
+        Assert.Contains("normal = (ConvertTo-ManifestFingerprints -FingerprintsByWindow $dpiAwareNormalFingerprintsByWindow)", recordSource, StringComparison.Ordinal);
+        Assert.Contains("overlay = (ConvertTo-ManifestFingerprints -FingerprintsByWindow $dpiAwareOverlayFingerprintsByWindow)", recordSource, StringComparison.Ordinal);
+        Assert.Contains("Add-CheckResult -Status FAIL -Kind dpiAware -Name $smokeSceneId -Detail 'not run: the overlay probe runs did not both pass", recordSource, StringComparison.Ordinal);
+
+        string verifySource = scriptSource.Substring(verifyIndex);
+        Assert.Contains("-eq 'dpiAware'", verifySource, StringComparison.Ordinal);
+        Assert.Contains("dpiAware entry missing from manifest (re-record required)", verifySource, StringComparison.Ordinal);
+        Assert.Contains("$null -eq $recordedDpiAwareScene.fingerprintsByRun.normal -or $null -eq $recordedDpiAwareScene.fingerprintsByRun.overlay", verifySource, StringComparison.Ordinal);
+        Assert.Contains("dpiAware entry lacks fingerprintsByRun.normal or fingerprintsByRun.overlay (re-record required)", verifySource, StringComparison.Ordinal);
+        Assert.Contains("-RecordedFingerprintsByWindow (ConvertTo-RecordedFingerprintsByWindow -RecordedFingerprints $recordedDpiAwareScene.fingerprintsByRun.normal)", verifySource, StringComparison.Ordinal);
+        Assert.Contains("-RecordedFingerprintsByWindow (ConvertTo-RecordedFingerprintsByWindow -RecordedFingerprints $recordedDpiAwareScene.fingerprintsByRun.overlay)", verifySource, StringComparison.Ordinal);
+        Assert.Contains("Invoke-DpiAwareOverlayRun -SceneId $smokeSceneId -Probe \"$($recordedOverlayScene.transparentProbe)\" -ExpectedExStyle \"$($recordedOverlayScene.transparentExStyle)\"", verifySource, StringComparison.Ordinal);
+        Assert.Contains("overlay run not run: it needs a complete overlay entry", verifySource, StringComparison.Ordinal);
+        int diffsWipeIndex = verifySource.IndexOf("Remove-Item -LiteralPath $diffsRootPath -Recurse -Force", StringComparison.Ordinal);
+        int dpiAwareDiffIndex = verifySource.IndexOf("$dpiAwareNormalDiffPath = Join-Path $diffsRootPath", StringComparison.Ordinal);
+        Assert.True(diffsWipeIndex >= 0 && dpiAwareDiffIndex > diffsWipeIndex, "Verify must write the dpiAware diffs into the diffs folder it wipes.");
+    }
+
+    /// <summary>
+    /// Ensures the regression README documents the dpiAware scenario, the new flag and profile field, the single-monitor
+    /// blind spot (dpi other than 96, WM_DPICHANGED and cross-monitor moves) and the manual check for a scaled display.
+    /// </summary>
+    [Fact]
+    public void RegressionReadme_DocumentsTheDpiAwareScenario() {
+        string repositoryRootPath = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", ".."));
+        string readmeSource = File.ReadAllText(Path.Combine(repositoryRootPath, "regression", "README.md"));
+
+        Assert.Contains("## Per-monitor DPI scenario", readmeSource, StringComparison.Ordinal);
+        Assert.Contains("--dpi-awareness unaware|permonitorv2", readmeSource, StringComparison.Ordinal);
+        Assert.Contains("\"dpiAwareness\": \"permonitorv2\"", readmeSource, StringComparison.Ordinal);
+        Assert.Contains("fingerprintsByRun", readmeSource, StringComparison.Ordinal);
+        Assert.Contains("dpiAware entry missing from manifest (re-record required)", readmeSource, StringComparison.Ordinal);
+        Assert.Contains("axis_test.dpiAware.normal@main", readmeSource, StringComparison.Ordinal);
+        Assert.Contains("WM_DPICHANGED", readmeSource, StringComparison.Ordinal);
+        Assert.Contains("--dpi-awareness permonitorv2 --frames 30 --capture", readmeSource, StringComparison.Ordinal);
+        Assert.Contains("Manual check on a scaled display", readmeSource, StringComparison.Ordinal);
     }
 
     /// <summary>

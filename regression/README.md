@@ -18,6 +18,7 @@ its host layer (swap chain, window, Present) is unchanged, and that the editor-s
 | `idle` | The smoke scene, once more, with the idle throttle on (see "Idle-throttle scenario") | The manifest has an idle entry, `check-idle` passes (throttle on, no Present failures, at least 25 idle frames, at least 2400 ms elapsed) and the capture matches the smoke scene's golden. |
 | `overlay` | The smoke scene, twice more, in a transparent overlay window with one hit-test probe per run (see "Overlay scenario") | The manifest has a complete overlay entry, and each run exits 0, logs exactly the expected `HIT_TEST` line (click-through state and the recorded `exStyle`, with `WS_EX_TRANSPARENT` set for the transparent probe and cleared for the opaque one), passes `check-premultiplied`, matches `regression\golden\<scene>.overlay.png` with `compare-rgba` and matches its own probe's recorded fingerprints window for window and field for field. |
 | `overlayIdle` | The smoke scene, once more, in the overlay window with the idle throttle on and the transparent probe (see "Overlay + idle scenario") | The manifest has an overlayIdle entry, and the run exits 0, passes `check-idle` with the idle entry's minimums, passes `check-premultiplied`, matches the overlay golden with `compare-rgba` and logs `HIT_TEST ... clickThrough=on` with exactly the recorded transparent `exStyle`. |
+| `dpiAware` | The smoke scene, twice more, with `--dpi-awareness permonitorv2`: once as a normal window and once as the overlay window with the transparent probe (see "Per-monitor DPI scenario") | The manifest has a complete dpiAware entry, every window of both runs reports `dpiAwareness=permonitorv2`, the normal run's capture matches the smoke scene's golden, the overlay run logs exactly the transparent probe's recorded `HIT_TEST` line, passes `check-premultiplied` and matches the overlay golden with `compare-rgba`, and each run matches its own recorded fingerprints window for window and field for field. |
 | `manifest` | `regression\golden\manifest.json` | It exists and was recorded with the same run settings. |
 
 Every scene runs in a 640x360 window with `--frames 30 --fixed-delta 0.016666 --capture <bmp>`, so the captured
@@ -62,7 +63,8 @@ HOST_FINGERPRINT format=87 alpha=3 swapEffect=4 buffers=2 scaling=0 style=0x14CF
 - `window` is the window's tag. It is always `main` today; it keys the per-window fingerprints below and prepares
   for several windows in one process (subproject 3c).
 - `dpi` is `GetDpiForWindow`, and `dpiAwareness` is the window's DPI awareness context: `unaware`, `system`,
-  `permonitor`, `permonitorv2` or `unknown`.
+  `permonitor`, `permonitorv2` or `unknown`. It is `unaware` by default and `permonitorv2` with the opt-in
+  `--dpi-awareness permonitorv2` (see "Per-monitor DPI scenario").
 - `windowRect` is `GetWindowRect` as `<left>,<top>,<right>,<bottom>` in overlay mode (for example `0,0,640,360`).
   Normal windows are placed with `CW_USEDEFAULT`, so their position is not deterministic and the value is
   `windowRect=default`; `client` already covers their size.
@@ -266,7 +268,8 @@ The overlay window is topmost while it runs; do not click over it or move the mo
 - With `--overlay-bounds monitor`, any mouse motion anywhere on the primary monitor keeps idle mode at the full rate.
 - The default `--overlay-background camera` with an opaque camera clear gives a full-monitor window that blocks clicks
   and has no taskbar button. Use `transparent`, or scenes that clear with alpha 0.
-- Display, resolution and DPI changes are not handled until subproject 3.
+- Display and resolution changes are not handled. DPI awareness is opt-in (`--dpi-awareness permonitorv2`, subproject
+  3b); with it the overlay keeps its rectangle on `WM_DPICHANGED` (see "Per-monitor DPI scenario").
 - Subproject 3a added the per-probe `exStyle` after `Apply`, the `dpi`, `dpiAwareness` and `windowRect` fingerprint
   fields, per-window fingerprints and the overlay+idle scenario. The net still cannot see the monitor-bounds
   resolution or the live cursor path (see "Overlay + idle scenario").
@@ -317,6 +320,87 @@ the click-through state follows the cursor. That path cannot be automated withou
 does, so the probe replaces the cursor with a fixed pixel. Whether cursor motion over a click-through overlay wakes the
 idle throttle, and how quickly a move from a transparent to an opaque pixel is noticed, stays a manual check.
 
+## Per-monitor DPI scenario
+
+The player is DPI-unaware by default. Per-Monitor v2 DPI awareness is opt-in, through a command-line flag or a
+profile field:
+
+- `--dpi-awareness unaware|permonitorv2` on the command line. The values are case-sensitive; any other value, or the
+  flag given twice, is an invalid argument and the player exits with code 2.
+- `"dpiAwareness": "permonitorv2"` (or `"unaware"`) in `profile.json`. The field is optional: a profile without it is
+  read and rewritten byte-identically, and an invalid value is a profile configuration error.
+- The command line wins over the profile, and the default is `unaware`. Without the flag and the field the player
+  makes exactly the Win32 calls it made before the option existed.
+
+With `permonitorv2` the player calls `SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2)`
+before its first monitor query or window, and the profile resolution becomes the window's client size in **physical
+pixels**. On `WM_DPICHANGED` a normal window moves to the suggested top-left and keeps its client pixel size, and the
+overlay window keeps its rectangle.
+
+To prove that the opt-in still takes effect and never changes what a frame renders, `-Record` and `-Verify` run the
+smoke scene twice more, after the overlay+idle scenario:
+
+- **normal:** the usual 30-frame arguments plus `--dpi-awareness permonitorv2`, captured to
+  `<WorkRoot>\captures\dpiAware\<scene>.bmp`. The capture must match the smoke scene's existing golden with `compare`
+  (there is no dpiAware golden of its own; on a 96-dpi monitor the frame must not change by a single pixel).
+- **overlay:** the overlay scenario's arguments with the transparent probe plus `--dpi-awareness permonitorv2`:
+
+  ```
+  --window-mode overlay --overlay-bounds profile --overlay-background transparent --dpi-awareness permonitorv2 --hit-test-probe <transparent probe>
+  ```
+
+  captured to `<WorkRoot>\captures\dpiAware\<scene>.overlay.bmp`. It must log exactly
+  `HIT_TEST x=<x> y=<y> alpha=<a> clickThrough=on exStyle=<transparentExStyle>` (the overlay entry's transparent probe
+  and `exStyle`; Record uses the value its own transparent probe run just observed), describe the overlay window in
+  every window's fingerprint, pass `check-premultiplied <capture.bmp> 0.01 0.01` and match the overlay golden with
+  `compare-rgba`.
+
+In both runs **every window must report `dpiAwareness=permonitorv2`**, in `-Record` and `-Verify` alike. Any other
+value prints `FAIL dpiAware <scene> <run> run window <window>: dpiAwareness=<value>, expected permonitorv2`, which
+also keeps a `-Record` from being published. Both runs' fingerprint lines are named `<scene>.dpiAware.<run>@<window>`
+(for example `PASS fingerprint axis_test.dpiAware.normal@main matches record`), so a fingerprint finding names the run
+and the window. `-Record` requires every window to be healthy (`check-fingerprint`) and adds
+
+```
+{ "id": "<smoke scene>", "kind": "dpiAware",
+  "fingerprintsByRun": { "normal": { "main": { ..., "dpiAwareness": "permonitorv2", "elapsedMs": <n> } }, "overlay": { "main": { ... } } } }
+```
+
+to `manifest.json`. `-Verify` compares each run's fingerprints with its own run's record, window for window and field
+for field (a hand-edited recorded `dpiAwareness` therefore fails as
+`FAIL fingerprint axis_test.dpiAware.normal@main dpiAwareness recorded=<x> actual=permonitorv2`). A manifest without
+the entry prints `FAIL dpiAware <scene> dpiAware entry missing from manifest (re-record required)`, an entry without
+either run prints
+`FAIL dpiAware <scene> dpiAware entry lacks fingerprintsByRun.normal or fingerprintsByRun.overlay (re-record required)`,
+and when the overlay entry is incomplete the overlay run is not started and prints
+`FAIL dpiAware <scene> overlay run not run: ...`. On failure `-Record` writes the diffs beside the captures
+(`<scene>.diff.png`, `<scene>.overlay.diff.png`) and `-Verify` to `<WorkRoot>\diffs\<scene>.dpiAware.diff.png` and
+`<scene>.dpiAware.overlay.diff.png`. The other check lines are `PASS|FAIL|SKIP dpiAware <scene> <detail>`.
+
+**Blind spot: a single 96-dpi monitor.** The net runs on the owner's single monitor at 96 dpi (100% scaling), where an
+aware and an unaware window get the same pixels. It proves that the opt-in reaches the window
+(`dpiAwareness=permonitorv2`) and that it changes neither the frame, the swap chain nor the overlay's click-through,
+but it cannot exercise a dpi other than 96 (the physical-pixel sizing of the window), `WM_DPICHANGED`, or a window moved
+between monitors with different scaling. Those stay manual checks.
+
+**Manual check on a scaled display.** On a monitor scaled above 100% (for example 150%, 144 dpi), with the 640x360
+`profile.json` beside the player, run:
+
+```
+--scene axis_test --dpi-awareness permonitorv2 --frames 30 --capture <capture>.bmp --fixed-delta 0.016666
+```
+
+through `scripts\launch_in_emulator.ps1` and check the startup log and the capture:
+
+- the `HOST_FINGERPRINT` line reports `dpiAwareness=permonitorv2` and `dpi` equal to the monitor's DPI (for example
+  `dpi=144`);
+- `client=` equals the profile resolution (`client=640x360`), in physical pixels;
+- the capture is the profile resolution (640x360).
+
+Without `--dpi-awareness` the same run reports `dpiAwareness=unaware` and `dpi=96` (the system virtualizes the DPI).
+To check `WM_DPICHANGED`, run without `--frames`, drag the window to a monitor with different scaling and check that
+its client area keeps its pixel size.
+
 ## What this net does NOT catch
 
 - Resize and `ResizeBuffers` paths: the window is never resized during a run.
@@ -326,6 +410,8 @@ idle throttle, and how quickly a move from a transparent to an opaque pixel is n
   only the manual proofs cover that).
 - The live cursor path of the overlay window: cursor-driven hit testing and the idle wake on cursor motion over a
   click-through overlay (the probe uses a fixed pixel instead; see "Overlay + idle scenario").
+- DPI other than 96, `WM_DPICHANGED` and moves between monitors with different scaling: the net runs on one 96-dpi
+  monitor (see "Per-monitor DPI scenario" for the manual check on a scaled display).
 - Exact frame pacing: `elapsedMs` only produces a coarse `WARN pacing` when it moves by more than a factor of three.
 - The Release configuration: the net builds and runs the Debug player only.
 - Different GPUs and drivers: the goldens are only valid on the machine that recorded them.

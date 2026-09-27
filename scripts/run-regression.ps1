@@ -16,7 +16,7 @@ Modes (exactly one is required):
               the whole record had no FAIL.
   -Verify     Builds, runs every scene once, checks that the smoke scene is not blank, compares every stable scene
               with its golden and every scene's host fingerprints with the recorded ones, runs the idle-throttle,
-              overlay and overlay+idle scenarios (see below), and compares each test suite's failing-test set and
+              overlay, overlay+idle and dpiAware scenarios (see below), and compares each test suite's failing-test set and
               executed-test count with its baseline. Prints one line per check, then RESULT: PASS or RESULT: FAIL
               (<n> failing), and exits 0 only on PASS.
 
@@ -46,6 +46,14 @@ Record and Verify both run the opt-in overlay+idle scenario once on the smoke sc
 idle-throttle flags and the transparent probe. It must pass check-idle with the idle entry's minimums,
 check-premultiplied and compare-rgba against the overlay golden, and log HIT_TEST clickThrough=on with the transparent
 probe's exStyle. Its fingerprints are recorded in the overlayIdle entry for reference but never compared.
+
+Record and Verify both run the opt-in per-monitor DPI (dpiAware) scenario on the smoke scene, both runs with
+--dpi-awareness permonitorv2: a normal run whose capture must match the smoke scene's golden (compare), and an overlay
+run with the transparent probe that must log exactly the transparent probe's HIT_TEST line, pass check-premultiplied and
+match the overlay golden (compare-rgba). Every window of both runs must report dpiAwareness=permonitorv2 (a FAIL in
+Record and Verify alike). Record stores each run's per-window fingerprints (fingerprintsByRun.normal,
+fingerprintsByRun.overlay) in the dpiAware entry; Verify compares each run's fingerprints with its own run's record and
+fails a manifest without that entry.
 
 Every scene run is limited to 120 seconds; a hung player is killed and reported as FAIL scene <id> timeout.
 The work root is marked with a .helengine-regression-workroot file; a non-empty folder without it is refused.
@@ -102,7 +110,8 @@ if ($selectedModeCount -ne 1) {
 }
 
 # The functions below read these script-level values: $RepoRoot, $WorkRoot, $utf8WithoutBom, $CheckResults,
-# $playerOutputPath, $playerExecutablePath, $regressionToolPath, $idlePlayerArguments and $overlayPlayerArguments.
+# $playerOutputPath, $playerExecutablePath, $regressionToolPath, $idlePlayerArguments, $overlayPlayerArguments and
+# $dpiAwarePlayerArguments.
 # Check lines and progress lines use Write-Host
 # so that they never become part of a function's return value.
 
@@ -676,13 +685,14 @@ function ConvertTo-RecordedFingerprintsByWindow {
 <#
 .SYNOPSIS
 Checks that one window's HOST_FINGERPRINT line of an overlay run describes the overlay window and records one check
-line of Kind (overlay or overlayIdle).
+line of Kind (overlay, overlayIdle or dpiAware).
 .DESCRIPTION
 The overlay window must report windowMode=overlay, alpha=1 (DXGI_ALPHA_MODE_PREMULTIPLIED) and an exStyle that holds
 WS_EX_NOREDIRECTIONBITMAP (0x00200000), WS_EX_LAYERED (0x00080000), WS_EX_TOOLWINDOW (0x00000080) and WS_EX_TOPMOST
 (0x00000008). Record runs this on the record run and on every probe run before it stores their fingerprints (Verify
 then compares every field exactly with the stored ones), and the overlay+idle scenario runs it on every window in both
-Record and Verify, because its fingerprints are never compared field by field.
+Record and Verify, because its fingerprints are never compared field by field. The dpiAware scenario's overlay run
+runs it on every window in both modes too.
 #>
 function Test-OverlayFingerprintShape {
     param(
@@ -693,7 +703,7 @@ function Test-OverlayFingerprintShape {
         [string]$FingerprintLine,
 
         [Parameter(Mandatory = $true)]
-        [ValidateSet('overlay', 'overlayIdle')]
+        [ValidateSet('overlay', 'overlayIdle', 'dpiAware')]
         [string]$Kind
     )
 
@@ -717,7 +727,7 @@ function Test-OverlayFingerprintShape {
 <#
 .SYNOPSIS
 Runs the regression tool's check-premultiplied command on an overlay capture and records one check line of Kind
-(overlay or overlayIdle).
+(overlay, overlayIdle or dpiAware).
 .DESCRIPTION
 The capture is read with its real alpha: every pixel must have B, G and R at most A (valid premultiplied alpha), at
 least 1% of the pixels must be fully transparent (the transparent background exists) and at least 1% fully opaque.
@@ -726,7 +736,7 @@ ProbeName (record, transparent or opaque) names the run in the check line.
 function Test-OverlayPremultiplied {
     param(
         [Parameter(Mandatory = $true)]
-        [ValidateSet('overlay', 'overlayIdle')]
+        [ValidateSet('overlay', 'overlayIdle', 'dpiAware')]
         [string]$Kind,
 
         [Parameter(Mandatory = $true)]
@@ -752,7 +762,7 @@ function Test-OverlayPremultiplied {
 <#
 .SYNOPSIS
 Checks an overlay probe run's HIT_TEST line exactly, including the window's extended style, and records one check line
-of Kind (overlay or overlayIdle).
+of Kind (overlay, overlayIdle or dpiAware).
 .DESCRIPTION
 The player logs "HIT_TEST x=<x> y=<y> alpha=<a> clickThrough=<on|off> exStyle=0x<8 upper-case hex digits>" after the
 last frame of a --hit-test-probe run, where exStyle is GWL_EXSTYLE read back after the probe's click-through toggle.
@@ -771,7 +781,7 @@ The observed exStyle text (for example 0x002800A8) when the check passed; otherw
 function Test-OverlayHitTest {
     param(
         [Parameter(Mandatory = $true)]
-        [ValidateSet('overlay', 'overlayIdle')]
+        [ValidateSet('overlay', 'overlayIdle', 'dpiAware')]
         [string]$Kind,
 
         [Parameter(Mandatory = $true)]
@@ -837,12 +847,13 @@ function Test-OverlayHitTest {
 
 <#
 .SYNOPSIS
-Launches one overlay probe run of the smoke scene and checks that it ran: the launch shared by the overlay and
-overlay+idle scenarios.
+Launches one overlay probe run of the smoke scene and checks that it ran: the launch shared by the overlay,
+overlay+idle and dpiAware overlay runs.
 .DESCRIPTION
 Deletes a diff image left by an earlier run (so it is never mistaken for this run's), validates the probe and launches
 the player with the fixed 30-frame arguments plus the overlay window flags ($script:overlayPlayerArguments),
-ExtraArguments (none for the overlay scenario, the idle-throttle flags for the overlay+idle scenario) and
+ExtraArguments (none for the overlay scenario, the idle-throttle flags for the overlay+idle scenario and the
+dpi-awareness flag for the dpiAware scenario's overlay run) and
 --hit-test-probe <Probe>. A Probe that is not "x,y" with base-10 coordinates is a FAIL (re-record required) and the
 player is not launched. A run that timed out, exited non-zero, wrote no capture or logged no usable fingerprints is a
 FAIL (see Test-PlayerRunSucceeded). All check lines use Kind.
@@ -852,7 +863,7 @@ The run (see Invoke-PlayerScene) when it can be checked; otherwise $null, after 
 function Invoke-OverlayProbeRun {
     param(
         [Parameter(Mandatory = $true)]
-        [ValidateSet('overlay', 'overlayIdle')]
+        [ValidateSet('overlay', 'overlayIdle', 'dpiAware')]
         [string]$Kind,
 
         [Parameter(Mandatory = $true)]
@@ -1048,6 +1059,205 @@ function Invoke-OverlayIdleScenario {
     Test-OverlayPremultiplied -Kind overlayIdle -SceneId $SceneId -ProbeName transparent -CapturePath $CapturePath
     Test-CaptureMatchesGolden -Kind overlayIdle -SceneId $SceneId -CompareCommand compare-rgba -CapturePath $CapturePath -GoldenPath $GoldenPath -DiffPath $DiffPath -Description 'overlay idle run capture' -GoldenLabel 'overlay golden'
     return $overlayIdleRun.FingerprintsByWindow
+}
+
+<#
+.SYNOPSIS
+Checks that every window of one dpiAware run reports dpiAwareness=permonitorv2 and records one "dpiAware" check line
+per window.
+.DESCRIPTION
+The runs pass --dpi-awareness permonitorv2, so a window that reports any other awareness (unaware, a missing field or
+anything else) means the player ignored the opt-in: the line is "FAIL dpiAware <scene> <run> run window <window>:
+dpiAwareness=<value>, expected permonitorv2". Both Record and Verify run this on every window of both runs, so neither
+can accept an unaware run, whatever the recorded fingerprints say.
+#>
+function Test-DpiAwarenessFingerprints {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$SceneId,
+
+        [Parameter(Mandatory = $true)]
+        [ValidateSet('normal', 'overlay')]
+        [string]$RunName,
+
+        [Parameter(Mandatory = $true)]
+        [System.Collections.Specialized.OrderedDictionary]$FingerprintsByWindow
+    )
+
+    foreach ($windowName in $FingerprintsByWindow.Keys) {
+        $fingerprintFields = ConvertTo-FingerprintFields -FingerprintLine $FingerprintsByWindow[$windowName]
+        $dpiAwarenessText = "$($fingerprintFields['dpiAwareness'])"
+        if ($dpiAwarenessText -cne 'permonitorv2') {
+            Add-CheckResult -Status FAIL -Kind dpiAware -Name $SceneId -Detail "$RunName run window ${windowName}: dpiAwareness=$dpiAwarenessText, expected permonitorv2"
+        }
+        else {
+            Add-CheckResult -Status PASS -Kind dpiAware -Name $SceneId -Detail "$RunName run window ${windowName}: dpiAwareness=permonitorv2 dpi=$($fingerprintFields['dpi']) client=$($fingerprintFields['client'])"
+        }
+    }
+}
+
+<#
+.SYNOPSIS
+Checks the per-window fingerprints of one dpiAware run: healthy (Record) or equal to the recorded ones (Verify), and
+per-monitor v2 aware in both modes.
+.DESCRIPTION
+The fingerprint lines are named <scene>.dpiAware.<run>@<window> (for example axis_test.dpiAware.normal@main), so a
+finding names the run and the window and never mixes with the scene's normal-run or overlay-probe lines. With
+-RecordMode every window must pass check-fingerprint; otherwise the run's windows must match
+RecordedFingerprintsByWindow window for window and field for field (Compare-FingerprintsByWindow). In both modes every
+window must then report dpiAwareness=permonitorv2 (Test-DpiAwarenessFingerprints).
+#>
+function Test-DpiAwareRunFingerprints {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$SceneId,
+
+        [Parameter(Mandatory = $true)]
+        [ValidateSet('normal', 'overlay')]
+        [string]$RunName,
+
+        [Parameter(Mandatory = $true)]
+        [System.Collections.Specialized.OrderedDictionary]$FingerprintsByWindow,
+
+        [Parameter()]
+        [switch]$RecordMode,
+
+        [Parameter()]
+        [System.Collections.Specialized.OrderedDictionary]$RecordedFingerprintsByWindow
+    )
+
+    if ($RecordMode -and $null -ne $RecordedFingerprintsByWindow) {
+        throw "Test-DpiAwareRunFingerprints takes either -RecordMode or -RecordedFingerprintsByWindow, not both."
+    }
+    if (-not $RecordMode -and $null -eq $RecordedFingerprintsByWindow) {
+        throw "Test-DpiAwareRunFingerprints requires -RecordedFingerprintsByWindow outside -RecordMode."
+    }
+
+    $fingerprintName = "$SceneId.dpiAware.$RunName"
+    if ($RecordMode) {
+        Invoke-FingerprintHealthCheck -Name $fingerprintName -FingerprintsByWindow $FingerprintsByWindow -PassDetail "$RunName run healthy"
+    }
+    else {
+        Compare-FingerprintsByWindow -Name $fingerprintName -RecordedFingerprintsByWindow $RecordedFingerprintsByWindow -ActualFingerprintsByWindow $FingerprintsByWindow -PassDetail 'matches record'
+    }
+    Test-DpiAwarenessFingerprints -SceneId $SceneId -RunName $RunName -FingerprintsByWindow $FingerprintsByWindow
+}
+
+<#
+.SYNOPSIS
+Runs the dpiAware scenario's normal run once on a scene and records its checks as "dpiAware" check lines.
+.DESCRIPTION
+Deletes a diff image left by an earlier run, then launches the player with the fixed 30-frame arguments plus
+--dpi-awareness permonitorv2 ($script:dpiAwarePlayerArguments). A run that timed out, exited non-zero, wrote no capture
+or logged no usable fingerprints is a FAIL (see Test-PlayerRunSucceeded). Its fingerprints go through
+Test-DpiAwareRunFingerprints (healthy with -RecordMode, otherwise equal to RecordedFingerprintsByWindow; always
+dpiAwareness=permonitorv2), and its capture must match the scene's existing golden with compare: on a 96-dpi monitor
+per-monitor awareness must not change a single rendered pixel, so no golden of its own is recorded. When GoldenPath is
+empty the scene has no golden (it was recorded unstable), so the capture comparison is reported as SKIP.
+.OUTPUTS
+The run's FingerprintsByWindow (Record stores them in the dpiAware entry); $null when the run failed.
+#>
+function Invoke-DpiAwareNormalRun {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$SceneId,
+
+        [Parameter(Mandatory = $true)]
+        [string]$CapturePath,
+
+        [Parameter(Mandatory = $true)]
+        [string]$DiffPath,
+
+        [Parameter(Mandatory = $true)]
+        [AllowEmptyString()]
+        [string]$GoldenPath,
+
+        [Parameter()]
+        [switch]$RecordMode,
+
+        [Parameter()]
+        [System.Collections.Specialized.OrderedDictionary]$RecordedFingerprintsByWindow
+    )
+
+    # A diff image left by an earlier run must never be mistaken for this run's, so it is deleted before the run.
+    if (Test-Path -LiteralPath $DiffPath -PathType Leaf) {
+        Remove-Item -LiteralPath $DiffPath -Force
+    }
+    $normalRun = Invoke-PlayerScene -SceneId $SceneId -CapturePath $CapturePath -ExtraArguments $script:dpiAwarePlayerArguments
+    if (-not (Test-PlayerRunSucceeded -PlayerRun $normalRun -Kind dpiAware -SceneId $SceneId -CapturePath $CapturePath)) {
+        return $null
+    }
+
+    Test-DpiAwareRunFingerprints -SceneId $SceneId -RunName normal -FingerprintsByWindow $normalRun.FingerprintsByWindow -RecordMode:$RecordMode -RecordedFingerprintsByWindow $RecordedFingerprintsByWindow
+    if ($GoldenPath.Length -eq 0) {
+        Add-CheckResult -Status SKIP -Kind dpiAware -Name $SceneId -Detail 'normal run capture not compared: the scene has no golden (unstable)'
+    }
+    else {
+        Test-CaptureMatchesGolden -Kind dpiAware -SceneId $SceneId -CompareCommand compare -CapturePath $CapturePath -GoldenPath $GoldenPath -DiffPath $DiffPath -Description 'normal run capture' -GoldenLabel 'golden'
+    }
+    return $normalRun.FingerprintsByWindow
+}
+
+<#
+.SYNOPSIS
+Runs the dpiAware scenario's overlay run once on a scene with the recorded transparent probe and records its checks as
+"dpiAware" check lines.
+.DESCRIPTION
+Launches the player through Invoke-OverlayProbeRun with the overlay window flags plus --dpi-awareness permonitorv2
+($script:dpiAwarePlayerArguments) and --hit-test-probe <Probe>, the overlay entry's transparent probe. The run must exit
+0 and: log HIT_TEST clickThrough=on with WS_EX_TRANSPARENT (0x20) set and exactly ExpectedExStyle, the transparent
+probe's exStyle (Record passes the value its own transparent probe run just observed, Verify the recorded one, so this
+check is exact in both modes); describe the overlay window in every window's fingerprint
+(Test-OverlayFingerprintShape); pass check-premultiplied; match the overlay golden with compare-rgba; and pass
+Test-DpiAwareRunFingerprints (healthy with -RecordMode, otherwise equal to RecordedFingerprintsByWindow; always
+dpiAwareness=permonitorv2).
+.OUTPUTS
+The run's FingerprintsByWindow (Record stores them in the dpiAware entry); $null when the run failed.
+#>
+function Invoke-DpiAwareOverlayRun {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$SceneId,
+
+        [Parameter(Mandatory = $true)]
+        [string]$Probe,
+
+        [Parameter(Mandatory = $true)]
+        [string]$ExpectedExStyle,
+
+        [Parameter(Mandatory = $true)]
+        [string]$CapturePath,
+
+        [Parameter(Mandatory = $true)]
+        [string]$DiffPath,
+
+        [Parameter(Mandatory = $true)]
+        [string]$GoldenPath,
+
+        [Parameter()]
+        [switch]$RecordMode,
+
+        [Parameter()]
+        [System.Collections.Specialized.OrderedDictionary]$RecordedFingerprintsByWindow
+    )
+
+    # The caller validates the recorded value; an invalid one here is a bug, so it throws before any launch.
+    if ($ExpectedExStyle -cnotmatch '^0x[0-9A-F]{8}$') {
+        throw "Invoke-DpiAwareOverlayRun requires ExpectedExStyle as 0x<8 upper-case hex digits (got '$ExpectedExStyle')."
+    }
+    $overlayRun = Invoke-OverlayProbeRun -Kind dpiAware -SceneId $SceneId -ProbeName transparent -Probe $Probe -CapturePath $CapturePath -DiffPath $DiffPath -ExtraArguments $script:dpiAwarePlayerArguments
+    if ($null -eq $overlayRun) {
+        return $null
+    }
+
+    $null = Test-OverlayHitTest -Kind dpiAware -SceneId $SceneId -ProbeName transparent -Probe $Probe -ExpectedClickThrough on -ExpectedExStyle $ExpectedExStyle -HitTestLine "$($overlayRun.HitTest)"
+    foreach ($overlayWindowName in $overlayRun.FingerprintsByWindow.Keys) {
+        Test-OverlayFingerprintShape -SceneId $SceneId -FingerprintLine $overlayRun.FingerprintsByWindow[$overlayWindowName] -Kind dpiAware
+    }
+    Test-OverlayPremultiplied -Kind dpiAware -SceneId $SceneId -ProbeName overlay -CapturePath $CapturePath
+    Test-CaptureMatchesGolden -Kind dpiAware -SceneId $SceneId -CompareCommand compare-rgba -CapturePath $CapturePath -GoldenPath $GoldenPath -DiffPath $DiffPath -Description 'overlay run capture' -GoldenLabel 'overlay golden'
+    Test-DpiAwareRunFingerprints -SceneId $SceneId -RunName overlay -FingerprintsByWindow $overlayRun.FingerprintsByWindow -RecordMode:$RecordMode -RecordedFingerprintsByWindow $RecordedFingerprintsByWindow
+    return $overlayRun.FingerprintsByWindow
 }
 
 <#
@@ -1612,6 +1822,14 @@ $overlayOpaqueCapturePath = Join-Path $overlayCaptureRootPath "$($smokeSceneId.R
 # writes its diff beside its capture; Verify redirects it into its wiped diffs folder.
 $overlayIdleCapturePath = Join-Path $capturesRootPath "overlayIdle\$($smokeSceneId.Replace('/', '__')).bmp"
 $overlayIdleDiffPath = Join-Path $capturesRootPath "overlayIdle\$($smokeSceneId.Replace('/', '__')).diff.png"
+# The opt-in per-monitor DPI scenario: the smoke scene runs once as a normal window and once as the overlay window with
+# the transparent probe, both with --dpi-awareness permonitorv2. Neither has a golden of its own: the normal run is
+# compared with the smoke golden and the overlay run with the overlay golden. Record writes the diffs beside the
+# captures; Verify redirects them into its wiped diffs folder.
+$dpiAwarePlayerArguments = @('--dpi-awareness', 'permonitorv2')
+$dpiAwareCaptureRootPath = Join-Path $capturesRootPath 'dpiAware'
+$dpiAwareNormalCapturePath = Join-Path $dpiAwareCaptureRootPath "$($smokeSceneId.Replace('/', '__')).bmp"
+$dpiAwareOverlayCapturePath = Join-Path $dpiAwareCaptureRootPath "$($smokeSceneId.Replace('/', '__')).overlay.bmp"
 $testSuites = @(
     [pscustomobject]@{ Name = 'helengine.editor.tests'; ProjectPath = "$HelengineRoot\engine\helengine.editor.tests\helengine.editor.tests.csproj"; ExtraArguments = @() },
     [pscustomobject]@{ Name = 'helengine.render.validation.tests'; ProjectPath = "$HelengineRoot\engine\helengine.render.validation.tests\helengine.render.validation.tests.csproj"; ExtraArguments = @() },
@@ -1732,6 +1950,7 @@ if ($Record) {
                 $overlayOpaqueResult = Invoke-OverlayScenario -SceneId $smokeSceneId -ProbeName opaque -Probe $overlayOpaqueProbe -ExpectedClickThrough off -ExpectedExStyle '' -RecordMode -CapturePath $overlayOpaqueCapturePath -DiffPath (Join-Path $overlayCaptureRootPath "$($smokeSceneId.Replace('/', '__')).opaque.diff.png") -GoldenPath $overlayStagingGoldenPath
                 if ($null -eq $overlayTransparentResult -or $null -eq $overlayOpaqueResult) {
                     Add-CheckResult -Status FAIL -Kind overlayIdle -Name $smokeSceneId -Detail 'not run: the overlay probe runs did not both pass, so no transparent exStyle was recorded'
+                    Add-CheckResult -Status FAIL -Kind dpiAware -Name $smokeSceneId -Detail 'not run: the overlay probe runs did not both pass, so no transparent exStyle was recorded'
                 }
                 else {
                     $overlayFingerprintsByProbe = [ordered]@{
@@ -1746,6 +1965,25 @@ if ($Record) {
                     $overlayIdleFingerprintsByWindow = Invoke-OverlayIdleScenario -SceneId $smokeSceneId -Probe $overlayTransparentProbe -ExpectedExStyle $overlayTransparentResult.ExStyle -CapturePath $overlayIdleCapturePath -DiffPath $overlayIdleDiffPath -GoldenPath $overlayStagingGoldenPath -MinimumIdleFrames $idleMinimumIdleFrames -MinimumElapsedMilliseconds $idleMinimumElapsedMilliseconds
                     if ($null -ne $overlayIdleFingerprintsByWindow) {
                         $manifestScenes.Add([ordered]@{ id = $smokeSceneId; kind = 'overlayIdle'; fingerprints = (ConvertTo-ManifestFingerprints -FingerprintsByWindow $overlayIdleFingerprintsByWindow) })
+                    }
+
+                    # 11R-dpiAware. Run the per-monitor DPI scenario: a normal run compared with the staged smoke
+                    #               golden and an overlay run with the transparent probe and exStyle just recorded,
+                    #               compared with the staged overlay golden. Any window that does not report
+                    #               dpiAwareness=permonitorv2 is a FAIL, which keeps the record from being published.
+                    #               The manifest's dpiAware entry stores both runs' per-window fingerprints.
+                    $dpiAwareGoldenPath = Join-Path $stagingGoldenRootPath "$($smokeSceneId.Replace('/', '__')).png"
+                    if ($unstableSceneIds.Contains($smokeSceneId)) {
+                        $dpiAwareGoldenPath = ''
+                    }
+                    $dpiAwareNormalFingerprintsByWindow = Invoke-DpiAwareNormalRun -SceneId $smokeSceneId -CapturePath $dpiAwareNormalCapturePath -DiffPath (Join-Path $dpiAwareCaptureRootPath "$($smokeSceneId.Replace('/', '__')).diff.png") -GoldenPath $dpiAwareGoldenPath -RecordMode
+                    $dpiAwareOverlayFingerprintsByWindow = Invoke-DpiAwareOverlayRun -SceneId $smokeSceneId -Probe $overlayTransparentProbe -ExpectedExStyle $overlayTransparentResult.ExStyle -CapturePath $dpiAwareOverlayCapturePath -DiffPath (Join-Path $dpiAwareCaptureRootPath "$($smokeSceneId.Replace('/', '__')).overlay.diff.png") -GoldenPath $overlayStagingGoldenPath -RecordMode
+                    if ($null -ne $dpiAwareNormalFingerprintsByWindow -and $null -ne $dpiAwareOverlayFingerprintsByWindow) {
+                        $dpiAwareFingerprintsByRun = [ordered]@{
+                            normal = (ConvertTo-ManifestFingerprints -FingerprintsByWindow $dpiAwareNormalFingerprintsByWindow)
+                            overlay = (ConvertTo-ManifestFingerprints -FingerprintsByWindow $dpiAwareOverlayFingerprintsByWindow)
+                        }
+                        $manifestScenes.Add([ordered]@{ id = $smokeSceneId; kind = 'dpiAware'; fingerprintsByRun = $dpiAwareFingerprintsByRun })
                     }
                 }
             }
@@ -1799,6 +2037,7 @@ else {
     $recordedIdleScene = $null
     $recordedOverlayScene = $null
     $recordedOverlayIdleScene = $null
+    $recordedDpiAwareScene = $null
     # Step 1 already stopped the run when the manifest is missing, because Verify builds the commit it pins.
     $manifest = [System.IO.File]::ReadAllText($manifestPath) | ConvertFrom-Json
     # The build above used the pinned (recorded) commit, so a moved HEAD only means the net is not testing the
@@ -1837,6 +2076,9 @@ else {
         }
         elseif ($manifestScene.kind -eq 'overlayIdle') {
             $recordedOverlayIdleScene = $manifestScene
+        }
+        elseif ($manifestScene.kind -eq 'dpiAware') {
+            $recordedDpiAwareScene = $manifestScene
         }
     }
     foreach ($recordedSceneId in $recordedGoldenSceneIds) {
@@ -1967,6 +2209,34 @@ else {
         # The overlayIdle diff goes into the diffs folder wiped above, beside the scene diffs.
         $overlayIdleDiffPath = Join-Path $diffsRootPath "$($smokeSceneId.Replace('/', '__')).overlayIdle.diff.png"
         $null = Invoke-OverlayIdleScenario -SceneId $smokeSceneId -Probe "$($recordedOverlayScene.transparentProbe)" -ExpectedExStyle "$($recordedOverlayScene.transparentExStyle)" -CapturePath $overlayIdleCapturePath -DiffPath $overlayIdleDiffPath -GoldenPath (Join-Path $goldenRootPath $overlayGoldenFileName) -MinimumIdleFrames "$($recordedIdleScene.minIdleFrames)" -MinimumElapsedMilliseconds "$($recordedIdleScene.minElapsedMs)"
+    }
+
+    # 12V-dpiAware. Run the per-monitor DPI scenario: the normal run against the smoke golden and its recorded
+    #               fingerprints, then the overlay run with the overlay entry's transparent probe and exStyle against
+    #               the overlay golden and its recorded fingerprints. Every window must report
+    #               dpiAwareness=permonitorv2. A manifest without the dpiAware entry, or an entry without either run's
+    #               fingerprints, must be re-recorded, so that is a FAIL rather than a silent skip.
+    if ($null -eq $recordedDpiAwareScene -or $recordedDpiAwareScene.id -ne $smokeSceneId) {
+        Add-CheckResult -Status FAIL -Kind dpiAware -Name $smokeSceneId -Detail "dpiAware entry missing from manifest (re-record required): $manifestPath"
+    }
+    elseif ($null -eq $recordedDpiAwareScene.fingerprintsByRun.normal -or $null -eq $recordedDpiAwareScene.fingerprintsByRun.overlay) {
+        Add-CheckResult -Status FAIL -Kind dpiAware -Name $smokeSceneId -Detail "dpiAware entry lacks fingerprintsByRun.normal or fingerprintsByRun.overlay (re-record required): $manifestPath"
+    }
+    else {
+        # The dpiAware diffs go into the diffs folder wiped above, beside the scene diffs.
+        $dpiAwareNormalDiffPath = Join-Path $diffsRootPath "$($smokeSceneId.Replace('/', '__')).dpiAware.diff.png"
+        $dpiAwareOverlayDiffPath = Join-Path $diffsRootPath "$($smokeSceneId.Replace('/', '__')).dpiAware.overlay.diff.png"
+        $dpiAwareGoldenPath = Join-Path $goldenRootPath "$($smokeSceneId.Replace('/', '__')).png"
+        if ($unstableSceneIds.Contains($smokeSceneId)) {
+            $dpiAwareGoldenPath = ''
+        }
+        $null = Invoke-DpiAwareNormalRun -SceneId $smokeSceneId -CapturePath $dpiAwareNormalCapturePath -DiffPath $dpiAwareNormalDiffPath -GoldenPath $dpiAwareGoldenPath -RecordedFingerprintsByWindow (ConvertTo-RecordedFingerprintsByWindow -RecordedFingerprints $recordedDpiAwareScene.fingerprintsByRun.normal)
+        if (-not $overlayEntryComplete) {
+            Add-CheckResult -Status FAIL -Kind dpiAware -Name $smokeSceneId -Detail 'overlay run not run: it needs a complete overlay entry for its probe and exStyle (see the overlay check lines)'
+        }
+        else {
+            $null = Invoke-DpiAwareOverlayRun -SceneId $smokeSceneId -Probe "$($recordedOverlayScene.transparentProbe)" -ExpectedExStyle "$($recordedOverlayScene.transparentExStyle)" -CapturePath $dpiAwareOverlayCapturePath -DiffPath $dpiAwareOverlayDiffPath -GoldenPath (Join-Path $goldenRootPath $overlayGoldenFileName) -RecordedFingerprintsByWindow (ConvertTo-RecordedFingerprintsByWindow -RecordedFingerprints $recordedDpiAwareScene.fingerprintsByRun.overlay)
+        }
     }
 
     # 13V. Check each suite run's outcome and executed-test count against the recorded count (an errored, aborted or
