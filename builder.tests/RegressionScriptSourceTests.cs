@@ -778,7 +778,9 @@ public sealed class RegressionScriptSourceTests {
 
     /// <summary>
     /// Ensures the regression README documents the dpiAware scenario, the new flag and profile field, the single-monitor
-    /// blind spot (dpi other than 96, WM_DPICHANGED and cross-monitor moves) and the manual check for a scaled display.
+    /// blind spot (dpi other than 96, WM_DPICHANGED and cross-monitor moves), the manual check for a scaled display with
+    /// its WM_GETDPISCALEDSIZE, maximized and minimized cases, the SKIP of the pixel compare for an unstable smoke scene,
+    /// and the reference-worktree Verify command the current record requires.
     /// </summary>
     [Fact]
     public void RegressionReadme_DocumentsTheDpiAwareScenario() {
@@ -794,6 +796,10 @@ public sealed class RegressionScriptSourceTests {
         Assert.Contains("WM_DPICHANGED", readmeSource, StringComparison.Ordinal);
         Assert.Contains("--dpi-awareness permonitorv2 --frames 30 --capture", readmeSource, StringComparison.Ordinal);
         Assert.Contains("Manual check on a scaled display", readmeSource, StringComparison.Ordinal);
+        Assert.Contains("WM_GETDPISCALEDSIZE", readmeSource, StringComparison.Ordinal);
+        Assert.Contains("Win+Shift+Arrow", readmeSource, StringComparison.Ordinal);
+        Assert.Contains("normal run capture not compared: the scene has no golden (unstable)", readmeSource, StringComparison.Ordinal);
+        Assert.Contains(@"-Verify -HelengineRoot C:\dev\helworks\helengine\.worktrees\regression-reference -PlatformsManifestPath C:\dev\helworks\helengine\user_settings\platforms.json", readmeSource, StringComparison.Ordinal);
     }
 
     /// <summary>

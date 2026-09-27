@@ -55,9 +55,18 @@ A new host class, `Win32DpiWindowSizing`, holds the pure sizing math so it can b
 
 **`WM_DPICHANGED`** (only aware windows receive it):
 - **Normal:** move to the suggested rectangle's top-left, but size the window with `OuterSizeForClient` at the new DPI, so the client pixel size stays the same. The core therefore sees no resize, and the known core `OnWindowResize` issue is not reached.
+- **Normal, maximized** (`IsZoomed`): apply the suggested rectangle as given, so the window keeps filling its monitor. A failed `SetWindowPos` throws like the ordinary path. A maximized client already differs from the profile resolution, so this reaches no new core-resize path.
+- **Normal, minimized** (`IsIconic`): return 0 without resizing. The cached client size is 0x0 while minimized, so the ordinary rule would apply a frame-only size.
 - **Overlay:** keep the current rectangle and ignore the suggestion. The overlay covers the monitor in physical pixels, which a DPI change does not alter.
-- The handler returns 0.
+- The handler returns 0 in every case.
 - In unaware mode the message never arrives, so the default path cannot reach this code.
+
+**`WM_GETDPISCALEDSIZE`** (sent to an aware window before `WM_DPICHANGED`, for example while it is dragged across monitors):
+- **Normal, aware, neither maximized nor minimized:** write `OuterSizeForClient(current client size, WS_OVERLAPPEDWINDOW, 0, new DPI from wParam)` into the `SIZE` that lParam points to and return TRUE. Windows then builds the `WM_DPICHANGED` suggested rectangle around the cursor with the real size, so the window does not jump away from the cursor or bounce between monitors.
+- **Every other case, the overlay included:** return FALSE, which lets Windows scale linearly. A maximized window takes the suggested rectangle anyway, a minimized one is not resized, and the overlay's `WM_DPICHANGED` ignores the suggestion.
+- A sizing failure goes through the window procedure's existing exception marshalling; the message then returns FALSE and the pump rethrows.
+
+Amended 2026-09-27 after the final review; pending Helena's confirmation at merge: the maximized and minimized `WM_DPICHANGED` cases and the `WM_GETDPISCALEDSIZE` handling were added.
 
 ## 4. Diagnostics
 

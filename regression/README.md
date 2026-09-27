@@ -375,7 +375,10 @@ either run prints
 and when the overlay entry is incomplete the overlay run is not started and prints
 `FAIL dpiAware <scene> overlay run not run: ...`. On failure `-Record` writes the diffs beside the captures
 (`<scene>.diff.png`, `<scene>.overlay.diff.png`) and `-Verify` to `<WorkRoot>\diffs\<scene>.dpiAware.diff.png` and
-`<scene>.dpiAware.overlay.diff.png`. The other check lines are `PASS|FAIL|SKIP dpiAware <scene> <detail>`.
+`<scene>.dpiAware.overlay.diff.png`. The other check lines are `PASS|FAIL|SKIP dpiAware <scene> <detail>`. When the
+smoke scene was recorded unstable it has no golden, so the normal run's pixel compare reports
+`SKIP dpiAware <scene> normal run capture not compared: the scene has no golden (unstable)`; the run itself and its
+`dpiAwareness=permonitorv2` check still run, and still FAIL on any other value.
 
 **Blind spot: a single 96-dpi monitor.** The net runs on the owner's single monitor at 96 dpi (100% scaling), where an
 aware and an unaware window get the same pixels. It proves that the opt-in reaches the window
@@ -398,8 +401,17 @@ through `scripts\launch_in_emulator.ps1` and check the startup log and the captu
 - the capture is the profile resolution (640x360).
 
 Without `--dpi-awareness` the same run reports `dpiAwareness=unaware` and `dpi=96` (the system virtualizes the DPI).
-To check `WM_DPICHANGED`, run without `--frames`, drag the window to a monitor with different scaling and check that
-its client area keeps its pixel size.
+To check `WM_DPICHANGED` and `WM_GETDPISCALEDSIZE`, run without `--frames` with a second monitor at a different
+scaling:
+
+- drag the window slowly across the monitor edge: the window stays under the cursor (it does not jump away or bounce
+  back to the previous monitor), and on the new monitor its client area keeps its pixel size (`WM_GETDPISCALEDSIZE`
+  already sized the suggested rectangle);
+- maximize the window, then move it to the other monitor with Win+Shift+Arrow: it is still maximized and fills that
+  monitor's work area exactly (no overflow onto the taskbar or the next monitor, no gap); restoring it gives back the
+  profile client size;
+- minimize the window, change its monitor's scaling while it is minimized, then restore it: it comes back at its
+  client pixel size, not as a frame-only sliver.
 
 ## What this net does NOT catch
 
@@ -419,9 +431,19 @@ its client area keeps its pixel size.
 
 ## Current record
 
-The committed `manifest.json` is current as of the `f0ab357` re-record described below: `-Verify` passes against it
-as committed, with every golden entry in the per-window `fingerprints` shape, an `overlayIdle` entry and a `dpiAware`
-entry present.
+The committed `manifest.json` is current as of the `f0ab357` re-record described below, with every golden entry in the
+per-window `fingerprints` shape, an `overlayIdle` entry and a `dpiAware` entry present. That re-record, its
+`helengineDirty=false` provenance and the `helengine.editor.tests` baselines all come from the clean reference
+worktree `C:\dev\helworks\helengine\.worktrees\regression-reference`, not from the main helengine checkout. Until the
+next re-record from the main checkout, run `-Verify` against that same root:
+
+```powershell
+powershell -File scripts\run-regression.ps1 -Verify -HelengineRoot C:\dev\helworks\helengine\.worktrees\regression-reference -PlatformsManifestPath C:\dev\helworks\helengine\user_settings\platforms.json
+```
+
+A default `-Verify` (`-HelengineRoot C:\dev\helworks\helengine`) against a main checkout with uncommitted changes
+prints the helengine provenance WARNs and differs on the editor baselines, a FAIL that has nothing to do with the host.
+Re-recording from the main checkout once its changes are committed restores the default root.
 
 The goldens were first recorded on 2026-09-24 from commit `f8a92cb`, and re-recorded on 2026-09-25 from commit
 `d7defda` (feature/regression-safety-net) to add the host fingerprints, the executed-test counts and the provenance
