@@ -2,6 +2,7 @@
 
 #include <Windows.h>
 
+#include <exception>
 #include <string>
 
 #include "platform/windows/win32/win32_dpi_awareness.hpp"
@@ -59,6 +60,13 @@ namespace helengine::windows {
         /// <param name="dpiAwareness">DPI awareness the process applied before any window was created.</param>
         void SetDpiAwareness(Win32DpiAwareness dpiAwareness);
 
+        /// Rethrows, and clears, the first exception a message handler raised since the last call. The window
+        /// procedure never lets a C++ exception unwind through user32 or kernel callback frames (undefined on x64);
+        /// it keeps the exception instead, and the message pump calls this right after each DispatchMessageW so the
+        /// failure reaches the application's fatal handler through ordinary C++ frames. Does nothing when no handler
+        /// failed.
+        void RethrowPendingException();
+
     private:
         /// Handles window messages for this instance, first reporting each one to the attached activity tracker when
         /// there is one; the message handling and return values do not depend on the tracker. WM_DPICHANGED, which
@@ -100,7 +108,10 @@ namespace helengine::windows {
         /// Updates the cached client size from the current native window state.
         void RefreshClientSize();
 
-        /// Bridges the Win32 callback signature to the stored window instance.
+        /// Bridges the Win32 callback signature to the stored window instance. Any exception HandleMessage throws is
+        /// caught here, kept in PendingException (the first one wins, so the root cause is not overwritten) and the
+        /// message returns 0, because a C++ exception must not unwind through the user32 frames that called the
+        /// window procedure; RethrowPendingException rethrows it once control is back in ordinary C++ frames.
         static LRESULT CALLBACK WindowProcedure(HWND handle, UINT message, WPARAM wParam, LPARAM lParam);
 
         /// Stores the native window title.
@@ -134,5 +145,9 @@ namespace helengine::windows {
         /// Stores the DPI awareness the process applied; Win32DpiAwareness::Unaware unless SetDpiAwareness opted the
         /// window into Per-Monitor v2 sizing.
         Win32DpiAwareness DpiAwareness;
+
+        /// Stores the first exception a message handler raised inside the window procedure, until
+        /// RethrowPendingException rethrows it; null when no handler has failed since the last rethrow.
+        std::exception_ptr PendingException;
     };
 }

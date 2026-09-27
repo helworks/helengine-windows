@@ -26,7 +26,8 @@ namespace helengine::windows {
         , Handle(nullptr)
         , MouseWheelDelta(0)
         , ActivityTracker(nullptr)
-        , DpiAwareness(Win32DpiAwareness::Unaware) {
+        , DpiAwareness(Win32DpiAwareness::Unaware)
+        , PendingException(nullptr) {
     }
 
     /// Releases the native window if it is still alive.
@@ -53,6 +54,7 @@ namespace helengine::windows {
             CreateNormalWindow();
         }
 
+        RethrowPendingException();
         if (Handle == nullptr) {
             throw std::runtime_error("CreateWindowExW failed for the HelEngine Windows host.");
         }
@@ -212,6 +214,18 @@ namespace helengine::windows {
         DpiAwareness = dpiAwareness;
     }
 
+    /// Rethrows, and clears, the first exception a message handler raised since the last call. The window procedure
+    /// never lets a C++ exception unwind through user32 or kernel callback frames (undefined on x64); it keeps the
+    /// exception instead, and the message pump calls this right after each DispatchMessageW so the failure reaches the
+    /// application's fatal handler through ordinary C++ frames. Does nothing when no handler failed.
+    void Win32Window::RethrowPendingException() {
+        if (PendingException != nullptr) {
+            std::exception_ptr pendingException = PendingException;
+            PendingException = nullptr;
+            std::rethrow_exception(pendingException);
+        }
+    }
+
     /// Handles window messages for this instance, first reporting each one to the attached activity tracker when
     /// there is one; the message handling and return values do not depend on the tracker. WM_DPICHANGED, which only a
     /// Per-Monitor v2 aware window receives, moves a normal window to the suggested top-left while keeping its client
@@ -235,7 +249,12 @@ namespace helengine::windows {
                 // top-left but keeps its client pixel size at the new DPI; an overlay keeps its rectangle.
                 if (WindowStyle.GetWindowMode() == Win32WindowMode::Normal) {
                     RECT placement = Win32DpiWindowSizing::PlacementForDpiChange(*reinterpret_cast<RECT*>(lParam), GetClientWidth(), GetClientHeight(), WS_OVERLAPPEDWINDOW, 0, HIWORD(wParam));
-                    SetWindowPos(Handle, nullptr, placement.left, placement.top, placement.right - placement.left, placement.bottom - placement.top, SWP_NOZORDER | SWP_NOACTIVATE);
+                    if (!SetWindowPos(Handle, nullptr, placement.left, placement.top, placement.right - placement.left, placement.bottom - placement.top, SWP_NOZORDER | SWP_NOACTIVATE)) {
+                        DWORD errorCode = GetLastError();
+                        std::ostringstream messageBuilder;
+                        messageBuilder << "SetWindowPos failed while placing the HelEngine Windows host window for a DPI change with Win32 error " << errorCode << ".";
+                        throw std::runtime_error(messageBuilder.str());
+                    }
                 }
                 return 0;
 
@@ -276,7 +295,10 @@ namespace helengine::windows {
         }
     }
 
-    /// Bridges the Win32 callback signature to the stored window instance.
+    /// Bridges the Win32 callback signature to the stored window instance. Any exception HandleMessage throws is caught
+    /// here, kept in PendingException (the first one wins, so the root cause is not overwritten) and the message
+    /// returns 0, because a C++ exception must not unwind through the user32 frames that called the window procedure;
+    /// RethrowPendingException rethrows it once control is back in ordinary C++ frames.
     LRESULT CALLBACK Win32Window::WindowProcedure(HWND handle, UINT message, WPARAM wParam, LPARAM lParam) {
         if (message == WM_NCCREATE) {
             CREATESTRUCTW* createStruct = reinterpret_cast<CREATESTRUCTW*>(lParam);
@@ -287,7 +309,16 @@ namespace helengine::windows {
 
         auto* window = reinterpret_cast<Win32Window*>(GetWindowLongPtrW(handle, GWLP_USERDATA));
         if (window != nullptr) {
-            return window->HandleMessage(message, wParam, lParam);
+            try {
+                return window->HandleMessage(message, wParam, lParam);
+            } catch (...) {
+                // A C++ exception must not unwind through the user32 frames that called this procedure; it is kept
+                // and rethrown by the message pump right after DispatchMessageW.
+                if (window->PendingException == nullptr) {
+                    window->PendingException = std::current_exception();
+                }
+                return 0;
+            }
         }
 
         return DefWindowProcW(handle, message, wParam, lParam);

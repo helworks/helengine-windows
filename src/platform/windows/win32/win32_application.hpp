@@ -205,7 +205,8 @@ namespace helengine::windows {
         /// Resolves the reduced-BEPU differential trace file path beside the executable.
         std::filesystem::path ResolveBepuDifferentialTraceFilePath() const;
 
-        /// Runs one non-blocking message pump pass.
+        /// Runs one non-blocking message pump pass. After each dispatch it rethrows any exception a window message
+        /// handler raised, so the failure reaches Run()'s fatal handler through ordinary C++ frames.
         bool PumpMessages();
 
         /// Renders and presents the current frame.

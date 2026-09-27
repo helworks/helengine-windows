@@ -192,8 +192,9 @@ public sealed class Win32DpiAwarenessApplySourceTests {
 
     /// <summary>
     /// Verifies the <c>WM_DPICHANGED</c> case: a normal window is placed at the suggested top-left with the outer size
-    /// for its current client size at the new DPI from <c>HIWORD(wParam)</c> (Review Focus 4), an overlay keeps its
-    /// rectangle, and the message returns 0 in both modes.
+    /// for its current client size at the new DPI from <c>HIWORD(wParam)</c> (Review Focus 4) and a failed
+    /// <c>SetWindowPos</c> throws naming the call and <c>GetLastError()</c>, an overlay keeps its rectangle, and the
+    /// message returns 0 in both modes.
     /// </summary>
     [Fact]
     public void Win32Window_keeps_the_client_pixel_size_on_WM_DPICHANGED() {
@@ -205,7 +206,8 @@ public sealed class Win32DpiAwarenessApplySourceTests {
                 @"case WM_DPICHANGED:\s*(?://[^\n]*\s*)*"
                 + @"if \(WindowStyle\.GetWindowMode\(\) == Win32WindowMode::Normal\) \{\s*"
                 + @"RECT placement = Win32DpiWindowSizing::PlacementForDpiChange\(\*reinterpret_cast<RECT\*>\(lParam\), GetClientWidth\(\), GetClientHeight\(\), WS_OVERLAPPEDWINDOW, 0, HIWORD\(wParam\)\);\s*"
-                + @"SetWindowPos\(Handle, nullptr, placement\.left, placement\.top, placement\.right - placement\.left, placement\.bottom - placement\.top, SWP_NOZORDER \| SWP_NOACTIVATE\);\s*"
+                + @"if \(!SetWindowPos\(Handle, nullptr, placement\.left, placement\.top, placement\.right - placement\.left, placement\.bottom - placement\.top, SWP_NOZORDER \| SWP_NOACTIVATE\)\) \{\s*"
+                + @"DWORD errorCode = GetLastError\(\);[^}]*SetWindowPos failed[^}]*errorCode[^}]*throw std::runtime_error\([^}]*\}\s*"
                 + @"\}\s*return 0;"),
             handleMessageBody);
         Assert.Single(Regex.Matches(windowSource, @"case WM_DPICHANGED:"));
@@ -213,6 +215,67 @@ public sealed class Win32DpiAwarenessApplySourceTests {
         int trackerIndex = handleMessageBody.IndexOf("ActivityTracker->ObserveMessage(message);", StringComparison.Ordinal);
         int switchIndex = handleMessageBody.IndexOf("switch (message) {", StringComparison.Ordinal);
         Assert.True(trackerIndex >= 0 && switchIndex > trackerIndex, "The activity tracker must still observe every message, WM_DPICHANGED included, before it is handled.");
+    }
+
+    /// <summary>
+    /// Verifies no C++ exception unwinds through user32 frames: <c>WindowProcedure</c> catches anything
+    /// <c>HandleMessage</c> throws, keeps it with <c>std::current_exception()</c> in a pending-exception member and
+    /// returns 0, and <c>RethrowPendingException</c> rethrows and clears it.
+    /// </summary>
+    [Fact]
+    public void Win32Window_marshals_message_handler_exceptions_out_of_the_window_procedure() {
+        string windowSource = ReadRepositoryFile("src", "platform", "windows", "win32", "win32_window.cpp");
+        string windowHeader = ReadRepositoryFile("src", "platform", "windows", "win32", "win32_window.hpp");
+
+        Assert.Contains("std::exception_ptr PendingException;", windowHeader, StringComparison.Ordinal);
+        Assert.Contains("void RethrowPendingException();", windowHeader, StringComparison.Ordinal);
+        Assert.Contains(", PendingException(nullptr)", windowSource, StringComparison.Ordinal);
+
+        string windowProcedureBody = ExtractMethodBody(windowSource, "LRESULT CALLBACK Win32Window::WindowProcedure(");
+        Assert.Matches(
+            new Regex(
+                @"if \(window != nullptr\) \{\s*try \{\s*return window->HandleMessage\(message, wParam, lParam\);\s*\} "
+                + @"catch \(\.\.\.\) \{\s*(?://[^
+]*\s*)*"
+                + @"if \(window->PendingException == nullptr\) \{\s*window->PendingException = std::current_exception\(\);\s*\}\s*"
+                + @"return 0;\s*\}\s*\}"),
+            windowProcedureBody);
+        Assert.Single(Regex.Matches(windowSource, @"window->HandleMessage\("));
+
+        string rethrowBody = ExtractMethodBody(windowSource, "void Win32Window::RethrowPendingException(");
+        Assert.Matches(
+            new Regex(
+                @"if \(PendingException != nullptr\) \{\s*std::exception_ptr pendingException = PendingException;\s*"
+                + @"PendingException = nullptr;\s*std::rethrow_exception\(pendingException\);\s*\}"),
+            rethrowBody);
+
+        string createBody = ExtractMethodBody(windowSource, "void Win32Window::Create(");
+        Assert.Matches(
+            new Regex(@"CreateNormalWindow\(\);\s*\}\s*RethrowPendingException\(\);\s*if \(Handle == nullptr\) \{"),
+            createBody);
+    }
+
+    /// <summary>
+    /// Verifies every <c>DispatchMessageW</c> in the player is followed straight away by
+    /// <c>MainWindow->RethrowPendingException()</c>, so a handler failure reaches <c>Run()</c>'s fatal handler through
+    /// ordinary C++ frames, and that the pump gains no other call.
+    /// </summary>
+    [Fact]
+    public void Win32Application_rethrows_pending_window_exceptions_after_each_dispatch() {
+        string applicationSource = ReadRepositoryFile("src", "platform", "windows", "win32", "win32_application.cpp");
+
+        int dispatchCount = Regex.Matches(applicationSource, @"DispatchMessageW\(").Count;
+        Assert.True(dispatchCount >= 1, "The player must dispatch window messages.");
+        Assert.Equal(dispatchCount, Regex.Matches(applicationSource, @"DispatchMessageW\(&message\);\s*MainWindow->RethrowPendingException\(\);").Count);
+
+        string pumpBody = ExtractMethodBody(applicationSource, "bool Win32Application::PumpMessages(");
+        Assert.Matches(
+            new Regex(
+                @"while \(PeekMessageW\(&message, nullptr, 0, 0, PM_REMOVE\)\) \{\s*"
+                + @"if \(message\.message == WM_QUIT\) \{\s*ExitCode = static_cast<int>\(message\.wParam\);\s*return false;\s*\}\s*"
+                + @"TranslateMessage\(&message\);\s*DispatchMessageW\(&message\);\s*MainWindow->RethrowPendingException\(\);\s*\}\s*"
+                + @"return true;\s*$"),
+            pumpBody);
     }
 
     /// <summary>

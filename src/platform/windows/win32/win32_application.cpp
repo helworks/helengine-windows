@@ -1807,7 +1807,8 @@ namespace helengine::windows {
         return ResolveApplicationDirectoryPath() / "helengine_windows.bepu_differential_trace.log";
     }
 
-    /// Runs one non-blocking message pump pass.
+    /// Runs one non-blocking message pump pass. After each dispatch it rethrows any exception a window message handler
+    /// raised, so the failure reaches Run()'s fatal handler through ordinary C++ frames.
     bool Win32Application::PumpMessages() {
         MSG message {};
         while (PeekMessageW(&message, nullptr, 0, 0, PM_REMOVE)) {
@@ -1818,6 +1819,7 @@ namespace helengine::windows {
 
             TranslateMessage(&message);
             DispatchMessageW(&message);
+            MainWindow->RethrowPendingException();
         }
 
         return true;
