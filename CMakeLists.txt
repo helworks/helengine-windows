@@ -72,6 +72,7 @@ set(HELENGINE_WINDOWS_SOURCES
     src/platform/windows/win32/win32_command_line_options.cpp
     src/platform/windows/win32/win32_dpi_awareness_names.cpp
     src/platform/windows/win32/win32_dpi_awareness_settings.cpp
+    src/platform/windows/win32/win32_dpi_window_sizing.cpp
     src/platform/windows/win32/win32_exit_request.cpp
     src/platform/windows/win32/win32_idle_frame_pacer.cpp
     src/platform/windows/win32/win32_idle_throttle_settings.cpp

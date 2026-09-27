@@ -4,6 +4,7 @@
 
 #include <string>
 
+#include "platform/windows/win32/win32_dpi_awareness.hpp"
 #include "platform/windows/win32/win32_window_style.hpp"
 
 namespace helengine::windows {
@@ -27,7 +28,8 @@ namespace helengine::windows {
         ~Win32Window();
 
         /// Registers the window class and creates the native window through the normal or overlay path chosen by the
-        /// window style.
+        /// window style. When the process is Per-Monitor v2 aware and the window is a normal window, the window is
+        /// then resized so its client area is the requested size in physical pixels at the window's DPI.
         void Create();
 
         /// Shows the native window through the normal or overlay path chosen by the window style.
@@ -51,9 +53,17 @@ namespace helengine::windows {
         /// <param name="tracker">Tracker to notify about each received message.</param>
         void SetActivityTracker(Win32ActivityTracker* tracker);
 
+        /// Records the DPI awareness the process applied, which decides whether Create() corrects a normal window's
+        /// size for its DPI. It must be called before Create(); the default is Win32DpiAwareness::Unaware, which keeps
+        /// today's creation calls unchanged.
+        /// <param name="dpiAwareness">DPI awareness the process applied before any window was created.</param>
+        void SetDpiAwareness(Win32DpiAwareness dpiAwareness);
+
     private:
         /// Handles window messages for this instance, first reporting each one to the attached activity tracker when
-        /// there is one; the message handling and return values do not depend on the tracker.
+        /// there is one; the message handling and return values do not depend on the tracker. WM_DPICHANGED, which
+        /// only a Per-Monitor v2 aware window receives, moves a normal window to the suggested top-left while keeping
+        /// its client pixel size, leaves an overlay's rectangle unchanged, and returns 0 in both modes.
         LRESULT HandleMessage(UINT message, WPARAM wParam, LPARAM lParam);
 
         /// Registers the native window class used by the player host.
@@ -66,6 +76,16 @@ namespace helengine::windows {
         /// Creates the borderless overlay window at the requested position, sized with AdjustWindowRectEx for the
         /// overlay style set.
         void CreateOverlayWindow();
+
+        /// Resizes a freshly created Per-Monitor v2 normal window so its client area is exactly the requested size in
+        /// physical pixels at the window's own DPI: the creation path sizes the frame with AdjustWindowRect, which does
+        /// not know the monitor the window landed on. The outer size comes from Win32DpiWindowSizing at the DPI read
+        /// from the window; the window is resized only when that size differs from its current outer size, never
+        /// moved, and the cached client size is then refreshed. Throws std::runtime_error when the DPI, the window
+        /// rectangle or the resize cannot be obtained or applied.
+        /// <param name="requestedClientWidth">Client width in physical pixels requested before creation.</param>
+        /// <param name="requestedClientHeight">Client height in physical pixels requested before creation.</param>
+        void CorrectNormalWindowSizeForDpi(int requestedClientWidth, int requestedClientHeight);
 
         /// Shows today's ordinary window and brings it to the foreground with keyboard focus, exactly as the player
         /// has always done.
@@ -110,5 +130,9 @@ namespace helengine::windows {
         /// Stores the optional, non-owned activity tracker notified about each message; null unless the idle
         /// throttle is enabled.
         Win32ActivityTracker* ActivityTracker;
+
+        /// Stores the DPI awareness the process applied; Win32DpiAwareness::Unaware unless SetDpiAwareness opted the
+        /// window into Per-Monitor v2 sizing.
+        Win32DpiAwareness DpiAwareness;
     };
 }

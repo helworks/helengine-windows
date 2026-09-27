@@ -168,6 +168,8 @@ public sealed class Win32WindowModeSettingsSourceTests {
             new Regex(
                 @"RuntimePlayerProfile profile = ResolveRuntimePlayerProfile\(\);\s*"
                 + @"Win32WindowModeSettings windowModeSettings = ResolveWindowModeSettings\(profile\);\s*"
+                + @"Win32DpiAwarenessSettings dpiAwarenessSettings = ResolveDpiAwarenessSettings\(profile\);\s*"
+                + @"ApplyDpiAwareness\(dpiAwarenessSettings\);\s*"
                 + @"Win32IdleThrottleSettings idleThrottleSettings = Win32IdleThrottleSettings::Resolve\(profile, CommandLineOptions\);\s*"
                 + @"WindowModeSettings = std::make_unique<Win32WindowModeSettings>\(windowModeSettings\);\s*"
                 + @"if \(windowModeSettings\.GetWindowMode\(\) == Win32WindowMode::Overlay\) \{\s*"

@@ -15,6 +15,7 @@
 #include "platform/windows/runtime/runtime_player_profile.hpp"
 #include "platform/windows/runtime/runtime_memory_diagnostics_provider.hpp"
 #include "platform/windows/win32/win32_command_line_options.hpp"
+#include "platform/windows/win32/win32_dpi_awareness_settings.hpp"
 #include "platform/windows/win32/win32_window_mode_settings.hpp"
 
 class CameraClearSettings;
@@ -147,6 +148,21 @@ namespace helengine::windows {
         /// example --hit-test-probe supplied without both --frames and an effective overlay window mode) into a
         /// Win32ExitRequest with exit code 2 instead of a generic startup failure.
         Win32WindowModeSettings ResolveWindowModeSettings(const RuntimePlayerProfile& profile) const;
+
+        /// Resolves the opt-in DPI-awareness settings from the command line over the runtime profile, converting an
+        /// invalid configuration into a Win32ExitRequest with exit code 2 instead of a generic startup failure, like
+        /// ResolveWindowModeSettings.
+        /// <param name="profile">Runtime player profile supplying the dpiAwareness field.</param>
+        /// <returns>The validated effective DPI-awareness settings.</returns>
+        Win32DpiAwarenessSettings ResolveDpiAwarenessSettings(const RuntimePlayerProfile& profile) const;
+
+        /// Applies the DPI awareness to the process before the first monitor query or window: only when Per-Monitor v2
+        /// is opted into, it sets the process context to DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2 through
+        /// SetProcessDpiAwarenessContext and logs the configuration; the unaware default makes no call and writes no
+        /// log line, so today's startup is unchanged. Throws std::runtime_error naming the call and GetLastError() when
+        /// the context cannot be set.
+        /// <param name="dpiAwarenessSettings">Resolved DPI-awareness settings.</param>
+        void ApplyDpiAwareness(const Win32DpiAwarenessSettings& dpiAwarenessSettings) const;
 
         /// Resolves the overlay window's screen rectangle from the primary monitor (the monitor containing the origin):
         /// its full bounds for overlayBounds=monitor, or the profile resolution at its top-left for

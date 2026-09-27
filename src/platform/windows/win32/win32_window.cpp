@@ -1,6 +1,7 @@
 #include "platform/windows/win32/win32_window.hpp"
 
 #include "platform/windows/win32/win32_activity_tracker.hpp"
+#include "platform/windows/win32/win32_dpi_window_sizing.hpp"
 
 #include <sstream>
 #include <stdexcept>
@@ -24,7 +25,8 @@ namespace helengine::windows {
         , WindowStyle(windowStyle)
         , Handle(nullptr)
         , MouseWheelDelta(0)
-        , ActivityTracker(nullptr) {
+        , ActivityTracker(nullptr)
+        , DpiAwareness(Win32DpiAwareness::Unaware) {
     }
 
     /// Releases the native window if it is still alive.
@@ -36,10 +38,15 @@ namespace helengine::windows {
     }
 
     /// Registers the window class and creates the native window through the normal or overlay path chosen by the
-    /// window style.
+    /// window style. When the process is Per-Monitor v2 aware and the window is a normal window, the window is then
+    /// resized so its client area is the requested size in physical pixels at the window's DPI.
     void Win32Window::Create() {
         RegisterWindowClass();
 
+        // The creation messages (WM_SIZE) overwrite Width and Height with the real client size, so the requested size
+        // is kept for the Per-Monitor v2 correction.
+        int requestedClientWidth = Width;
+        int requestedClientHeight = Height;
         if (WindowStyle.GetWindowMode() == Win32WindowMode::Overlay) {
             CreateOverlayWindow();
         } else {
@@ -51,6 +58,9 @@ namespace helengine::windows {
         }
 
         RefreshClientSize();
+        if (DpiAwareness == Win32DpiAwareness::PerMonitorV2 && WindowStyle.GetWindowMode() == Win32WindowMode::Normal) {
+            CorrectNormalWindowSizeForDpi(requestedClientWidth, requestedClientHeight);
+        }
     }
 
     /// Shows the native window through the normal or overlay path chosen by the window style.
@@ -102,6 +112,42 @@ namespace helengine::windows {
             nullptr,
             GetModuleHandleW(nullptr),
             this);
+    }
+
+    /// Resizes a freshly created Per-Monitor v2 normal window so its client area is exactly the requested size in
+    /// physical pixels at the window's own DPI: the creation path sizes the frame with AdjustWindowRect, which does not
+    /// know the monitor the window landed on. The outer size comes from Win32DpiWindowSizing at the DPI read from the
+    /// window; the window is resized only when that size differs from its current outer size, never moved, and the
+    /// cached client size is then refreshed. Throws std::runtime_error when the DPI, the window rectangle or the resize
+    /// cannot be obtained or applied.
+    /// <param name="requestedClientWidth">Client width in physical pixels requested before creation.</param>
+    /// <param name="requestedClientHeight">Client height in physical pixels requested before creation.</param>
+    void Win32Window::CorrectNormalWindowSizeForDpi(int requestedClientWidth, int requestedClientHeight) {
+        UINT windowDpi = GetDpiForWindow(Handle);
+        if (windowDpi == 0) {
+            throw std::runtime_error("GetDpiForWindow returned no DPI for the HelEngine Windows host window.");
+        }
+
+        SIZE outerSize = Win32DpiWindowSizing::OuterSizeForClient(requestedClientWidth, requestedClientHeight, WS_OVERLAPPEDWINDOW, 0, windowDpi);
+        RECT windowRectangle {};
+        if (!GetWindowRect(Handle, &windowRectangle)) {
+            DWORD errorCode = GetLastError();
+            std::ostringstream messageBuilder;
+            messageBuilder << "GetWindowRect failed for the HelEngine Windows host window with Win32 error " << errorCode << ".";
+            throw std::runtime_error(messageBuilder.str());
+        }
+
+        LONG currentWidth = windowRectangle.right - windowRectangle.left;
+        LONG currentHeight = windowRectangle.bottom - windowRectangle.top;
+        if (outerSize.cx != currentWidth || outerSize.cy != currentHeight) {
+            if (!SetWindowPos(Handle, nullptr, 0, 0, outerSize.cx, outerSize.cy, SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE)) {
+                DWORD errorCode = GetLastError();
+                std::ostringstream messageBuilder;
+                messageBuilder << "SetWindowPos failed while sizing the HelEngine Windows host window for its DPI with Win32 error " << errorCode << ".";
+                throw std::runtime_error(messageBuilder.str());
+            }
+            RefreshClientSize();
+        }
     }
 
     /// Shows today's ordinary window and brings it to the foreground with keyboard focus, exactly as the player
@@ -158,8 +204,18 @@ namespace helengine::windows {
         ActivityTracker = tracker;
     }
 
+    /// Records the DPI awareness the process applied, which decides whether Create() corrects a normal window's size
+    /// for its DPI. It must be called before Create(); the default is Win32DpiAwareness::Unaware, which keeps today's
+    /// creation calls unchanged.
+    /// <param name="dpiAwareness">DPI awareness the process applied before any window was created.</param>
+    void Win32Window::SetDpiAwareness(Win32DpiAwareness dpiAwareness) {
+        DpiAwareness = dpiAwareness;
+    }
+
     /// Handles window messages for this instance, first reporting each one to the attached activity tracker when
-    /// there is one; the message handling and return values do not depend on the tracker.
+    /// there is one; the message handling and return values do not depend on the tracker. WM_DPICHANGED, which only a
+    /// Per-Monitor v2 aware window receives, moves a normal window to the suggested top-left while keeping its client
+    /// pixel size, leaves an overlay's rectangle unchanged, and returns 0 in both modes.
     LRESULT Win32Window::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam) {
         if (ActivityTracker != nullptr) {
             ActivityTracker->ObserveMessage(message);
@@ -172,6 +228,15 @@ namespace helengine::windows {
 
             case WM_MOUSEWHEEL:
                 MouseWheelDelta += GET_WHEEL_DELTA_WPARAM(wParam);
+                return 0;
+
+            case WM_DPICHANGED:
+                // The profile resolution is the client size in physical pixels, so a normal window takes the suggested
+                // top-left but keeps its client pixel size at the new DPI; an overlay keeps its rectangle.
+                if (WindowStyle.GetWindowMode() == Win32WindowMode::Normal) {
+                    RECT placement = Win32DpiWindowSizing::PlacementForDpiChange(*reinterpret_cast<RECT*>(lParam), GetClientWidth(), GetClientHeight(), WS_OVERLAPPEDWINDOW, 0, HIWORD(wParam));
+                    SetWindowPos(Handle, nullptr, placement.left, placement.top, placement.right - placement.left, placement.bottom - placement.top, SWP_NOZORDER | SWP_NOACTIVATE);
+                }
                 return 0;
 
             case WM_DESTROY:

@@ -682,6 +682,8 @@ namespace helengine::windows {
     void Win32Application::CreateMainWindow() {
         RuntimePlayerProfile profile = ResolveRuntimePlayerProfile();
         Win32WindowModeSettings windowModeSettings = ResolveWindowModeSettings(profile);
+        Win32DpiAwarenessSettings dpiAwarenessSettings = ResolveDpiAwarenessSettings(profile);
+        ApplyDpiAwareness(dpiAwarenessSettings);
         Win32IdleThrottleSettings idleThrottleSettings = Win32IdleThrottleSettings::Resolve(profile, CommandLineOptions);
         WindowModeSettings = std::make_unique<Win32WindowModeSettings>(windowModeSettings);
         if (windowModeSettings.GetWindowMode() == Win32WindowMode::Overlay) {
@@ -715,6 +717,7 @@ namespace helengine::windows {
             std::string windowModeMessage = "Window mode configured: " + windowModeSettings.Describe();
             WriteLifecycleLog(windowModeMessage.c_str());
         }
+        MainWindow->SetDpiAwareness(dpiAwarenessSettings.GetDpiAwareness());
         MainWindow->Create();
         MainWindow->Show();
         // The overlay is sized by its resolved bounds, not the profile resolution, so it reports its real client size;
@@ -1356,6 +1359,39 @@ namespace helengine::windows {
         } catch (const std::invalid_argument& configurationError) {
             // Run()'s Win32ExitRequest handler logs the message, so it is not logged here as well.
             throw Win32ExitRequest(2, configurationError.what());
+        }
+    }
+
+    /// Resolves the opt-in DPI-awareness settings from the command line over the runtime profile, converting an
+    /// invalid configuration into a Win32ExitRequest with exit code 2 instead of a generic startup failure, like
+    /// ResolveWindowModeSettings.
+    /// <param name="profile">Runtime player profile supplying the dpiAwareness field.</param>
+    /// <returns>The validated effective DPI-awareness settings.</returns>
+    Win32DpiAwarenessSettings Win32Application::ResolveDpiAwarenessSettings(const RuntimePlayerProfile& profile) const {
+        try {
+            return Win32DpiAwarenessSettings::Resolve(profile, CommandLineOptions);
+        } catch (const std::invalid_argument& configurationError) {
+            // Run()'s Win32ExitRequest handler logs the message, so it is not logged here as well.
+            throw Win32ExitRequest(2, configurationError.what());
+        }
+    }
+
+    /// Applies the DPI awareness to the process before the first monitor query or window: only when Per-Monitor v2 is
+    /// opted into, it sets the process context to DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2 through
+    /// SetProcessDpiAwarenessContext and logs the configuration; the unaware default makes no call and writes no log
+    /// line, so today's startup is unchanged. Throws std::runtime_error naming the call and GetLastError() when the
+    /// context cannot be set.
+    /// <param name="dpiAwarenessSettings">Resolved DPI-awareness settings.</param>
+    void Win32Application::ApplyDpiAwareness(const Win32DpiAwarenessSettings& dpiAwarenessSettings) const {
+        if (dpiAwarenessSettings.IsPerMonitorV2()) {
+            if (!SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2)) {
+                DWORD errorCode = GetLastError();
+                std::ostringstream messageBuilder;
+                messageBuilder << "SetProcessDpiAwarenessContext failed for the HelEngine Windows host with Win32 error " << errorCode << ".";
+                throw std::runtime_error(messageBuilder.str());
+            }
+            std::string dpiAwarenessMessage = "DPI awareness configured: " + dpiAwarenessSettings.Describe();
+            WriteLifecycleLog(dpiAwarenessMessage.c_str());
         }
     }
 
