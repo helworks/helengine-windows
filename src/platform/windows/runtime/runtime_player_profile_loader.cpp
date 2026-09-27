@@ -6,6 +6,7 @@
 #include <stdexcept>
 
 #include "platform/windows/runtime/runtime_player_profile_configuration_error.hpp"
+#include "platform/windows/win32/win32_dpi_awareness_names.hpp"
 #include "platform/windows/win32/win32_window_mode_names.hpp"
 
 namespace helengine::windows {
@@ -39,6 +40,9 @@ namespace helengine::windows {
             optionalFieldsProfile.WindowModeFieldsPresent = windowModePresent || overlayBoundsPresent || overlayBackgroundPresent;
             ValidateWindowModeFields(optionalFieldsProfile);
 
+            optionalFieldsProfile.DpiAwarenessFieldPresent = TryParseOptionalString(fileContents, "dpiAwareness", optionalFieldsProfile.DpiAwareness);
+            ValidateDpiAwarenessField(optionalFieldsProfile);
+
             RuntimePlayerProfile profile = ParseProfileJson(fileContents);
             profile.IdleThrottleEnabled = optionalFieldsProfile.IdleThrottleEnabled;
             profile.IdleAfterMilliseconds = optionalFieldsProfile.IdleAfterMilliseconds;
@@ -48,6 +52,8 @@ namespace helengine::windows {
             profile.OverlayBounds = optionalFieldsProfile.OverlayBounds;
             profile.OverlayBackground = optionalFieldsProfile.OverlayBackground;
             profile.WindowModeFieldsPresent = optionalFieldsProfile.WindowModeFieldsPresent;
+            profile.DpiAwareness = optionalFieldsProfile.DpiAwareness;
+            profile.DpiAwarenessFieldPresent = optionalFieldsProfile.DpiAwarenessFieldPresent;
             profile.Validate();
             lifecycleMessage = "profile.json loaded successfully.";
             return profile;
@@ -67,6 +73,11 @@ namespace helengine::windows {
                 repairedProfile.OverlayBounds = optionalFieldsProfile.OverlayBounds;
                 repairedProfile.OverlayBackground = optionalFieldsProfile.OverlayBackground;
                 repairedProfile.WindowModeFieldsPresent = true;
+            }
+
+            if (optionalFieldsProfile.DpiAwarenessFieldPresent) {
+                repairedProfile.DpiAwareness = optionalFieldsProfile.DpiAwareness;
+                repairedProfile.DpiAwarenessFieldPresent = true;
             }
 
             WriteProfile(profilePath, repairedProfile);
@@ -380,11 +391,22 @@ namespace helengine::windows {
         }
     }
 
+    /// Validates the dpiAwareness field resolved onto the supplied profile, throwing
+    /// RuntimePlayerProfileConfigurationError when DpiAwareness holds anything other than its exact, case-sensitive
+    /// accepted values ("unaware" or "permonitorv2").
+    void RuntimePlayerProfileLoader::ValidateDpiAwarenessField(const RuntimePlayerProfile& profile) const {
+        Win32DpiAwareness dpiAwareness = Win32DpiAwareness::Unaware;
+        if (!Win32DpiAwarenessNames::TryParse(profile.DpiAwareness, dpiAwareness)) {
+            throw RuntimePlayerProfileConfigurationError(
+                "Runtime player profile dpiAwareness must be \"unaware\" or \"permonitorv2\", got: " + profile.DpiAwareness);
+        }
+    }
+
     /// Builds the persisted JSON payload for one runtime player profile.
     std::string RuntimePlayerProfileLoader::BuildProfileJson(const RuntimePlayerProfile& profile) const {
         profile.Validate();
 
-        bool hasTrailingSections = profile.IdleFieldsPresent || profile.WindowModeFieldsPresent;
+        bool hasTrailingSections = profile.IdleFieldsPresent || profile.WindowModeFieldsPresent || profile.DpiAwarenessFieldPresent;
 
         std::ostringstream builder;
         builder << "{\n";
@@ -393,12 +415,16 @@ namespace helengine::windows {
         if (profile.IdleFieldsPresent) {
             builder << "  \"idleThrottleEnabled\": " << (profile.IdleThrottleEnabled ? "true" : "false") << ",\n";
             builder << "  \"idleAfterMilliseconds\": " << profile.IdleAfterMilliseconds << ",\n";
-            builder << "  \"idleFramesPerSecond\": " << profile.IdleFramesPerSecond << (profile.WindowModeFieldsPresent ? ",\n" : "\n");
+            builder << "  \"idleFramesPerSecond\": " << profile.IdleFramesPerSecond
+                << (profile.WindowModeFieldsPresent || profile.DpiAwarenessFieldPresent ? ",\n" : "\n");
         }
         if (profile.WindowModeFieldsPresent) {
             builder << "  \"windowMode\": \"" << profile.WindowMode << "\",\n";
             builder << "  \"overlayBounds\": \"" << profile.OverlayBounds << "\",\n";
-            builder << "  \"overlayBackground\": \"" << profile.OverlayBackground << "\"\n";
+            builder << "  \"overlayBackground\": \"" << profile.OverlayBackground << "\"" << (profile.DpiAwarenessFieldPresent ? ",\n" : "\n");
+        }
+        if (profile.DpiAwarenessFieldPresent) {
+            builder << "  \"dpiAwareness\": \"" << profile.DpiAwareness << "\"\n";
         }
         builder << "}\n";
         return builder.str();

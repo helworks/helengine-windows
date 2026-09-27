@@ -338,6 +338,44 @@ public sealed class Win32CommandLineOptionsSourceTests {
     }
 
     /// <summary>
+    /// Verifies the parser recognizes the opt-in --dpi-awareness flag as a known flag, wires it into an explicit
+    /// <c>else if</c> branch placed before the trailing <c>--capture</c> branch, rejects a duplicate flag, and
+    /// enforces its exact, case-sensitive accepted values through the shared <c>Win32DpiAwarenessNames</c>
+    /// conversion point rather than its own literal comparisons.
+    /// </summary>
+    [Fact]
+    public void Win32CommandLineOptions_parses_dpi_awareness_flag() {
+        string parserSource = ReadRepositoryFile("src", "platform", "windows", "win32", "win32_command_line_options.cpp");
+        string parserHeader = ReadRepositoryFile("src", "platform", "windows", "win32", "win32_command_line_options.hpp");
+
+        Assert.Contains("\"--dpi-awareness\"", parserSource, StringComparison.Ordinal);
+
+        int isKnownFlagIndex = parserSource.IndexOf("bool Win32CommandLineOptions::IsKnownFlag", StringComparison.Ordinal);
+        Assert.True(isKnownFlagIndex >= 0, "IsKnownFlag definition was not found.");
+        int isKnownFlagEndIndex = parserSource.IndexOf("\n    }", isKnownFlagIndex, StringComparison.Ordinal);
+        string isKnownFlagBody = parserSource.Substring(isKnownFlagIndex, isKnownFlagEndIndex - isKnownFlagIndex);
+        Assert.Contains("argument == L\"--dpi-awareness\"", isKnownFlagBody, StringComparison.Ordinal);
+
+        int dpiAwarenessBranchIndex = parserSource.IndexOf("flag == L\"--dpi-awareness\"", StringComparison.Ordinal);
+        int captureBranchIndex = parserSource.IndexOf("Command-line flag --capture was given more than once.", StringComparison.Ordinal);
+        Assert.True(dpiAwarenessBranchIndex >= 0, "The --dpi-awareness branch was not found.");
+        Assert.True(dpiAwarenessBranchIndex < captureBranchIndex, "The --dpi-awareness branch must precede the --capture branch.");
+
+        Assert.Contains("Command-line flag --dpi-awareness was given more than once.", parserSource, StringComparison.Ordinal);
+
+        int parseDpiAwarenessIndex = parserSource.IndexOf("Win32CommandLineOptions::ParseDpiAwareness(", StringComparison.Ordinal);
+        Assert.True(parseDpiAwarenessIndex >= 0, "ParseDpiAwareness definition was not found.");
+        string parseDpiAwarenessBody = parserSource.Substring(parseDpiAwarenessIndex, parserSource.IndexOf("\n    }", parseDpiAwarenessIndex, StringComparison.Ordinal) - parseDpiAwarenessIndex);
+        Assert.Contains("Win32DpiAwarenessNames::TryParse(text, dpiAwareness)", parseDpiAwarenessBody, StringComparison.Ordinal);
+        Assert.Contains("Command-line flag --dpi-awareness requires \\\"unaware\\\" or \\\"permonitorv2\\\", got: ", parseDpiAwarenessBody, StringComparison.Ordinal);
+        Assert.DoesNotContain("value == L\"unaware\"", parserSource, StringComparison.Ordinal);
+        Assert.DoesNotContain("value == L\"permonitorv2\"", parserSource, StringComparison.Ordinal);
+
+        Assert.Contains("bool HasDpiAwareness() const;", parserHeader, StringComparison.Ordinal);
+        Assert.Contains("Win32DpiAwareness GetDpiAwareness() const;", parserHeader, StringComparison.Ordinal);
+    }
+
+    /// <summary>
     /// Reads a source file relative to the Windows native-player repository root.
     /// </summary>
     /// <param name="relativePathSegments">Path segments below the repository root.</param>

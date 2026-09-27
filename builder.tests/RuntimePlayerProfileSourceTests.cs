@@ -36,6 +36,19 @@ public sealed class RuntimePlayerProfileSourceTests {
     }
 
     /// <summary>
+    /// Verifies RuntimePlayerProfile gains the opt-in dpiAwareness string member and its presence flag with the
+    /// documented default values, so the existing <c>{w, h}</c> aggregate initialization in the loader keeps
+    /// compiling unchanged.
+    /// </summary>
+    [Fact]
+    public void RuntimePlayerProfile_declares_dpi_awareness_fields_with_default_values() {
+        string profileHeader = ReadRepositoryFile("src", "platform", "windows", "runtime", "runtime_player_profile.hpp");
+
+        Assert.Contains("std::string DpiAwareness = \"unaware\";", profileHeader, StringComparison.Ordinal);
+        Assert.Contains("bool DpiAwarenessFieldPresent = false;", profileHeader, StringComparison.Ordinal);
+    }
+
+    /// <summary>
     /// Verifies the new RuntimePlayerProfileConfigurationError type derives from std::runtime_error with a
     /// message constructor, and that the native build compiles its source file.
     /// </summary>
@@ -76,6 +89,17 @@ public sealed class RuntimePlayerProfileSourceTests {
             "bool TryParseOptionalString(const std::string& json, const char* propertyName, std::string& value) const;",
             loaderHeader, StringComparison.Ordinal);
         Assert.Contains("void ValidateWindowModeFields(const RuntimePlayerProfile& profile) const;", loaderHeader, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// Verifies the loader declares the dpiAwareness validator with the documented signature, reusing the existing
+    /// optional-string parser instead of adding a new one.
+    /// </summary>
+    [Fact]
+    public void RuntimePlayerProfileLoader_declares_dpi_awareness_validation_member() {
+        string loaderHeader = ReadRepositoryFile("src", "platform", "windows", "runtime", "runtime_player_profile_loader.hpp");
+
+        Assert.Contains("void ValidateDpiAwarenessField(const RuntimePlayerProfile& profile) const;", loaderHeader, StringComparison.Ordinal);
     }
 
     /// <summary>
@@ -317,10 +341,10 @@ public sealed class RuntimePlayerProfileSourceTests {
         Assert.True(methodStartIndex >= 0, "ValidateWindowModeFields must be defined in the loader source.");
 
         int methodEndIndex = loaderSource.IndexOf(
-            "RuntimePlayerProfileLoader::BuildProfileJson(",
+            "RuntimePlayerProfileLoader::ValidateDpiAwarenessField(",
             methodStartIndex,
             StringComparison.Ordinal);
-        Assert.True(methodEndIndex > methodStartIndex, "BuildProfileJson must follow ValidateWindowModeFields in the loader source.");
+        Assert.True(methodEndIndex > methodStartIndex, "ValidateDpiAwarenessField must follow ValidateWindowModeFields in the loader source.");
 
         string methodBody = loaderSource.Substring(methodStartIndex, methodEndIndex - methodStartIndex);
         Assert.Contains("!Win32WindowModeNames::TryParseWindowMode(profile.WindowMode, windowMode)", methodBody, StringComparison.Ordinal);
@@ -384,6 +408,105 @@ public sealed class RuntimePlayerProfileSourceTests {
         Assert.True(windowModeValidateIndex < genericCatchIndex, "Window-mode field validation must appear before the resolution-repair catch.");
 
         Assert.Contains("if (optionalFieldsProfile.WindowModeFieldsPresent) {", methodBody, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// Verifies the loader reads the dpiAwareness JSON property name.
+    /// </summary>
+    [Fact]
+    public void RuntimePlayerProfileLoader_reads_the_dpi_awareness_property_name() {
+        string loaderSource = ReadRepositoryFile("src", "platform", "windows", "runtime", "runtime_player_profile_loader.cpp");
+
+        Assert.Contains("\"dpiAwareness\"", loaderSource, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// Verifies ValidateDpiAwarenessField rejects a dpiAwareness value outside its exact, case-sensitive accepted
+    /// set by throwing the configuration error, and that it does so through the shared
+    /// <c>Win32DpiAwarenessNames</c> conversion point instead of its own literal comparison.
+    /// </summary>
+    [Fact]
+    public void ValidateDpiAwarenessField_rejects_values_outside_the_accepted_enum() {
+        string loaderSource = ReadRepositoryFile("src", "platform", "windows", "runtime", "runtime_player_profile_loader.cpp");
+
+        int methodStartIndex = loaderSource.IndexOf(
+            "void RuntimePlayerProfileLoader::ValidateDpiAwarenessField(",
+            StringComparison.Ordinal);
+        Assert.True(methodStartIndex >= 0, "ValidateDpiAwarenessField must be defined in the loader source.");
+
+        int methodEndIndex = loaderSource.IndexOf(
+            "RuntimePlayerProfileLoader::BuildProfileJson(",
+            methodStartIndex,
+            StringComparison.Ordinal);
+        Assert.True(methodEndIndex > methodStartIndex, "BuildProfileJson must follow ValidateDpiAwarenessField in the loader source.");
+
+        string methodBody = loaderSource.Substring(methodStartIndex, methodEndIndex - methodStartIndex);
+        Assert.Contains("!Win32DpiAwarenessNames::TryParse(profile.DpiAwareness, dpiAwareness)", methodBody, StringComparison.Ordinal);
+        Assert.Single(System.Text.RegularExpressions.Regex.Matches(methodBody, "throw RuntimePlayerProfileConfigurationError\\("));
+    }
+
+    /// <summary>
+    /// Verifies BuildProfileJson only emits the dpiAwareness field when DpiAwarenessFieldPresent is true, placed
+    /// after the window-mode fields, which is what keeps a seeded or repaired profile that never mentioned
+    /// DPI awareness byte-identical to the pre-DPI-awareness format (Review Focus 1).
+    /// </summary>
+    [Fact]
+    public void BuildProfileJson_guards_dpi_awareness_output_with_DpiAwarenessFieldPresent() {
+        string loaderSource = ReadRepositoryFile("src", "platform", "windows", "runtime", "runtime_player_profile_loader.cpp");
+
+        int methodStartIndex = loaderSource.IndexOf(
+            "std::string RuntimePlayerProfileLoader::BuildProfileJson(",
+            StringComparison.Ordinal);
+        Assert.True(methodStartIndex >= 0, "BuildProfileJson must be defined in the loader source.");
+
+        string methodBody = loaderSource.Substring(methodStartIndex);
+        Assert.Contains("if (profile.DpiAwarenessFieldPresent) {", methodBody, StringComparison.Ordinal);
+        Assert.Contains("\\\"dpiAwareness\\\"", methodBody, StringComparison.Ordinal);
+
+        int windowModeBlockIndex = methodBody.IndexOf("if (profile.WindowModeFieldsPresent) {", StringComparison.Ordinal);
+        int dpiAwarenessBlockIndex = methodBody.IndexOf("if (profile.DpiAwarenessFieldPresent) {", StringComparison.Ordinal);
+        Assert.True(windowModeBlockIndex >= 0 && dpiAwarenessBlockIndex > windowModeBlockIndex, "The dpiAwareness field must be emitted after the window-mode fields.");
+    }
+
+    /// <summary>
+    /// Verifies LoadOrCreateProfile parses and validates the dpiAwareness field before the pre-existing
+    /// resolution-repair <c>catch (const std::exception&amp;)</c> block, copies it on the load path, and copies it
+    /// onto the repaired profile only when it was present in the original file, matching the window-mode fields'
+    /// treatment.
+    /// </summary>
+    [Fact]
+    public void LoadOrCreateProfile_validates_and_copies_dpi_awareness_field() {
+        string loaderSource = ReadRepositoryFile("src", "platform", "windows", "runtime", "runtime_player_profile_loader.cpp");
+
+        int methodStartIndex = loaderSource.IndexOf(
+            "RuntimePlayerProfileLoader::LoadOrCreateProfile(",
+            StringComparison.Ordinal);
+        Assert.True(methodStartIndex >= 0, "LoadOrCreateProfile must be defined in the loader source.");
+
+        int methodEndIndex = loaderSource.IndexOf(
+            "RuntimePlayerProfileLoader::ResolveProfilePath(",
+            methodStartIndex,
+            StringComparison.Ordinal);
+        Assert.True(methodEndIndex > methodStartIndex, "ResolveProfilePath must follow LoadOrCreateProfile in the loader source.");
+
+        string methodBody = loaderSource.Substring(methodStartIndex, methodEndIndex - methodStartIndex);
+
+        int dpiAwarenessParseIndex = methodBody.IndexOf("TryParseOptionalString(fileContents, \"dpiAwareness\"", StringComparison.Ordinal);
+        int dpiAwarenessValidateIndex = methodBody.IndexOf("ValidateDpiAwarenessField(", StringComparison.Ordinal);
+        int genericCatchIndex = methodBody.IndexOf("catch (const std::exception&)", StringComparison.Ordinal);
+
+        Assert.True(dpiAwarenessParseIndex >= 0, "LoadOrCreateProfile must call TryParseOptionalString for dpiAwareness directly.");
+        Assert.True(dpiAwarenessValidateIndex >= 0, "LoadOrCreateProfile must call ValidateDpiAwarenessField directly.");
+        Assert.True(genericCatchIndex >= 0, "LoadOrCreateProfile must keep the generic resolution-repair catch.");
+
+        Assert.True(dpiAwarenessParseIndex < genericCatchIndex, "dpiAwareness field parsing must appear before the resolution-repair catch.");
+        Assert.True(dpiAwarenessValidateIndex < genericCatchIndex, "dpiAwareness field validation must appear before the resolution-repair catch.");
+
+        Assert.Contains("profile.DpiAwareness = optionalFieldsProfile.DpiAwareness;", methodBody, StringComparison.Ordinal);
+        Assert.Contains("profile.DpiAwarenessFieldPresent = optionalFieldsProfile.DpiAwarenessFieldPresent;", methodBody, StringComparison.Ordinal);
+        Assert.Contains("if (optionalFieldsProfile.DpiAwarenessFieldPresent) {", methodBody, StringComparison.Ordinal);
+        Assert.Contains("repairedProfile.DpiAwareness = optionalFieldsProfile.DpiAwareness;", methodBody, StringComparison.Ordinal);
+        Assert.Contains("repairedProfile.DpiAwarenessFieldPresent = true;", methodBody, StringComparison.Ordinal);
     }
 
     /// <summary>

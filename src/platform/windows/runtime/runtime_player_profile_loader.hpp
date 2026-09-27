@@ -70,6 +70,11 @@ namespace helengine::windows {
         /// anything other than its exact, case-sensitive accepted values.
         void ValidateWindowModeFields(const RuntimePlayerProfile& profile) const;
 
+        /// Validates the dpiAwareness field resolved onto the supplied profile, throwing
+        /// RuntimePlayerProfileConfigurationError when DpiAwareness holds anything other than its exact,
+        /// case-sensitive accepted values ("unaware" or "permonitorv2").
+        void ValidateDpiAwarenessField(const RuntimePlayerProfile& profile) const;
+
         /// Builds the persisted JSON payload for one runtime player profile.
         std::string BuildProfileJson(const RuntimePlayerProfile& profile) const;
     };

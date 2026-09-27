@@ -2,14 +2,16 @@
 
 #include <string>
 
+#include "platform/windows/win32/win32_dpi_awareness.hpp"
 #include "platform/windows/win32/win32_overlay_background.hpp"
 #include "platform/windows/win32/win32_overlay_bounds.hpp"
 #include "platform/windows/win32/win32_window_mode.hpp"
 
 namespace helengine::windows {
     /// Holds the opt-in player command-line options used by regression runs (scene override, frame limit,
-    /// fixed update delta, capture path, idle-throttle overrides and window-mode overrides). A default-constructed
-    /// instance means "no flags supplied" and keeps the player on its normal startup path.
+    /// fixed update delta, capture path, idle-throttle overrides, window-mode overrides and the DPI-awareness
+    /// override). A default-constructed instance means "no flags supplied" and keeps the player on its normal
+    /// startup path.
     class Win32CommandLineOptions {
     public:
         /// Creates an options set with no flags supplied, which leaves every player behavior at its default.
@@ -17,11 +19,11 @@ namespace helengine::windows {
 
         /// Parses the given argument vector, skipping arguments[0] (the executable path). When no argument is a known
         /// flag (--scene, --frames, --fixed-delta, --capture, --idle-throttle, --idle-after-ms, --idle-fps,
-        /// --window-mode, --overlay-bounds, --overlay-background, --hit-test-probe), nothing is validated: the
-        /// arguments are only kept as ignored text (see GetIgnoredArguments) so launches that pass unrelated
-        /// arguments, such as a file path split by CommandLineToArgvW, keep working exactly as before. Once any known
-        /// flag is present, validation is strict: each flag takes exactly one value, and unknown, repeated or
-        /// value-less flags and out-of-range values throw std::invalid_argument with a readable message.
+        /// --window-mode, --overlay-bounds, --overlay-background, --hit-test-probe, --dpi-awareness), nothing is
+        /// validated: the arguments are only kept as ignored text (see GetIgnoredArguments) so launches that pass
+        /// unrelated arguments, such as a file path split by CommandLineToArgvW, keep working exactly as before. Once
+        /// any known flag is present, validation is strict: each flag takes exactly one value, and unknown, repeated
+        /// or value-less flags and out-of-range values throw std::invalid_argument with a readable message.
         static Win32CommandLineOptions Parse(int argumentCount, wchar_t** arguments);
 
         /// Reads the real process command line through CommandLineToArgvW and parses it with Parse.
@@ -101,6 +103,13 @@ namespace helengine::windows {
         /// Gets the probed pixel's client-area Y coordinate; only meaningful when HasHitTestProbe() is true.
         int GetHitTestProbeY() const;
 
+        /// Gets whether --dpi-awareness was supplied to override the profile's DPI-awareness opt-in.
+        bool HasDpiAwareness() const;
+
+        /// Gets the DPI-awareness value requested through --dpi-awareness; only meaningful when HasDpiAwareness()
+        /// is true.
+        Win32DpiAwareness GetDpiAwareness() const;
+
         /// Gets whether arguments were supplied without any known flag, so they were ignored instead of validated.
         bool HasIgnoredArguments() const;
 
@@ -110,7 +119,7 @@ namespace helengine::windows {
     private:
         /// Returns whether the argument is one of the regression flags (--scene, --frames, --fixed-delta, --capture,
         /// --idle-throttle, --idle-after-ms, --idle-fps, --window-mode, --overlay-bounds, --overlay-background,
-        /// --hit-test-probe).
+        /// --hit-test-probe, --dpi-awareness).
         static bool IsKnownFlag(const std::wstring& argument);
 
         /// Converts a UTF-16 command-line value to UTF-8 so it can be compared with engine scene ids and logged.
@@ -151,6 +160,10 @@ namespace helengine::windows {
         /// comma, with both numbers fully consumed, throwing std::invalid_argument otherwise. Writes the parsed
         /// coordinates into probeX and probeY.
         static void ParseHitTestProbe(const std::wstring& value, int& probeX, int& probeY);
+
+        /// Parses a --dpi-awareness value that must be exactly "unaware" or "permonitorv2", throwing
+        /// std::invalid_argument otherwise.
+        static Win32DpiAwareness ParseDpiAwareness(const std::wstring& value);
 
         /// Stores whether --scene was supplied.
         bool SceneSupplied;
@@ -226,5 +239,11 @@ namespace helengine::windows {
 
         /// Stores the ignored arguments as UTF-8, joined by single spaces, for the one startup log line.
         std::string IgnoredArguments;
+
+        /// Stores whether --dpi-awareness was supplied.
+        bool DpiAwarenessSupplied;
+
+        /// Stores the DPI-awareness value requested through --dpi-awareness.
+        Win32DpiAwareness DpiAwareness;
     };
 }

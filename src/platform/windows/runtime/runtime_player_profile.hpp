@@ -49,6 +49,16 @@ namespace helengine::windows {
         /// that never mentioned it, keeping seeded and repaired files byte-identical to the pre-window-mode format.
         bool WindowModeFieldsPresent = false;
 
+        /// Stores the requested opt-in DPI-awareness value: "unaware" (default; today's DPI-unaware behavior) or
+        /// "permonitorv2" (opts into Per-Monitor v2 DPI awareness). The loader validates this against the exact
+        /// accepted values whenever it is present in profile.json.
+        std::string DpiAwareness = "unaware";
+
+        /// Stores whether the dpiAwareness field was present in the persisted profile.json. The loader uses this to
+        /// omit the field when rewriting a profile that never mentioned it, keeping seeded and repaired files
+        /// byte-identical to the pre-DPI-awareness format.
+        bool DpiAwarenessFieldPresent = false;
+
         /// Validates that the resolved profile contains usable startup values.
         void Validate() const;
     };
