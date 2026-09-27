@@ -8,8 +8,8 @@
     "buildConfigSourceHash":  "40092F0483A4B5F0A825B150B7B65179314834449538A31150663F953D3C2635",
     "generatedCodeHash":  "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
     "helengineCommit":  "dd9ca693403d91b5e2fc52860a3511e6358ed776",
-    "helengineDirty":  true,
-    "helengineWorkingTreeHash":  "E24870119F6B5241035CE359CF9211A09FEBDAC5D0844EB98DFD8A0963017141",
+    "helengineDirty":  false,
+    "helengineWorkingTreeHash":  "98EB43EA8A13A5BEF4FAEE00D48C91C5FD405C5EB2668708D3188C0E5B1019DB",
     "scenes":  [
                    {
                        "id":  "axis_test",
@@ -99,7 +99,7 @@
                                                          "dpi":  "96",
                                                          "dpiAwareness":  "unaware",
                                                          "windowRect":  "default",
-                                                         "elapsedMs":  120
+                                                         "elapsedMs":  121
                                                      }
                                         }
                    },
@@ -128,7 +128,7 @@
                                                          "dpi":  "96",
                                                          "dpiAwareness":  "unaware",
                                                          "windowRect":  "default",
-                                                         "elapsedMs":  121
+                                                         "elapsedMs":  119
                                                      }
                                         }
                    },
@@ -157,7 +157,7 @@
                                                          "dpi":  "96",
                                                          "dpiAwareness":  "unaware",
                                                          "windowRect":  "default",
-                                                         "elapsedMs":  119
+                                                         "elapsedMs":  121
                                                      }
                                         }
                    },
@@ -186,7 +186,7 @@
                                                          "dpi":  "96",
                                                          "dpiAwareness":  "unaware",
                                                          "windowRect":  "default",
-                                                         "elapsedMs":  121
+                                                         "elapsedMs":  119
                                                      }
                                         }
                    },
@@ -215,7 +215,7 @@
                                                          "dpi":  "96",
                                                          "dpiAwareness":  "unaware",
                                                          "windowRect":  "default",
-                                                         "elapsedMs":  121
+                                                         "elapsedMs":  118
                                                      }
                                         }
                    },
@@ -273,7 +273,7 @@
                                                          "dpi":  "96",
                                                          "dpiAwareness":  "unaware",
                                                          "windowRect":  "default",
-                                                         "elapsedMs":  118
+                                                         "elapsedMs":  119
                                                      }
                                         }
                    },
@@ -302,7 +302,7 @@
                                                          "dpi":  "96",
                                                          "dpiAwareness":  "unaware",
                                                          "windowRect":  "default",
-                                                         "elapsedMs":  120
+                                                         "elapsedMs":  118
                                                      }
                                         }
                    },
@@ -331,7 +331,7 @@
                                                          "dpi":  "96",
                                                          "dpiAwareness":  "unaware",
                                                          "windowRect":  "default",
-                                                         "elapsedMs":  118
+                                                         "elapsedMs":  119
                                                      }
                                         }
                    },
@@ -394,7 +394,7 @@
                                                                                "dpi":  "96",
                                                                                "dpiAwareness":  "unaware",
                                                                                "windowRect":  "0,0,640,360",
-                                                                               "elapsedMs":  118
+                                                                               "elapsedMs":  121
                                                                            }
                                                               }
                                                }
@@ -423,9 +423,63 @@
                                                          "dpi":  "96",
                                                          "dpiAwareness":  "unaware",
                                                          "windowRect":  "0,0,640,360",
-                                                         "elapsedMs":  3064
+                                                         "elapsedMs":  3069
                                                      }
                                         }
+                   },
+                   {
+                       "id":  "axis_test",
+                       "kind":  "dpiAware",
+                       "fingerprintsByRun":  {
+                                                 "normal":  {
+                                                                "main":  {
+                                                                             "format":  "87",
+                                                                             "alpha":  "3",
+                                                                             "swapEffect":  "4",
+                                                                             "buffers":  "2",
+                                                                             "scaling":  "0",
+                                                                             "style":  "0x14CF0000",
+                                                                             "exStyle":  "0x00000100",
+                                                                             "client":  "640x360",
+                                                                             "presentCount":  "30",
+                                                                             "presentFailures":  "0",
+                                                                             "frames":  "30",
+                                                                             "idleThrottle":  "off",
+                                                                             "idleFrames":  "0",
+                                                                             "activeFrames":  "30",
+                                                                             "windowMode":  "normal",
+                                                                             "window":  "main",
+                                                                             "dpi":  "96",
+                                                                             "dpiAwareness":  "permonitorv2",
+                                                                             "windowRect":  "default",
+                                                                             "elapsedMs":  120
+                                                                         }
+                                                            },
+                                                 "overlay":  {
+                                                                 "main":  {
+                                                                              "format":  "87",
+                                                                              "alpha":  "1",
+                                                                              "swapEffect":  "4",
+                                                                              "buffers":  "2",
+                                                                              "scaling":  "0",
+                                                                              "style":  "0x94000000",
+                                                                              "exStyle":  "0x002800A8",
+                                                                              "client":  "640x360",
+                                                                              "presentCount":  "30",
+                                                                              "presentFailures":  "0",
+                                                                              "frames":  "30",
+                                                                              "idleThrottle":  "off",
+                                                                              "idleFrames":  "0",
+                                                                              "activeFrames":  "30",
+                                                                              "windowMode":  "overlay",
+                                                                              "window":  "main",
+                                                                              "dpi":  "96",
+                                                                              "dpiAwareness":  "permonitorv2",
+                                                                              "windowRect":  "0,0,640,360",
+                                                                              "elapsedMs":  121
+                                                                          }
+                                                             }
+                                             }
                    }
                ]
 }
