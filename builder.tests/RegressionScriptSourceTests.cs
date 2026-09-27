@@ -764,13 +764,13 @@ public sealed class RegressionScriptSourceTests {
 
         string verifySource = scriptSource.Substring(verifyIndex);
         Assert.Contains("-eq 'dpiAware'", verifySource, StringComparison.Ordinal);
-        Assert.Contains("dpiAware entry missing from manifest (re-record required)", verifySource, StringComparison.Ordinal);
+        Assert.Contains("Add-CheckResult -Status FAIL -Kind dpiAware -Name $smokeSceneId -Detail \"dpiAware entry missing from manifest (re-record required)", verifySource, StringComparison.Ordinal);
         Assert.Contains("$null -eq $recordedDpiAwareScene.fingerprintsByRun.normal -or $null -eq $recordedDpiAwareScene.fingerprintsByRun.overlay", verifySource, StringComparison.Ordinal);
-        Assert.Contains("dpiAware entry lacks fingerprintsByRun.normal or fingerprintsByRun.overlay (re-record required)", verifySource, StringComparison.Ordinal);
+        Assert.Contains("Add-CheckResult -Status FAIL -Kind dpiAware -Name $smokeSceneId -Detail \"dpiAware entry lacks fingerprintsByRun.normal or fingerprintsByRun.overlay (re-record required)", verifySource, StringComparison.Ordinal);
         Assert.Contains("-RecordedFingerprintsByWindow (ConvertTo-RecordedFingerprintsByWindow -RecordedFingerprints $recordedDpiAwareScene.fingerprintsByRun.normal)", verifySource, StringComparison.Ordinal);
         Assert.Contains("-RecordedFingerprintsByWindow (ConvertTo-RecordedFingerprintsByWindow -RecordedFingerprints $recordedDpiAwareScene.fingerprintsByRun.overlay)", verifySource, StringComparison.Ordinal);
         Assert.Contains("Invoke-DpiAwareOverlayRun -SceneId $smokeSceneId -Probe \"$($recordedOverlayScene.transparentProbe)\" -ExpectedExStyle \"$($recordedOverlayScene.transparentExStyle)\"", verifySource, StringComparison.Ordinal);
-        Assert.Contains("overlay run not run: it needs a complete overlay entry", verifySource, StringComparison.Ordinal);
+        Assert.Contains("Add-CheckResult -Status FAIL -Kind dpiAware -Name $smokeSceneId -Detail 'overlay run not run: it needs a complete overlay entry", verifySource, StringComparison.Ordinal);
         int diffsWipeIndex = verifySource.IndexOf("Remove-Item -LiteralPath $diffsRootPath -Recurse -Force", StringComparison.Ordinal);
         int dpiAwareDiffIndex = verifySource.IndexOf("$dpiAwareNormalDiffPath = Join-Path $diffsRootPath", StringComparison.Ordinal);
         Assert.True(diffsWipeIndex >= 0 && dpiAwareDiffIndex > diffsWipeIndex, "Verify must write the dpiAware diffs into the diffs folder it wipes.");
