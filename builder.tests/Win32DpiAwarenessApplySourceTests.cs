@@ -170,7 +170,9 @@ public sealed class Win32DpiAwarenessApplySourceTests {
             new Regex(
                 @"RefreshClientSize\(\);\s*"
                 + @"if \(DpiAwareness == Win32DpiAwareness::PerMonitorV2 && WindowStyle\.GetWindowMode\(\) == Win32WindowMode::Normal\) \{\s*"
-                + @"CorrectNormalWindowSizeForDpi\(requestedClientWidth, requestedClientHeight\);\s*\}\s*$"),
+                + @"CorrectNormalWindowSizeForDpi\(requestedClientWidth, requestedClientHeight\);\s*\}\s*"
+                + @"(?://[^
+]*\s*)*RethrowPendingException\(\);\s*$"),
             createBody);
         Assert.Single(Regex.Matches(windowSource, @"CorrectNormalWindowSizeForDpi\(requestedClientWidth, requestedClientHeight\);"));
 
@@ -250,6 +252,33 @@ public sealed class Win32DpiAwarenessApplySourceTests {
             handleMessageBody);
         Assert.Single(Regex.Matches(windowSource, @"case WM_GETDPISCALEDSIZE:"));
         Assert.DoesNotMatch(new Regex(@"case WM_GETDPISCALEDSIZE:[^}]*try \{"), handleMessageBody);
+    }
+
+    /// <summary>
+    /// Verifies a handler failure raised while the window is created, size-corrected or shown surfaces before graphics
+    /// and the engine start: <c>Create()</c> ends with <c>RethrowPendingException()</c> after the Per-Monitor v2
+    /// correction, and <c>CreateMainWindow</c> calls <c>MainWindow->RethrowPendingException()</c> right after
+    /// <c>MainWindow->Show()</c>.
+    /// </summary>
+    [Fact]
+    public void Win32Window_creation_and_show_failures_surface_before_the_engine_starts() {
+        string windowSource = ReadRepositoryFile("src", "platform", "windows", "win32", "win32_window.cpp");
+        string applicationSource = ReadRepositoryFile("src", "platform", "windows", "win32", "win32_application.cpp");
+
+        string createBody = ExtractMethodBody(windowSource, "void Win32Window::Create(");
+        Assert.Matches(
+            new Regex(
+                @"CorrectNormalWindowSizeForDpi\(requestedClientWidth, requestedClientHeight\);\s*\}\s*"
+                + @"(?://[^
+]*\s*)*RethrowPendingException\(\);\s*$"),
+            createBody);
+        Assert.Equal(2, Regex.Matches(createBody, @"RethrowPendingException\(\);").Count);
+
+        string createMainWindowBody = ExtractMethodBody(applicationSource, "void Win32Application::CreateMainWindow(");
+        Assert.Matches(
+            new Regex(@"MainWindow->Create\(\);\s*MainWindow->Show\(\);\s*(?://[^
+]*\s*)*MainWindow->RethrowPendingException\(\);"),
+            createMainWindowBody);
     }
 
     /// <summary>

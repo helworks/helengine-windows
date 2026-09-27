@@ -720,6 +720,9 @@ namespace helengine::windows {
         MainWindow->SetDpiAwareness(dpiAwarenessSettings.GetDpiAwareness());
         MainWindow->Create();
         MainWindow->Show();
+        // ShowWindow and SetWindowPos send messages synchronously; a handler failure there surfaces now, before the
+        // graphics device and the engine start.
+        MainWindow->RethrowPendingException();
         // The overlay is sized by its resolved bounds, not the profile resolution, so it reports its real client size;
         // the normal-mode line keeps today's text.
         if (windowModeSettings.GetWindowMode() == Win32WindowMode::Overlay) {

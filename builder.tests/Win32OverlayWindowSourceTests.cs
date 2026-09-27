@@ -246,7 +246,8 @@ public sealed class Win32OverlayWindowSourceTests {
     /// <summary>
     /// Verifies the client-size log line after the window is shown: in overlay mode it reports the overlay's actual
     /// client size, while the normal-mode line keeps today's text and still reports the profile resolution, so a
-    /// normal-mode startup log is byte-identical.
+    /// normal-mode startup log is byte-identical. The line follows the rethrow of any handler failure raised while the
+    /// window was shown.
     /// </summary>
     [Fact]
     public void Win32Application_logs_the_actual_overlay_client_size_and_keeps_the_normal_line() {
@@ -255,7 +256,7 @@ public sealed class Win32OverlayWindowSourceTests {
 
         Assert.Matches(
             new Regex(
-                @"MainWindow->Show\(\);\s*(?://[^\n]*\s*)*if \(windowModeSettings\.GetWindowMode\(\) == Win32WindowMode::Overlay\) \{\s*"
+                @"MainWindow->Show\(\);\s*(?://[^\n]*\s*)*MainWindow->RethrowPendingException\(\);\s*(?://[^\n]*\s*)*if \(windowModeSettings\.GetWindowMode\(\) == Win32WindowMode::Overlay\) \{\s*"
                 + @"std::ostringstream messageBuilder;\s*messageBuilder << ""Main window configured to overlay client size ""\s*"
                 + @"<< MainWindow->GetClientWidth\(\)\s*<< ""x""\s*<< MainWindow->GetClientHeight\(\)\s*<< '\.';\s*"
                 + @"std::string message = messageBuilder\.str\(\);\s*WriteLifecycleLog\(message\.c_str\(\)\);\s*\} else \{\s*"

@@ -30,7 +30,8 @@ namespace helengine::windows {
 
         /// Registers the window class and creates the native window through the normal or overlay path chosen by the
         /// window style. When the process is Per-Monitor v2 aware and the window is a normal window, the window is
-        /// then resized so its client area is the requested size in physical pixels at the window's DPI.
+        /// then resized so its client area is the requested size in physical pixels at the window's DPI. Any exception a
+        /// message handler raised during creation or that correction is rethrown before this returns.
         void Create();
 
         /// Shows the native window through the normal or overlay path chosen by the window style.
