@@ -71,7 +71,10 @@ namespace helengine::windows {
         /// Handles window messages for this instance, first reporting each one to the attached activity tracker when
         /// there is one; the message handling and return values do not depend on the tracker. WM_DPICHANGED, which
         /// only a Per-Monitor v2 aware window receives, moves a normal window to the suggested top-left while keeping
-        /// its client pixel size, leaves an overlay's rectangle unchanged, and returns 0 in both modes.
+        /// its client pixel size, applies the suggested rectangle as given to a maximized window, leaves a minimized
+        /// window and an overlay's rectangle unchanged, and returns 0 in every case. WM_GETDPISCALEDSIZE reports that
+        /// client-preserving outer size and returns TRUE for a non-maximized, non-minimized Per-Monitor v2 normal
+        /// window, and returns FALSE (linear scaling) otherwise.
         LRESULT HandleMessage(UINT message, WPARAM wParam, LPARAM lParam);
 
         /// Registers the native window class used by the player host.

@@ -229,7 +229,10 @@ namespace helengine::windows {
     /// Handles window messages for this instance, first reporting each one to the attached activity tracker when
     /// there is one; the message handling and return values do not depend on the tracker. WM_DPICHANGED, which only a
     /// Per-Monitor v2 aware window receives, moves a normal window to the suggested top-left while keeping its client
-    /// pixel size, leaves an overlay's rectangle unchanged, and returns 0 in both modes.
+    /// pixel size, applies the suggested rectangle as given to a maximized window, leaves a minimized window and an
+    /// overlay's rectangle unchanged, and returns 0 in every case. WM_GETDPISCALEDSIZE reports that client-preserving
+    /// outer size and returns TRUE for a non-maximized, non-minimized Per-Monitor v2 normal window, and returns FALSE
+    /// (linear scaling) otherwise.
     LRESULT Win32Window::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam) {
         if (ActivityTracker != nullptr) {
             ActivityTracker->ObserveMessage(message);
@@ -248,7 +251,19 @@ namespace helengine::windows {
                 // The profile resolution is the client size in physical pixels, so a normal window takes the suggested
                 // top-left but keeps its client pixel size at the new DPI; an overlay keeps its rectangle.
                 if (WindowStyle.GetWindowMode() == Win32WindowMode::Normal) {
-                    RECT placement = Win32DpiWindowSizing::PlacementForDpiChange(*reinterpret_cast<RECT*>(lParam), GetClientWidth(), GetClientHeight(), WS_OVERLAPPEDWINDOW, 0, HIWORD(wParam));
+                    if (IsIconic(Handle)) {
+                        // A minimized window's cached client size is 0x0 and it has no visible size to keep; it is
+                        // not resized, and its restore placement is left to Windows.
+                        return 0;
+                    }
+
+                    const RECT& suggestedRectangle = *reinterpret_cast<RECT*>(lParam);
+                    RECT placement = suggestedRectangle;
+                    // A maximized window must keep filling its monitor, so it takes the suggested rectangle as given;
+                    // any other normal window keeps its client pixel size at the new DPI.
+                    if (!IsZoomed(Handle)) {
+                        placement = Win32DpiWindowSizing::PlacementForDpiChange(suggestedRectangle, GetClientWidth(), GetClientHeight(), WS_OVERLAPPEDWINDOW, 0, HIWORD(wParam));
+                    }
                     if (!SetWindowPos(Handle, nullptr, placement.left, placement.top, placement.right - placement.left, placement.bottom - placement.top, SWP_NOZORDER | SWP_NOACTIVATE)) {
                         DWORD errorCode = GetLastError();
                         std::ostringstream messageBuilder;
@@ -257,6 +272,19 @@ namespace helengine::windows {
                     }
                 }
                 return 0;
+
+            case WM_GETDPISCALEDSIZE:
+                // Sent before WM_DPICHANGED so its suggested rectangle can carry this window's real size: a Per-Monitor
+                // v2 normal window that is neither maximized nor minimized keeps its client pixel size, so the new
+                // outer size is that client size framed at the new DPI in wParam. Every other case returns FALSE and
+                // lets Windows scale linearly: a maximized window takes the suggested rectangle as given, a minimized
+                // one is not resized, and the overlay's WM_DPICHANGED ignores the suggestion anyway.
+                if (WindowStyle.GetWindowMode() == Win32WindowMode::Normal && DpiAwareness == Win32DpiAwareness::PerMonitorV2 && !IsZoomed(Handle) && !IsIconic(Handle)) {
+                    SIZE* scaledSize = reinterpret_cast<SIZE*>(lParam);
+                    *scaledSize = Win32DpiWindowSizing::OuterSizeForClient(GetClientWidth(), GetClientHeight(), WS_OVERLAPPEDWINDOW, 0, static_cast<UINT>(wParam));
+                    return TRUE;
+                }
+                return FALSE;
 
             case WM_DESTROY:
                 Handle = nullptr;

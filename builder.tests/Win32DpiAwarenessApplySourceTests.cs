@@ -191,10 +191,12 @@ public sealed class Win32DpiAwarenessApplySourceTests {
     }
 
     /// <summary>
-    /// Verifies the <c>WM_DPICHANGED</c> case: a normal window is placed at the suggested top-left with the outer size
-    /// for its current client size at the new DPI from <c>HIWORD(wParam)</c> (Review Focus 4) and a failed
-    /// <c>SetWindowPos</c> throws naming the call and <c>GetLastError()</c>, an overlay keeps its rectangle, and the
-    /// message returns 0 in both modes.
+    /// Verifies the <c>WM_DPICHANGED</c> case for a normal window: a minimized window (<c>IsIconic</c>) returns 0
+    /// before any resize, because its cached client size is 0x0; a maximized window (<c>IsZoomed</c>) takes the
+    /// suggested rectangle from <c>lParam</c> as given so it still fills its monitor; any other normal window is placed
+    /// at the suggested top-left with the outer size for its current client size at the new DPI from
+    /// <c>HIWORD(wParam)</c> (Review Focus 4). A failed <c>SetWindowPos</c> throws naming the call and
+    /// <c>GetLastError()</c>, an overlay keeps its rectangle, and the message returns 0 in every case.
     /// </summary>
     [Fact]
     public void Win32Window_keeps_the_client_pixel_size_on_WM_DPICHANGED() {
@@ -203,9 +205,16 @@ public sealed class Win32DpiAwarenessApplySourceTests {
 
         Assert.Matches(
             new Regex(
-                @"case WM_DPICHANGED:\s*(?://[^\n]*\s*)*"
+                @"case WM_DPICHANGED:\s*(?://[^
+]*\s*)*"
                 + @"if \(WindowStyle\.GetWindowMode\(\) == Win32WindowMode::Normal\) \{\s*"
-                + @"RECT placement = Win32DpiWindowSizing::PlacementForDpiChange\(\*reinterpret_cast<RECT\*>\(lParam\), GetClientWidth\(\), GetClientHeight\(\), WS_OVERLAPPEDWINDOW, 0, HIWORD\(wParam\)\);\s*"
+                + @"if \(IsIconic\(Handle\)\) \{\s*(?://[^
+]*\s*)*return 0;\s*\}\s*"
+                + @"const RECT& suggestedRectangle = \*reinterpret_cast<RECT\*>\(lParam\);\s*"
+                + @"RECT placement = suggestedRectangle;\s*(?://[^
+]*\s*)*"
+                + @"if \(!IsZoomed\(Handle\)\) \{\s*"
+                + @"placement = Win32DpiWindowSizing::PlacementForDpiChange\(suggestedRectangle, GetClientWidth\(\), GetClientHeight\(\), WS_OVERLAPPEDWINDOW, 0, HIWORD\(wParam\)\);\s*\}\s*"
                 + @"if \(!SetWindowPos\(Handle, nullptr, placement\.left, placement\.top, placement\.right - placement\.left, placement\.bottom - placement\.top, SWP_NOZORDER \| SWP_NOACTIVATE\)\) \{\s*"
                 + @"DWORD errorCode = GetLastError\(\);[^}]*SetWindowPos failed[^}]*errorCode[^}]*throw std::runtime_error\([^}]*\}\s*"
                 + @"\}\s*return 0;"),
@@ -215,6 +224,32 @@ public sealed class Win32DpiAwarenessApplySourceTests {
         int trackerIndex = handleMessageBody.IndexOf("ActivityTracker->ObserveMessage(message);", StringComparison.Ordinal);
         int switchIndex = handleMessageBody.IndexOf("switch (message) {", StringComparison.Ordinal);
         Assert.True(trackerIndex >= 0 && switchIndex > trackerIndex, "The activity tracker must still observe every message, WM_DPICHANGED included, before it is handled.");
+    }
+
+    /// <summary>
+    /// Verifies the <c>WM_GETDPISCALEDSIZE</c> case: only a Per-Monitor v2 normal window that is neither maximized
+    /// nor minimized writes the outer size for its current client size at the new DPI from <c>wParam</c> into the
+    /// <c>SIZE</c> that <c>lParam</c> points to and returns TRUE, so the <c>WM_DPICHANGED</c> suggested rectangle
+    /// already has the right size during a drag; every other case, the overlay included, returns FALSE and lets
+    /// Windows scale linearly.
+    /// </summary>
+    [Fact]
+    public void Win32Window_answers_WM_GETDPISCALEDSIZE_with_the_client_pixel_size() {
+        string windowSource = ReadRepositoryFile("src", "platform", "windows", "win32", "win32_window.cpp");
+        string handleMessageBody = ExtractMethodBody(windowSource, "LRESULT Win32Window::HandleMessage(");
+
+        Assert.Matches(
+            new Regex(
+                @"case WM_GETDPISCALEDSIZE:\s*(?://[^
+]*\s*)*"
+                + @"if \(WindowStyle\.GetWindowMode\(\) == Win32WindowMode::Normal && DpiAwareness == Win32DpiAwareness::PerMonitorV2 && !IsZoomed\(Handle\) && !IsIconic\(Handle\)\) \{\s*"
+                + @"SIZE\* scaledSize = reinterpret_cast<SIZE\*>\(lParam\);\s*"
+                + @"\*scaledSize = Win32DpiWindowSizing::OuterSizeForClient\(GetClientWidth\(\), GetClientHeight\(\), WS_OVERLAPPEDWINDOW, 0, static_cast<UINT>\(wParam\)\);\s*"
+                + @"return TRUE;\s*\}\s*"
+                + @"return FALSE;"),
+            handleMessageBody);
+        Assert.Single(Regex.Matches(windowSource, @"case WM_GETDPISCALEDSIZE:"));
+        Assert.DoesNotMatch(new Regex(@"case WM_GETDPISCALEDSIZE:[^}]*try \{"), handleMessageBody);
     }
 
     /// <summary>
