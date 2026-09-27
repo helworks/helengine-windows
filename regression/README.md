@@ -419,8 +419,9 @@ its client area keeps its pixel size.
 
 ## Current record
 
-The committed `manifest.json` is current as of the `d79c9fd` re-record described below: `-Verify` passes against it
-as committed, with every golden entry in the per-window `fingerprints` shape and an `overlayIdle` entry present.
+The committed `manifest.json` is current as of the `f0ab357` re-record described below: `-Verify` passes against it
+as committed, with every golden entry in the per-window `fingerprints` shape, an `overlayIdle` entry and a `dpiAware`
+entry present.
 
 The goldens were first recorded on 2026-09-24 from commit `f8a92cb`, and re-recorded on 2026-09-25 from commit
 `d7defda` (feature/regression-safety-net) to add the host fingerprints, the executed-test counts and the provenance
@@ -451,6 +452,39 @@ jittered by a few ms). `-Verify` passed twice against the re-recorded manifest, 
 (flipping `transparentExStyle` to the opaque value) correctly FAILed both the overlay and overlayIdle checks on the
 exStyle mismatch before the manifest was restored and re-verified clean.
 
+They were re-recorded once more on 2026-09-27, as commit `f0ab357` (feature/per-monitor-dpi, subproject 3b, Task 4),
+to add the opt-in per-monitor DPI scenario. The owner's main helengine-windows checkout and main helengine checkout
+both had in-progress, uncommitted edits that failed to build, so this record ran against a clean reference worktree
+(`-HelengineRoot C:\dev\helworks\helengine\.worktrees\regression-reference`, pinned at the same helengine commit
+`dd9ca693403d91b5e2fc52860a3511e6358ed776`) with `-PlatformsManifestPath C:\dev\helworks\helengine\user_settings\platforms.json`
+and `-ProjectCommit 5cc124eec06b8db729b2f9b15d99d26cb1ca8cc3` (the same DemoDisc pin as before). Because the reference
+worktree is clean rather than dirty, `helengineDirty` flipped from `true` to `false` and `helengineWorkingTreeHash`
+changed accordingly; `helengineCommit`, `projectCommit`, `buildConfigSourceHash` and `generatedCodeHash` were
+unchanged. A new `{ "id": "axis_test", "kind": "dpiAware" }` entry was added with a `fingerprintsByRun.normal` and
+`fingerprintsByRun.overlay` map (each keyed by window name): both report `dpiAwareness=permonitorv2 dpi=96`, the
+normal run otherwise matches the smoke scene's fingerprint (`client=640x360 windowMode=normal windowRect=default`),
+and the overlay run matches the overlay entry's (`alpha=1 exStyle=0x002800A8 windowMode=overlay
+windowRect=0,0,640,360`) with the same transparent `HIT_TEST` probe at `2,2`. Every golden PNG (including
+`axis_test.overlay.png`) stayed byte-identical to the previous record (`git diff --stat -- regression/golden/*.png`
+was empty), and every pre-existing fingerprint field kept its value (only `elapsedMs` jittered by a few ms).
+
+Switching to the clean reference worktree also moved the editor-test baseline, unrelated to the DPI feature:
+`helengine.editor.tests` dropped from 3134 to 3124 executed and from 49 to 47 failing, because the previous record's
+dirty helengine tree carried extra uncommitted test content that the clean `dd9ca693` commit does not have. Two
+tests newly fail (`EditorInstalledPsVitaPlatformSourceTests.Editor_installed_platform_catalog_registers_psvita_builder`,
+`EditorInstalledWiiUPlatformSourceTests.Editor_installed_platform_catalog_registers_wiiu_builder`) because
+`platforms.json` (read from the main checkout's `user_settings`, per this record's ruling) still declares platforms
+whose builder support existed only in the owner's uncommitted edits, not in the clean `dd9ca693` commit; five
+previously-failing `EditorPlatformBuildGraphRunnerTests.BuildRequest_*` tests now pass under the clean commit; and
+the known-flaky `EditorSessionUndoRedoIntegrationTests.Keyboard_focus_update_component_routes_delete_into_the_session_handler`
+reappeared in the failing list (it stays in the flaky list and is not a new failure). `helengine.render.validation.tests`
+was unchanged (1 failing of 1 executed). `helengine.windows.builder.tests` rose from 179 to 204 executed (0 failing),
+the 25 tests added across Tasks 1-3 of subproject 3b for the `--dpi-awareness` option, its profile setting and the
+apply-order/window-creation behavior. `-Verify` passed twice against the re-recorded manifest, a hand-edited negative
+check (`fingerprintsByRun.normal.main.dpiAwareness` set to `unaware`) correctly FAILed naming the `dpiAware` scenario
+before the manifest was restored and re-verified clean, and a no-argument boot confirmed the player still logs no
+`HOST_FINGERPRINT`, `HIT_TEST` or `DPI awareness configured` lines without `--frames` or `--dpi-awareness`.
+
 - All 11 rendering scenes were stable across the two record runs (0 differing pixels), so every scene has a golden
   and no scene is marked `unstable`. The re-recorded golden PNGs are byte-identical to the first record
   (`git diff --stat -- regression/golden/*.png` was empty after the overlay record; only `axis_test.overlay.png` is
@@ -468,6 +502,11 @@ exStyle mismatch before the manifest was restored and re-verified clean.
   transparent and 29.8% fully opaque pixels; `find-probes` chose `transparentProbe` `2,2` and `opaqueProbe` `393,2`,
   which logged `alpha=0 clickThrough=on` and `alpha=255 clickThrough=off`, and both probe runs matched the overlay
   golden with 0 differing pixels.
+- The dpiAware scenario on `axis_test` (added in the `f0ab357` re-record): the normal run's fingerprint
+  `dpi=96 dpiAwareness=permonitorv2 client=640x360 windowMode=normal windowRect=default elapsedMs=120` matched the
+  smoke golden with 0 differing pixels; the overlay run's fingerprint `dpi=96 dpiAwareness=permonitorv2 alpha=1
+  exStyle=0x002800A8 windowMode=overlay windowRect=0,0,640,360 elapsedMs=121` logged the transparent `HIT_TEST` probe
+  at `2,2`, passed `check-premultiplied` and matched the overlay golden with 0 differing pixels.
 - Baselines as of the `d79c9fd` re-record: `helengine.editor.tests` 49 failing of 3134 executed,
   `helengine.render.validation.tests` 1 failing of 1 executed, `helengine.windows.builder.tests` 0 failing of 179
   executed (up from 164, the 15 tests added across Tasks 1-4 of subproject 3a). Of the five known-flaky
@@ -475,6 +514,12 @@ exStyle mismatch before the manifest was restored and re-verified clean.
   `EditorSessionUndoRedoIntegrationTests.Keyboard_focus_update_component_routes_delete_into_the_session_handler`),
   `EditorSessionUndoRedoIntegrationTests...` happened to pass during this record, dropping the editor baseline from
   50 to 49 failing; all five stay in the flaky list, and `-Verify` reports one as `FIXED` when it passes.
+- Baselines as of the `f0ab357` re-record (see the narrative above for why the editor-test numbers moved):
+  `helengine.editor.tests` 47 failing of 3124 executed, `helengine.render.validation.tests` unchanged at 1 failing of
+  1 executed, `helengine.windows.builder.tests` 0 failing of 204 executed (up from 179, the 25 tests added across
+  Tasks 1-3 of subproject 3b for `--dpi-awareness`). The five known-flaky keyboard-focus tests stay in the flaky
+  list; `EditorSessionUndoRedoIntegrationTests...` was recorded as failing this time (the record just happened to
+  catch it failing), and `-Verify` reports it as `FIXED` when a run happens to pass it.
 - DemoDisc's `user_settings\generated_code` holds only `obj` files, which the copy leaves out, so
   `generatedCodeHash` is the SHA-256 of an empty list.
 - After the record, `-Verify` passed three times with every golden at 0 differing pixels, every fingerprint
