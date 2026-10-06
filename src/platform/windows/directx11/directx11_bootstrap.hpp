@@ -20,6 +20,9 @@ namespace helengine::windows {
         /// the DirectComposition device, target and visual instead of the window swap chain.</param>
         DirectX11Bootstrap(HWND windowHandle, int width, int height, bool useComposition);
 
+        /// Creates an additional swap chain using the primary device and context; resource caches remain shared.
+        DirectX11Bootstrap(HWND windowHandle, int width, int height, bool useComposition, DirectX11Bootstrap& sharedDevice);
+
         /// Releases all DirectX11 resources.
         ~DirectX11Bootstrap();
 

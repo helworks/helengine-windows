@@ -1,6 +1,8 @@
 #pragma once
 
 #include <string>
+#include <vector>
+#include "platform/windows/win32/win32_additional_window_settings.hpp"
 
 #include "platform/windows/win32/win32_dpi_awareness.hpp"
 #include "platform/windows/win32/win32_overlay_background.hpp"
@@ -116,7 +118,13 @@ namespace helengine::windows {
         /// Gets the ignored arguments as UTF-8, joined by single spaces; only meaningful when HasIgnoredArguments() is true.
         const std::string& GetIgnoredArguments() const;
 
+        /// Gets all explicitly configured secondary views, in command-line order.
+        const std::vector<Win32AdditionalWindowSettings>& GetAdditionalWindows() const;
+
     private:
+        /// Stores validated secondary views; an empty list keeps the original single-window path.
+        std::vector<Win32AdditionalWindowSettings> AdditionalWindows;
+
         /// Returns whether the argument is one of the regression flags (--scene, --frames, --fixed-delta, --capture,
         /// --idle-throttle, --idle-after-ms, --idle-fps, --window-mode, --overlay-bounds, --overlay-background,
         /// --hit-test-probe, --dpi-awareness).

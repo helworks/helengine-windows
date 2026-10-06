@@ -223,7 +223,7 @@ public sealed class Win32ClickThroughSourceTests {
 
         Assert.Single(Regex.Matches(hitTestSource, Regex.Escape("\"HIT_TEST x=\"")));
         Assert.DoesNotContain("\"HIT_TEST x=\"", applicationSource, StringComparison.Ordinal);
-        Assert.Single(Regex.Matches(applicationSource, @"WriteHitTestProbeResult\(\);"));
+        Assert.Single(Regex.Matches(renderFrameBody, @"WriteHitTestProbeResult\(\);"));
         Assert.Matches(
             new Regex(@"if \(RenderedFrameCount >= CommandLineOptions\.GetFrameLimit\(\)\) \{[^}]*WriteLifecycleLog\(fingerprintLine\.c_str\(\)\);\s*WriteHitTestProbeResult\(\);\s*PostQuitMessage\(0\);"),
             renderFrameBody);

@@ -41,7 +41,7 @@ drivers are not expected to match.
 ## Host fingerprint
 
 With `--frames`, and only then, the player writes one line per window to `helengine_windows.startup.log` after the
-last frame is presented and before it quits (today there is one window, `main`):
+last frame is presented and before it quits (the default run has one window, `main`):
 
 ```
 HOST_FINGERPRINT format=87 alpha=3 swapEffect=4 buffers=2 scaling=0 style=0x14CF0000 exStyle=0x00000100 client=640x360 presentCount=30 presentFailures=0 frames=30 idleThrottle=off idleFrames=0 activeFrames=30 windowMode=normal window=main dpi=96 dpiAwareness=unaware windowRect=default elapsedMs=118
@@ -778,3 +778,17 @@ In repeated full runs each of them sometimes passed and sometimes failed; run on
   the file when it is empty), so that these tests are fully checked again. Never add a test to a flaky list to
   hide a real regression. Add one only after you have seen it both pass and fail with no change, and document
   the cause here.
+
+## Multiple-window acceptance (stage 3c)
+
+The default Verify manifest continues to check the original single-window behavior. Run
+`scripts/test-multiple-windows.ps1` separately against the canonically built player to check
+the new `--window` path. It covers mixed normal/overlay presentation, existing RGB/RGBA
+goldens, independent minimize/resize, secondary close, primary shutdown and a finite run
+after its last secondary closes. See the [stage 3c design](../docs/superpowers/specs/2026-10-06-multiple-windows-design.md)
+for its command line and build provenance.
+
+In a multi-window run, `--frames` counts host frames, while each window fingerprint counts
+that view's actual presentations. A minimized view can therefore have fewer frames than
+the primary or another visible view. The acceptance script checks this relationship; the
+single-window manifest's exact count assumptions are unchanged.

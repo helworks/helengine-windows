@@ -99,9 +99,13 @@ public sealed class Win32CommandLineOptionsSourceTests {
     public void Win32Application_counts_frames_only_when_frame_limit_supplied() {
         string applicationSource = ReadRepositoryFile("src", "platform", "windows", "win32", "win32_application.cpp");
 
-        Assert.Single(Regex.Matches(applicationSource, @"RenderedFrameCount\+\+"));
-        Assert.Single(Regex.Matches(applicationSource, @"IdleFrameCount\+\+"));
-        Assert.Single(Regex.Matches(applicationSource, @"ActiveFrameCount\+\+"));
+        string singleWindowSource = applicationSource.Substring(
+            applicationSource.IndexOf("void Win32Application::RenderFrame()", StringComparison.Ordinal),
+            applicationSource.IndexOf("void Win32Application::WriteHitTestProbeResult()", StringComparison.Ordinal)
+                - applicationSource.IndexOf("void Win32Application::RenderFrame()", StringComparison.Ordinal));
+        Assert.Single(Regex.Matches(singleWindowSource, @"RenderedFrameCount\+\+"));
+        Assert.Single(Regex.Matches(singleWindowSource, @"IdleFrameCount\+\+"));
+        Assert.Single(Regex.Matches(singleWindowSource, @"ActiveFrameCount\+\+"));
         Assert.Matches(
             new Regex(@"if \(CommandLineOptions\.HasFrameLimit\(\)\) \{\s*if \(HostFingerprint->RecordPresent\(presentResult\)\) \{[^}]*\}\s*RenderedFrameCount\+\+;\s*if \(CurrentFrameIsIdle\) \{\s*IdleFrameCount\+\+;\s*\} else \{\s*ActiveFrameCount\+\+;\s*\}\s*if \(RenderedFrameCount >= CommandLineOptions\.GetFrameLimit\(\)\) \{[^}]*PostQuitMessage\(0\);\s*\}\s*\}"),
             applicationSource);

@@ -1,3 +1,4 @@
+#include "platform/windows/win32/win32_secondary_window.hpp"
 #include "platform/windows/win32/win32_application.hpp"
 
 #include <Windows.h>
@@ -592,6 +593,7 @@ namespace helengine::windows {
             WriteLifecycleLog("Host startup began.");
             CreateMainWindow();
             CreateGraphicsBootstrap();
+            CreateSecondaryWindows();
             InitializeWindowsTracyProfiler(Bootstrap->GetDevice(), Bootstrap->GetDeviceContext());
             InitializeEngineCore();
             WriteLifecycleLog("Entering render loop.");
@@ -799,6 +801,11 @@ namespace helengine::windows {
             reinterpret_cast<intptr_t>(MainWindow->GetHandle()),
             MainWindow->GetClientWidth(),
             MainWindow->GetClientHeight());
+
+        for (const auto& view : SecondaryWindows) {
+            EngineRenderManager3D->AddWindow(reinterpret_cast<intptr_t>(view->GetRegisteredHandle()),
+                view->GetWindow().GetClientWidth(), view->GetWindow().GetClientHeight());
+        }
 
         PlatformInfo* platformInfo = BuildRuntimePlatformInfo();
         EngineCore->Initialize(EngineRenderManager3D, EngineRenderManager2D, EngineInputBackend, platformInfo, options);
@@ -1823,6 +1830,7 @@ namespace helengine::windows {
             TranslateMessage(&message);
             DispatchMessageW(&message);
             MainWindow->RethrowPendingException();
+            for (const auto& view : SecondaryWindows) { view->GetWindow().RethrowPendingException(); }
         }
 
         return true;
@@ -1831,6 +1839,10 @@ namespace helengine::windows {
     /// Renders and presents the current frame.
     void Win32Application::RenderFrame() {
         HELENGINE_TRACY_ZONE_N("Frame");
+        if (MultipleWindowsEnabled) {
+            RenderMultiWindowFrame();
+            return;
+        }
         int clientWidth = MainWindow->GetClientWidth();
         int clientHeight = MainWindow->GetClientHeight();
         if (clientWidth <= 0 || clientHeight <= 0) {
@@ -1997,7 +2009,7 @@ namespace helengine::windows {
                 lastFrameStartMilliseconds,
                 IsEngineKeepAwake());
             int waitMilliseconds = waitDecision.WaitMilliseconds;
-            bool windowHasNoClientArea = MainWindow->GetClientWidth() <= 0 || MainWindow->GetClientHeight() <= 0;
+            bool windowHasNoClientArea = !HasRenderableWindow();
             if (waitDecision.Active && windowHasNoClientArea) {
                 waitMilliseconds = IdleFramePacer->GetIdleFrameIntervalMilliseconds();
             }
@@ -2021,6 +2033,12 @@ namespace helengine::windows {
                 // cursor moving over transparent areas: the hit-test controller reports a cursor move inside the
                 // overlay's window rectangle as activity.
                 if (OverlayHitTestController->ObserveCursorForActivity()) {
+                    ActivityTracker->MarkActivity();
+                }
+            }
+
+            for (const auto& view : SecondaryWindows) {
+                if (view->GetWindow().GetHandle() != nullptr && view->ObserveCursorForActivity()) {
                     ActivityTracker->MarkActivity();
                 }
             }
@@ -2905,5 +2923,144 @@ namespace helengine::windows {
         std::fflush(DebugAllocationLogFile);
     }
 #endif
+    /// Creates independent secondary presentation resources after process DPI and the primary device are ready.
+    void Win32Application::CreateSecondaryWindows() {
+        if (CommandLineOptions.GetAdditionalWindows().empty()) { return; }
+        MultipleWindowsEnabled = true;
+        Win32DpiAwareness awareness = AreDpiAwarenessContextsEqual(GetWindowDpiAwarenessContext(MainWindow->GetHandle()),
+            DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2) ? Win32DpiAwareness::PerMonitorV2 : Win32DpiAwareness::Unaware;
+        for (const auto& settings : CommandLineOptions.GetAdditionalWindows()) {
+            SecondaryWindows.push_back(std::make_unique<Win32SecondaryWindow>(settings, *Bootstrap, awareness,
+                ActivityTracker.get(), CommandLineOptions));
+            std::string message = "Secondary window initialized: " + settings.GetTag();
+            WriteLifecycleLog(message.c_str());
+        }
+    }
+
+    /// Checks all views so a minimized primary window does not suspend visible secondary views.
+    bool Win32Application::HasRenderableWindow() const {
+        if (MainWindow->GetClientWidth() > 0 && MainWindow->GetClientHeight() > 0) { return true; }
+        for (const auto& view : SecondaryWindows) {
+            if (view->GetWindow().GetHandle() != nullptr && view->GetWindow().GetClientWidth() > 0
+                && view->GetWindow().GetClientHeight() > 0) { return true; }
+        }
+        return false;
+    }
+
+    /// Chooses the focused view as the shared input coordinate space; no focus retains the primary policy.
+    void Win32Application::SelectMultiWindowInput() {
+#if __has_include("Core.hpp")
+        Win32Window* selected = MainWindow.get();
+        HWND foreground = GetForegroundWindow();
+        for (const auto& view : SecondaryWindows) {
+            if (view->GetWindow().GetHandle() == foreground) { selected = &view->GetWindow(); break; }
+        }
+        EngineInputBackend->SelectWindow(*selected);
+        EngineRenderManager3D->SelectInputWindow(reinterpret_cast<intptr_t>(selected->GetHandle()));
+#endif
+    }
+
+    /// Commits scene work once, updates once and renders the resulting shared scene into every visible window.
+    void Win32Application::RenderMultiWindowFrame() {
+        if (!HasRenderableWindow()) {
+            if (!IdleFramePacer) { WaitMessage(); }
+            return;
+        }
+#if __has_include("Core.hpp")
+        for (auto iterator = SecondaryWindows.begin(); iterator != SecondaryWindows.end();) {
+            if ((*iterator)->GetWindow().GetHandle() == nullptr) {
+                EngineInputBackend->SelectWindow(*MainWindow);
+                EngineRenderManager3D->RemoveWindow(reinterpret_cast<intptr_t>((*iterator)->GetRegisteredHandle()));
+                iterator = SecondaryWindows.erase(iterator);
+            } else { iterator++; }
+        }
+        int2 mainSize = EngineRenderManager3D->GetWindowSize(reinterpret_cast<intptr_t>(MainWindow->GetHandle()));
+        if (mainSize.X != MainWindow->GetClientWidth() || mainSize.Y != MainWindow->GetClientHeight()) {
+            EngineRenderManager3D->OnWindowResize(reinterpret_cast<intptr_t>(MainWindow->GetHandle()),
+                MainWindow->GetClientWidth(), MainWindow->GetClientHeight());
+        }
+        for (const auto& view : SecondaryWindows) {
+            int2 size = EngineRenderManager3D->GetWindowSize(reinterpret_cast<intptr_t>(view->GetRegisteredHandle()));
+            if (size.X != view->GetWindow().GetClientWidth() || size.Y != view->GetWindow().GetClientHeight()) {
+                EngineRenderManager3D->OnWindowResize(reinterpret_cast<intptr_t>(view->GetRegisteredHandle()),
+                    view->GetWindow().GetClientWidth(), view->GetWindow().GetClientHeight());
+            }
+        }
+        SelectMultiWindowInput();
+        if (CommandLineOptions.HasFixedDelta()) { EngineCore->Update(CommandLineOptions.GetFixedDeltaSeconds()); }
+        else { EngineCore->Update(); }
+        PollSceneTransitionDiagnostics();
+        bool finalFrame = CommandLineOptions.HasFrameLimit() && RenderedFrameCount + 1 == CommandLineOptions.GetFrameLimit();
+        bool coreDrawCompleted = false;
+        bool pacedPresentation = false;
+        int primaryWidth = MainWindow->GetClientWidth();
+        int primaryHeight = MainWindow->GetClientHeight();
+        int2 primarySize = EngineRenderManager3D->GetWindowSize(reinterpret_cast<intptr_t>(MainWindow->GetHandle()));
+        if (primarySize.X != primaryWidth || primarySize.Y != primaryHeight) {
+            EngineRenderManager3D->OnWindowResize(reinterpret_cast<intptr_t>(MainWindow->GetHandle()), primaryWidth, primaryHeight);
+        }
+        if (primaryWidth > 0 && primaryHeight > 0) {
+            if (Bootstrap->GetWidth() != primaryWidth || Bootstrap->GetHeight() != primaryHeight) {
+                Bootstrap->Resize(primaryWidth, primaryHeight);
+            }
+            EngineRenderManager3D->SelectOutputWindow(*Bootstrap, WindowModeSettings->GetWindowMode() == Win32WindowMode::Overlay
+                ? Win32RenderAlphaMode::Premultiplied : Win32RenderAlphaMode::Straight, WindowModeSettings->GetOverlayBackground());
+            EngineCore->Draw();
+            coreDrawCompleted = true;
+            if (BackBufferCapture && finalFrame) { BackBufferCapture->CaptureToBmp(CommandLineOptions.GetCapturePath()); }
+            if (OverlayHitTestController) { OverlayHitTestController->SampleFrame(); }
+            HRESULT result = Presenter->RenderFrame();
+            if (FAILED(result)) { throw std::runtime_error(DirectX11HostFingerprint::DescribePresentFailure(result)); }
+            pacedPresentation = true;
+            if (HostFingerprint) { HostFingerprint->RecordPresent(result); }
+            if (CommandLineOptions.HasFrameLimit()) {
+                MultiWindowPrimaryFrames++;
+                if (CurrentFrameIsIdle) { IdleFrameCount++; } else { ActiveFrameCount++; }
+            }
+        } else if (BackBufferCapture && finalFrame) {
+            throw Win32ExitRequest(3, "The primary window is minimized and its final capture is unavailable.");
+        }
+        for (const auto& view : SecondaryWindows) {
+            Win32Window& window = view->GetWindow();
+            int width = window.GetClientWidth();
+            int height = window.GetClientHeight();
+            intptr_t handle = reinterpret_cast<intptr_t>(view->GetRegisteredHandle());
+            int2 previous = EngineRenderManager3D->GetWindowSize(handle);
+            if (previous.X != width || previous.Y != height) { EngineRenderManager3D->OnWindowResize(handle, width, height); }
+            if (width <= 0 || height <= 0) {
+                if (finalFrame && CommandLineOptions.HasCapturePath()) {
+                    throw Win32ExitRequest(3, "Final capture unavailable for minimized window " + view->GetTag());
+                }
+                continue;
+            }
+            DirectX11Bootstrap& output = view->GetBootstrap();
+            if (output.GetWidth() != width || output.GetHeight() != height) { output.Resize(width, height); }
+            EngineRenderManager3D->SelectOutputWindow(output, view->GetMode() == Win32WindowMode::Overlay
+                ? Win32RenderAlphaMode::Premultiplied : Win32RenderAlphaMode::Straight, Win32OverlayBackground::Transparent);
+            if (!coreDrawCompleted) { EngineCore->Draw(); coreDrawCompleted = true; }
+            else { EngineRenderManager3D->Draw(); }
+            view->CompleteFrame(!pacedPresentation, CurrentFrameIsIdle, finalFrame);
+            pacedPresentation = true;
+        }
+        EngineRenderManager3D->SelectOutputWindow(*Bootstrap, WindowModeSettings->GetWindowMode() == Win32WindowMode::Overlay
+            ? Win32RenderAlphaMode::Premultiplied : Win32RenderAlphaMode::Straight, WindowModeSettings->GetOverlayBackground());
+        if (CommandLineOptions.HasFrameLimit()) { RenderedFrameCount++; }
+        if (finalFrame) {
+            std::string fingerprint = HostFingerprint->Describe(MultiWindowPrimaryFrames, IdleFramePacer != nullptr,
+                IdleFrameCount, ActiveFrameCount, WindowModeSettings->GetWindowMode());
+            WriteLifecycleLog(fingerprint.c_str());
+            WriteHitTestProbeResult();
+            for (const auto& view : SecondaryWindows) {
+                std::string line = view->DescribeFingerprint(IdleFramePacer != nullptr);
+                WriteLifecycleLog(line.c_str());
+                if (view->HasHitTestProbe()) { line = view->DescribeProbeResult(); WriteLifecycleLog(line.c_str()); }
+            }
+            PostQuitMessage(0);
+        }
+#else
+        throw std::runtime_error("Multiple windows require the generated engine core.");
+#endif
+    }
+
 }
 

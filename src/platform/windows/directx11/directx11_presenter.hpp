@@ -18,6 +18,9 @@ namespace helengine::windows {
         /// ignores it; --frames runs count failures for the host fingerprint.
         HRESULT RenderFrame();
 
+        /// Presents another window in the same host frame without adding a second vertical-sync wait.
+        HRESULT RenderFrameWithoutWait();
+
     private:
         /// Stores the DirectX11 bootstrap used for rendering and presentation.
         DirectX11Bootstrap& Bootstrap;

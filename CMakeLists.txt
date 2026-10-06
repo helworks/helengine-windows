@@ -77,6 +77,8 @@ set(HELENGINE_WINDOWS_SOURCES
     src/platform/windows/win32/win32_idle_frame_pacer.cpp
     src/platform/windows/win32/win32_idle_throttle_settings.cpp
     src/platform/windows/win32/win32_overlay_hit_test_controller.cpp
+    src/platform/windows/win32/win32_additional_window_settings.cpp
+    src/platform/windows/win32/win32_secondary_window.cpp
     src/platform/windows/win32/win32_window.cpp
     src/platform/windows/win32/win32_window_mode_names.cpp
     src/platform/windows/win32/win32_window_mode_settings.cpp
@@ -162,3 +164,14 @@ target_link_libraries(helengine_windows PRIVATE
     gdi32
     winmm
 )
+
+# These behavioral host tests are built explicitly and do not change the default player target.
+add_executable(helengine_windows_window_tests EXCLUDE_FROM_ALL
+    tests/window_configuration_tests.cpp
+    src/platform/windows/win32/win32_additional_window_settings.cpp
+    src/platform/windows/win32/win32_command_line_options.cpp
+    src/platform/windows/win32/win32_dpi_awareness_names.cpp
+    src/platform/windows/win32/win32_window_mode_names.cpp)
+target_include_directories(helengine_windows_window_tests PRIVATE src)
+target_compile_features(helengine_windows_window_tests PRIVATE cxx_std_20)
+target_link_libraries(helengine_windows_window_tests PRIVATE shell32)

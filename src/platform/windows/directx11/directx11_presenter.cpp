@@ -19,4 +19,9 @@ namespace helengine::windows {
         HELENGINE_TRACY_GPU_ZONE_N("D3D11.Present");
         return Bootstrap.GetSwapChain()->Present(1, 0);
     }
+    /// Presents an additional view without pacing the shared simulation a second time.
+    HRESULT DirectX11Presenter::RenderFrameWithoutWait() {
+        return Bootstrap.GetSwapChain()->Present(0, 0);
+    }
+
 }

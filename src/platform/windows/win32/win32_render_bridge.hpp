@@ -122,6 +122,9 @@ namespace helengine::windows {
     /// Provides a minimal native 3D renderer bridge that draws all cameras onto the main back buffer in draw order.
     class Win32RenderManager3D : public RenderManager3D, public IRenderVisitor3D, public IShaderRenderManager3D {
     public:
+        /// Selects a window's output surface and alpha contract on the same device before drawing that view.
+        void SelectOutputWindow(DirectX11Bootstrap& output, Win32RenderAlphaMode alphaMode, Win32OverlayBackground background);
+
         /// Creates the native renderer bridge for one DirectX11 bootstrap and its shared active 2D renderer.
         Win32RenderManager3D(DirectX11Bootstrap& bootstrap, Win32RenderManager2D& renderManager2D);
 
@@ -291,13 +294,16 @@ namespace helengine::windows {
         /// Stores the DirectX11 bootstrap used for device access and presentation resources.
         DirectX11Bootstrap& Bootstrap;
 
-        /// Stores how the back buffer's alpha channel is treated; applied once at startup through ConfigureAlphaMode.
+        /// Borrows the presentation surface selected for the current view; its device is shared with Bootstrap.
+        DirectX11Bootstrap* OutputBootstrap;
+
+        /// Stores how the back buffer's alpha channel is treated; initialized through ConfigureAlphaMode and selected explicitly for each shared-device view.
         Win32RenderAlphaMode AlphaMode = Win32RenderAlphaMode::Straight;
 
-        /// Stores how Premultiplied-mode clears resolve their color; applied once at startup through ConfigureAlphaMode.
+        /// Stores how Premultiplied-mode clears resolve their color; initialized through ConfigureAlphaMode and selected explicitly for each shared-device view.
         Win32OverlayBackground OverlayBackground = Win32OverlayBackground::Camera;
 
-        /// Tracks whether ConfigureAlphaMode already ran, so rendering never starts unconfigured and the mode is never toggled.
+        /// Tracks whether ConfigureAlphaMode already ran, so rendering and output selection cannot start before initialization.
         bool IsAlphaModeConfigured = false;
 
         /// Stores the application's active 2D renderer without taking ownership of its lifetime.
@@ -413,6 +419,9 @@ namespace helengine::windows {
     /// Provides a native 2D renderer bridge that can draw packaged sprites, text, and UI shapes on Windows.
     class Win32RenderManager2D : public RenderManager2D, public IRenderVisitor2D {
     public:
+        /// Selects a window's output surface and alpha contract on the same device before drawing that view.
+        void SelectOutputWindow(DirectX11Bootstrap& output, Win32RenderAlphaMode alphaMode, Win32OverlayBackground background);
+
         /// Creates the native 2D bridge for one DirectX11 bootstrap.
         explicit Win32RenderManager2D(DirectX11Bootstrap& bootstrap);
 
@@ -534,6 +543,9 @@ namespace helengine::windows {
         /// Stores the DirectX11 bootstrap used for texture uploads.
         DirectX11Bootstrap& Bootstrap;
 
+        /// Borrows the presentation surface selected for the current view; its device is shared with Bootstrap.
+        DirectX11Bootstrap* OutputBootstrap;
+
         /// Stores the dynamic quad vertex buffer reused by every 2D draw call.
         Microsoft::WRL::ComPtr<ID3D11Buffer> QuadVertexBuffer;
 
@@ -569,10 +581,10 @@ namespace helengine::windows {
         /// ONE/INV_SRC_ALPHA.
         Microsoft::WRL::ComPtr<ID3D11BlendState> PremultipliedDestinationBlendState;
 
-        /// Stores how the back buffer's alpha channel is treated; applied once at startup through ConfigureAlphaMode.
+        /// Stores how the back buffer's alpha channel is treated; initialized through ConfigureAlphaMode and selected explicitly for each shared-device view.
         Win32RenderAlphaMode AlphaMode = Win32RenderAlphaMode::Straight;
 
-        /// Tracks whether ConfigureAlphaMode already ran, so rendering never starts unconfigured and the mode is never toggled.
+        /// Tracks whether ConfigureAlphaMode already ran, so rendering and output selection cannot start before initialization.
         bool IsAlphaModeConfigured = false;
 
         /// Stores the rasterizer state used by 2D draws.

@@ -18,6 +18,7 @@ namespace helengine::windows {
     /// <param name="windowStyle">Normal or overlay style set.</param>
     Win32Window::Win32Window(const wchar_t* title, int left, int top, int width, int height, const Win32WindowStyle& windowStyle)
         : Title(title)
+        , QuitOnDestroy(true)
         , Left(left)
         , Top(top)
         , Width(width)
@@ -77,6 +78,26 @@ namespace helengine::windows {
         } else {
             ShowNormalWindow();
         }
+    }
+
+    /// Marks a not-yet-created window as secondary so closing it leaves the host alive.
+    void Win32Window::SetSecondaryWindow() {
+        if (Handle != nullptr) {
+            throw std::logic_error("Secondary window lifetime must be configured before Create.");
+        }
+        QuitOnDestroy = false;
+    }
+
+    /// Places a secondary window and shows it without changing foreground keyboard focus.
+    void Win32Window::ShowSecondary() const {
+        if (WindowStyle.GetWindowMode() == Win32WindowMode::Overlay) {
+            ShowOverlayWindow();
+            return;
+        }
+        if (!SetWindowPos(Handle, nullptr, Left, Top, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE)) {
+            throw std::runtime_error("SetWindowPos failed for a secondary window with error " + std::to_string(GetLastError()) + ".");
+        }
+        ShowWindow(Handle, SW_SHOWNOACTIVATE);
     }
 
     /// Creates today's ordinary WS_OVERLAPPEDWINDOW window at the default placement, with exactly the calls the
@@ -293,7 +314,9 @@ namespace helengine::windows {
 
             case WM_DESTROY:
                 Handle = nullptr;
-                PostQuitMessage(0);
+                if (QuitOnDestroy) {
+                    PostQuitMessage(0);
+                }
                 return 0;
         }
 

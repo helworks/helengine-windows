@@ -119,6 +119,17 @@ namespace helengine::windows {
         , LastLoggedWatchedKeyMask(0) {
     }
 
+    /// Selects a live input window without creating another engine input system.
+    void Win32InputBackend::SelectWindow(Win32Window& window) {
+        if (window.GetHandle() == nullptr) {
+            throw std::invalid_argument("Cannot select a closed input window.");
+        }
+        if (Window != &window) {
+            Window = &window;
+            PointerWrapDeltaOffset = int2(0, 0);
+        }
+    }
+
     /// Returns whether the backend continues reporting input while the host window is inactive.
     bool Win32InputBackend::get_ReceiveInputInBackground() {
         return ReceiveInputInBackground;

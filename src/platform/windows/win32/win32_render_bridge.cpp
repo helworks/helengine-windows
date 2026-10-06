@@ -1007,6 +1007,7 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
     /// Creates the native renderer bridge for one DirectX11 bootstrap.
     Win32RenderManager3D::Win32RenderManager3D(DirectX11Bootstrap& bootstrap, Win32RenderManager2D& renderManager2D)
         : Bootstrap(bootstrap)
+        , OutputBootstrap(&bootstrap)
         , RenderManager2DBridge(&renderManager2D)
         , CurrentViewProjection(::float4x4::get_Identity())
         , CurrentShadowViewProjection(::float4x4::get_Identity())
@@ -2182,8 +2183,8 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
     void Win32RenderManager3D::RenderCamera(ICamera* camera, bool clearColorBuffer) {
         HELENGINE_TRACY_ZONE_N("D3D11.RenderCamera");
         ID3D11DeviceContext* context = Bootstrap.GetDeviceContext();
-        ID3D11RenderTargetView* renderTargetView = Bootstrap.GetRenderTargetView();
-        ID3D11DepthStencilView* depthStencilView = Bootstrap.GetDepthStencilView();
+        ID3D11RenderTargetView* renderTargetView = OutputBootstrap->GetRenderTargetView();
+        ID3D11DepthStencilView* depthStencilView = OutputBootstrap->GetDepthStencilView();
 
         context->OMSetRenderTargets(1, &renderTargetView, depthStencilView);
 
@@ -3223,8 +3224,8 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
 
     /// Clears the back buffer to a solid fallback color when nothing else renders.
     void Win32RenderManager3D::ClearBackBuffer(float red, float green, float blue, float alpha) {
-        ID3D11RenderTargetView* renderTargetView = Bootstrap.GetRenderTargetView();
-        ID3D11DepthStencilView* depthStencilView = Bootstrap.GetDepthStencilView();
+        ID3D11RenderTargetView* renderTargetView = OutputBootstrap->GetRenderTargetView();
+        ID3D11DepthStencilView* depthStencilView = OutputBootstrap->GetDepthStencilView();
         ID3D11DeviceContext* context = Bootstrap.GetDeviceContext();
 
         const float clearColor[] = { red, green, blue, alpha };
@@ -3243,8 +3244,8 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
         D3D11_VIEWPORT viewport {};
         viewport.TopLeftX = 0.0f;
         viewport.TopLeftY = 0.0f;
-        viewport.Width = static_cast<float>(Bootstrap.GetWidth());
-        viewport.Height = static_cast<float>(Bootstrap.GetHeight());
+        viewport.Width = static_cast<float>(OutputBootstrap->GetWidth());
+        viewport.Height = static_cast<float>(OutputBootstrap->GetHeight());
         viewport.MinDepth = 0.0f;
         viewport.MaxDepth = 1.0f;
         context->RSSetViewports(1, &viewport);
@@ -3267,7 +3268,8 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
 
     /// Creates the native 2D bridge for one DirectX11 bootstrap.
     Win32RenderManager2D::Win32RenderManager2D(DirectX11Bootstrap& bootstrap)
-        : Bootstrap(bootstrap) {
+        : Bootstrap(bootstrap)
+        , OutputBootstrap(&bootstrap) {
 #if __has_include("RenderCommandListBuilder2D.hpp")
         CommandListBuilder = std::make_unique<RenderCommandListBuilder2D>();
 #endif
@@ -3560,17 +3562,17 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
         float height = rawViewport.W;
 
         if (width <= 1.0f && height <= 1.0f && width > 0.0f && height > 0.0f) {
-            offsetX *= static_cast<float>(Bootstrap.GetWidth());
-            offsetY *= static_cast<float>(Bootstrap.GetHeight());
-            width *= static_cast<float>(Bootstrap.GetWidth());
-            height *= static_cast<float>(Bootstrap.GetHeight());
+            offsetX *= static_cast<float>(OutputBootstrap->GetWidth());
+            offsetY *= static_cast<float>(OutputBootstrap->GetHeight());
+            width *= static_cast<float>(OutputBootstrap->GetWidth());
+            height *= static_cast<float>(OutputBootstrap->GetHeight());
         }
 
         if (width <= 0.0f || height <= 0.0f) {
             offsetX = 0.0f;
             offsetY = 0.0f;
-            width = static_cast<float>(Bootstrap.GetWidth());
-            height = static_cast<float>(Bootstrap.GetHeight());
+            width = static_cast<float>(OutputBootstrap->GetWidth());
+            height = static_cast<float>(OutputBootstrap->GetHeight());
         }
 
         D3D11_VIEWPORT viewport {};
@@ -3602,8 +3604,8 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
         EnsurePipelineState();
 
         ID3D11DeviceContext* context = Bootstrap.GetDeviceContext();
-        ID3D11RenderTargetView* renderTargetView = Bootstrap.GetRenderTargetView();
-        ID3D11DepthStencilView* depthStencilView = Bootstrap.GetDepthStencilView();
+        ID3D11RenderTargetView* renderTargetView = OutputBootstrap->GetRenderTargetView();
+        ID3D11DepthStencilView* depthStencilView = OutputBootstrap->GetDepthStencilView();
         context->OMSetRenderTargets(1, &renderTargetView, depthStencilView);
         context->RSSetViewports(1, &CurrentViewport);
         context->RSSetState(RasterizerState.Get());
@@ -3634,8 +3636,8 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
         EnsurePipelineState();
 
         ID3D11DeviceContext* context = Bootstrap.GetDeviceContext();
-        ID3D11RenderTargetView* renderTargetView = Bootstrap.GetRenderTargetView();
-        ID3D11DepthStencilView* depthStencilView = Bootstrap.GetDepthStencilView();
+        ID3D11RenderTargetView* renderTargetView = OutputBootstrap->GetRenderTargetView();
+        ID3D11DepthStencilView* depthStencilView = OutputBootstrap->GetDepthStencilView();
         context->OMSetRenderTargets(1, &renderTargetView, depthStencilView);
         context->RSSetViewports(1, &CurrentViewport);
         context->RSSetState(RasterizerState.Get());
@@ -4097,17 +4099,17 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
         float height = rawViewport.W;
 
         if (width <= 1.0f && height <= 1.0f && width > 0.0f && height > 0.0f) {
-            offsetX *= static_cast<float>(Bootstrap.GetWidth());
-            offsetY *= static_cast<float>(Bootstrap.GetHeight());
-            width *= static_cast<float>(Bootstrap.GetWidth());
-            height *= static_cast<float>(Bootstrap.GetHeight());
+            offsetX *= static_cast<float>(OutputBootstrap->GetWidth());
+            offsetY *= static_cast<float>(OutputBootstrap->GetHeight());
+            width *= static_cast<float>(OutputBootstrap->GetWidth());
+            height *= static_cast<float>(OutputBootstrap->GetHeight());
         }
 
         if (width <= 0.0f || height <= 0.0f) {
             offsetX = 0.0f;
             offsetY = 0.0f;
-            width = static_cast<float>(Bootstrap.GetWidth());
-            height = static_cast<float>(Bootstrap.GetHeight());
+            width = static_cast<float>(OutputBootstrap->GetWidth());
+            height = static_cast<float>(OutputBootstrap->GetHeight());
         }
 
         D3D11_VIEWPORT viewport {};
@@ -4604,6 +4606,32 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
             static_cast<int32_t>(shape->get_Corners()));
     }
 #endif
+#if __has_include("RenderManager2D.hpp")
+    /// Changes only the output surface and per-view composition state; all uploaded assets stay on one device.
+    void Win32RenderManager3D::SelectOutputWindow(DirectX11Bootstrap& output, Win32RenderAlphaMode alphaMode, Win32OverlayBackground background) {
+        if (!IsAlphaModeConfigured || output.GetDevice() != Bootstrap.GetDevice()) {
+            throw std::logic_error("Output selection requires an initialized renderer and a shared DirectX11 device.");
+        }
+        OutputBootstrap = &output;
+        AlphaMode = alphaMode;
+        OverlayBackground = background;
+        RenderManager2DBridge->SelectOutputWindow(output, alphaMode, background);
+    }
+
+    /// Selects a shared-device 2D surface and restores its blend state before the next view's 3D pass.
+    void Win32RenderManager2D::SelectOutputWindow(DirectX11Bootstrap& output, Win32RenderAlphaMode alphaMode, Win32OverlayBackground background) {
+        if (!IsAlphaModeConfigured || output.GetDevice() != Bootstrap.GetDevice()) {
+            throw std::logic_error("Output selection requires an initialized renderer and a shared DirectX11 device.");
+        }
+        OutputBootstrap = &output;
+        AlphaMode = alphaMode;
+        EnsurePipelineState();
+        Bootstrap.GetDeviceContext()->OMSetBlendState(alphaMode == Win32RenderAlphaMode::Premultiplied
+            ? PremultipliedDestinationBlendState.Get() : AlphaBlendState.Get(), nullptr, 0xFFFFFFFFu);
+    }
+
+#endif
+
 }
 
 

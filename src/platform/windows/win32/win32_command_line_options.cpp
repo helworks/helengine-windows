@@ -8,6 +8,7 @@
 #include <cmath>
 #include <cstdlib>
 #include <cwctype>
+#include <cstring>
 #include <stdexcept>
 
 #include "platform/windows/win32/win32_dpi_awareness_names.hpp"
@@ -164,6 +165,17 @@ namespace helengine::windows {
 
                 ParseHitTestProbe(value, options.HitTestProbeX, options.HitTestProbeY);
                 options.HitTestProbeSupplied = true;
+            } else if (flag == L"--window") {
+                if (options.AdditionalWindows.size() >= 15) {
+                    throw std::invalid_argument("The player supports at most 15 additional windows.");
+                }
+                Win32AdditionalWindowSettings settings = Win32AdditionalWindowSettings::Parse(ConvertToUtf8(value));
+                for (const auto& existing : options.AdditionalWindows) {
+                    if (::_stricmp(existing.GetTag().c_str(), settings.GetTag().c_str()) == 0) {
+                        throw std::invalid_argument("Duplicate --window tag: " + settings.GetTag());
+                    }
+                }
+                options.AdditionalWindows.push_back(settings);
             } else if (flag == L"--dpi-awareness") {
                 if (options.DpiAwarenessSupplied) {
                     throw std::invalid_argument("Command-line flag --dpi-awareness was given more than once.");
@@ -359,7 +371,7 @@ namespace helengine::windows {
         return argument == L"--scene" || argument == L"--frames" || argument == L"--fixed-delta" || argument == L"--capture"
             || argument == L"--idle-throttle" || argument == L"--idle-after-ms" || argument == L"--idle-fps"
             || argument == L"--window-mode" || argument == L"--overlay-bounds" || argument == L"--overlay-background"
-            || argument == L"--hit-test-probe" || argument == L"--dpi-awareness";
+            || argument == L"--hit-test-probe" || argument == L"--dpi-awareness" || argument == L"--window";
     }
 
     /// Converts a UTF-16 command-line value to UTF-8 so it can be compared with engine scene ids and logged.
@@ -524,4 +536,9 @@ namespace helengine::windows {
 
         throw std::invalid_argument("Command-line flag --dpi-awareness requires \"unaware\" or \"permonitorv2\", got: " + text);
     }
+    /// Returns the validated secondary-view configurations without copying them.
+    const std::vector<Win32AdditionalWindowSettings>& Win32CommandLineOptions::GetAdditionalWindows() const {
+        return AdditionalWindows;
+    }
+
 }

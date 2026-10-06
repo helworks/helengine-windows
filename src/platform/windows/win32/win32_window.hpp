@@ -37,6 +37,12 @@ namespace helengine::windows {
         /// Shows the native window through the normal or overlay path chosen by the window style.
         void Show() const;
 
+        /// Configures secondary lifetime before creation: closing this window does not quit the process.
+        void SetSecondaryWindow();
+
+        /// Shows a secondary window at its requested position without stealing foreground focus.
+        void ShowSecondary() const;
+
         /// Gets the native window handle.
         HWND GetHandle() const;
 
@@ -120,6 +126,9 @@ namespace helengine::windows {
 
         /// Stores the native window title.
         std::wstring Title;
+
+        /// Records whether destroying this window should end the process message loop.
+        bool QuitOnDestroy;
 
         /// Stores the requested screen x of the window's top-left corner; only used by the overlay style.
         int Left;

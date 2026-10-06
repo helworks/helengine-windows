@@ -10,6 +10,7 @@
 #include <fstream>
 #include <memory>
 #include <string>
+#include <vector>
 
 #include "platform/windows/runtime/runtime_render_diagnostics.hpp"
 #include "platform/windows/runtime/runtime_player_profile.hpp"
@@ -44,6 +45,7 @@ namespace helengine::windows {
     class Win32RenderManager2D;
     class Win32RenderManager3D;
     class Win32Window;
+    class Win32SecondaryWindow;
 
     /// Owns Windows host startup and the main message/render loop for the native player.
     class Win32Application {
@@ -63,6 +65,18 @@ namespace helengine::windows {
 
         /// Creates the DirectX11 device and presentation resources for the main window.
         void CreateGraphicsBootstrap();
+
+        /// Initializes explicitly configured secondary views before the shared core starts.
+        void CreateSecondaryWindows();
+
+        /// Updates the shared core once, then draws and presents every live view.
+        void RenderMultiWindowFrame();
+
+        /// Returns whether any live view has a nonzero client area.
+        bool HasRenderableWindow() const;
+
+        /// Selects the focused live view's input coordinates before the shared update.
+        void SelectMultiWindowInput();
 
         /// Attaches to the parent console or creates one so host and engine logs have a stable output target.
         void InitializeConsole();
@@ -334,6 +348,15 @@ namespace helengine::windows {
 
         /// Stores the DirectX11 device and swap-chain bootstrap.
         std::unique_ptr<DirectX11Bootstrap> Bootstrap;
+
+        /// Owns secondary views, which share Bootstrap's device and outlive no core or graphics resources.
+        std::vector<std::unique_ptr<Win32SecondaryWindow>> SecondaryWindows;
+
+        /// Counts primary presentations independently of the finite multi-window host-frame limit.
+        int MultiWindowPrimaryFrames = 0;
+
+        /// Keeps the multi-window lifecycle active after the last secondary view closes.
+        bool MultipleWindowsEnabled = false;
 
         /// Stores the clear/present helper for the bootstrap resources.
         std::unique_ptr<DirectX11Presenter> Presenter;

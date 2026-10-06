@@ -18,7 +18,7 @@ namespace helengine::windows {
     class DirectX11HostFingerprint {
     public:
         /// Creates a fingerprint bound to the bootstrap that owns the swap chain and to the player's main window.
-        DirectX11HostFingerprint(DirectX11Bootstrap& bootstrap, HWND windowHandle);
+        DirectX11HostFingerprint(DirectX11Bootstrap& bootstrap, HWND windowHandle, const std::string& windowTag = "main");
 
         /// Records one presented frame: stamps the wall clock (the first call starts it, every call moves its end) and
         /// counts a failed Present. Returns true only for a failing HRESULT that has not been seen before in this run,
@@ -47,6 +47,9 @@ namespace helengine::windows {
 
         /// Stores the main window whose styles and client rectangle are described; not owned.
         HWND WindowHandle;
+
+        /// Stores the stable window tag used to distinguish fingerprints within one process.
+        std::string WindowTag;
 
         /// Stores whether RecordPresent has been called at least once, which means FirstPresentTime is valid.
         bool PresentRecorded;

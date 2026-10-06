@@ -32,6 +32,9 @@ namespace helengine::windows {
         /// Captures one input frame from the current Windows host state.
         InputFrameState CaptureFrame() override;
 
+        /// Changes the registered focused window whose client coordinates and wheel input are captured.
+        void SelectWindow(Win32Window& window);
+
     private:
         /// Reads the current keyboard state from Win32 keyboard APIs.
         KeyboardState CaptureKeyboardState();

@@ -62,7 +62,7 @@ public sealed class DirectX11HostFingerprintSourceTests {
             "\" idleFrames=\"",
             "\" activeFrames=\"",
             "\" windowMode=\"",
-            "\" window=main\"",
+            "\" window=\"",
             "\" dpi=\"",
             "\" dpiAwareness=\"",
             "\" windowRect=\"",
@@ -112,7 +112,7 @@ public sealed class DirectX11HostFingerprintSourceTests {
                 + @"windowRectBuilder << windowRect\.left << "","" << windowRect\.top << "","" << windowRect\.right << "","" << windowRect\.bottom;\s*"
                 + @"\} else \{\s*windowRectBuilder << ""default"";\s*\}"),
             describeBody);
-        Assert.Contains("<< \" window=main\"", describeBody, StringComparison.Ordinal);
+        Assert.Contains("<< \" window=\"", describeBody, StringComparison.Ordinal);
         Assert.Contains("<< \" windowRect=\" << windowRectBuilder.str()", describeBody, StringComparison.Ordinal);
     }
 
@@ -141,9 +141,13 @@ public sealed class DirectX11HostFingerprintSourceTests {
             @"if \(CommandLineOptions\.HasFrameLimit\(\)\) \{\s*if \(HostFingerprint->RecordPresent\(presentResult\)\) \{\s*std::string presentFailureMessage = DirectX11HostFingerprint::DescribePresentFailure\(presentResult\);\s*WriteLifecycleLog\(presentFailureMessage\.c_str\(\)\);\s*\}\s*RenderedFrameCount\+\+;\s*if \(CurrentFrameIsIdle\) \{\s*IdleFrameCount\+\+;\s*\} else \{\s*ActiveFrameCount\+\+;\s*\}\s*if \(RenderedFrameCount >= CommandLineOptions\.GetFrameLimit\(\)\) \{\s*std::string fingerprintLine = HostFingerprint->Describe\(RenderedFrameCount, IdleFramePacer != nullptr, IdleFrameCount, ActiveFrameCount, WindowModeSettings->GetWindowMode\(\)\);\s*WriteLifecycleLog\(fingerprintLine\.c_str\(\)\);\s*WriteHitTestProbeResult\(\);\s*PostQuitMessage\(0\);\s*\}\s*\}");
         Assert.True(frameLimitBlock.Success, "The frame-limit block must count Present failures, split frames into idle and active counts, and log the fingerprint before PostQuitMessage(0).");
 
+        string singleWindowSource = applicationSource.Substring(
+            applicationSource.IndexOf("void Win32Application::RenderFrame()", StringComparison.Ordinal),
+            applicationSource.IndexOf("void Win32Application::WriteHitTestProbeResult()", StringComparison.Ordinal)
+                - applicationSource.IndexOf("void Win32Application::RenderFrame()", StringComparison.Ordinal));
         // Every read of the fingerprint and of the Present result is one of the matched lines inside the block above.
-        Assert.Equal(2, Regex.Matches(applicationSource, @"HostFingerprint->").Count);
-        Assert.Equal(2, Regex.Matches(applicationSource, @"\(presentResult\)").Count);
+        Assert.Equal(2, Regex.Matches(singleWindowSource, @"HostFingerprint->").Count);
+        Assert.Equal(2, Regex.Matches(singleWindowSource, @"\(presentResult\)").Count);
         Assert.DoesNotContain("HOST_FINGERPRINT", applicationSource, StringComparison.Ordinal);
     }
 

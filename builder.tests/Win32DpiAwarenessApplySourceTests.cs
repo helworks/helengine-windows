@@ -337,7 +337,8 @@ public sealed class Win32DpiAwarenessApplySourceTests {
             new Regex(
                 @"while \(PeekMessageW\(&message, nullptr, 0, 0, PM_REMOVE\)\) \{\s*"
                 + @"if \(message\.message == WM_QUIT\) \{\s*ExitCode = static_cast<int>\(message\.wParam\);\s*return false;\s*\}\s*"
-                + @"TranslateMessage\(&message\);\s*DispatchMessageW\(&message\);\s*MainWindow->RethrowPendingException\(\);\s*\}\s*"
+                 + @"TranslateMessage\(&message\);\s*DispatchMessageW\(&message\);\s*MainWindow->RethrowPendingException\(\);\s*"
+                + @"for \(const auto& view : SecondaryWindows\) \{ view->GetWindow\(\)\.RethrowPendingException\(\); \}\s*\}\s*"
                 + @"return true;\s*$"),
             pumpBody);
     }

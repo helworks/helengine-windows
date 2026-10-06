@@ -14,9 +14,10 @@
 
 namespace helengine::windows {
     /// Creates a fingerprint bound to the bootstrap that owns the swap chain and to the player's main window.
-    DirectX11HostFingerprint::DirectX11HostFingerprint(DirectX11Bootstrap& bootstrap, HWND windowHandle)
+    DirectX11HostFingerprint::DirectX11HostFingerprint(DirectX11Bootstrap& bootstrap, HWND windowHandle, const std::string& windowTag)
         : Bootstrap(bootstrap),
           WindowHandle(windowHandle),
+          WindowTag(windowTag),
           PresentRecorded(false),
           FirstPresentTime(),
           LastPresentTime(),
@@ -135,7 +136,7 @@ namespace helengine::windows {
                     << " idleFrames=" << idleFrames
                     << " activeFrames=" << activeFrames
                     << " windowMode=" << Win32WindowModeNames::ToText(windowMode)
-                    << " window=main"
+                    << " window=" << WindowTag
                     << " dpi=" << windowDpi
                     << " dpiAwareness=" << dpiAwarenessText
                     << " windowRect=" << windowRectBuilder.str()

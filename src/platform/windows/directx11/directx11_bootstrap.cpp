@@ -23,6 +23,18 @@ namespace helengine::windows {
         CreateDepthStencilView();
     }
 
+    /// Creates window-owned presentation resources on the existing shared DirectX11 device.
+    DirectX11Bootstrap::DirectX11Bootstrap(HWND windowHandle, int width, int height, bool useComposition, DirectX11Bootstrap& sharedDevice)
+        : WindowHandle(windowHandle), Width(width), Height(height), UseComposition(useComposition),
+          Device(sharedDevice.GetDevice()), DeviceContext(sharedDevice.GetDeviceContext()) {
+        if (windowHandle == nullptr || width <= 0 || height <= 0) {
+            throw std::invalid_argument("A secondary swap chain requires a live window and positive client dimensions.");
+        }
+        CreateSwapChain();
+        CreateRenderTargetView();
+        CreateDepthStencilView();
+    }
+
     /// Releases all DirectX11 resources.
     DirectX11Bootstrap::~DirectX11Bootstrap() = default;
 
