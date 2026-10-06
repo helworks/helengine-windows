@@ -29,7 +29,7 @@ Repeat `--window tag,mode,left,top,width,height` to add views of the running sce
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\launch_in_emulator.ps1 `
-  -ArtifactPath C:\dev\helworks\builds\multiple-windows\regression\player\helengine_windows.exe `
+  -ArtifactPath C:\dev\helworks\builds\multiple-windows\regression-integrated\player\helengine_windows.exe `
   -ArgumentList @('--scene', 'axis_test', `
     '--window', 'preview,normal,700,40,640,360', `
     '--window', 'glass,overlay,0,0,640,360')
