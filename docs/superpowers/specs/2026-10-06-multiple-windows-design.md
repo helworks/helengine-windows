@@ -75,7 +75,7 @@ powershell -NoProfile -File .\scripts\test-multiple-windows.ps1 `
   -WorkRoot C:\dev\helworks\builds\multiple-windows\acceptance-integrated
 ```
 
-It covers two normal windows; a primary plus a normal view and transparent overlay; primary/secondary minimize and restore; secondary resize to 800x600; closing secondary then primary; and finite frame accounting after the last secondary closes. Equal-sized normal views match the existing RGB golden, and the overlay matches the existing RGBA golden and premultiplication check. WindowLifecycleProbe enumerates only visible windows belonging to the test process and operates only on those handles.
+It covers two normal windows; a primary plus a normal view and transparent overlay; primary/secondary minimize and restore; secondary resize to 800x600; closing secondary then primary; and finite frame accounting after the last secondary closes. Equal-sized normal views match the selected RGB reference, and the overlay matches the selected RGBA reference and premultiplication check. WindowLifecycleProbe enumerates only visible windows belonging to the test process and operates only on those handles.
 
 The explicit CMake target `helengine_windows_window_tests` exercises the production configuration parsers without creating windows. Core tests cover independent registry sizes, selected input, unregistering, invalid handles and primary layout preservation during minimize. Existing source tests retain their default-path invariants while allowing a separate multi-window render path.
 
