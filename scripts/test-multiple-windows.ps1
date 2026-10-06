@@ -1,14 +1,16 @@
 <#
 .SYNOPSIS
-Checks real multi-window rendering and lifecycle against the existing smoke-scene goldens.
+Checks real multi-window rendering and lifecycle against the selected smoke-scene goldens.
 .DESCRIPTION
 Uses only the canonical launcher and test-owned windows. Captures are deterministic renderer back-buffer exports;
 desktop pixels, cursor position and display scaling are never read or changed.
+GoldenRootPath defaults to the committed goldens. An explicit root can select separately validated reference captures.
 #>
 param(
     [Parameter(Mandatory = $true)][string]$ArtifactPath,
     [Parameter(Mandatory = $true)][string]$RegressionToolPath,
-    [Parameter(Mandatory = $true)][string]$WorkRoot
+    [Parameter(Mandatory = $true)][string]$WorkRoot,
+    [Parameter()][string]$GoldenRootPath = ''
 )
 $ErrorActionPreference = 'Stop'
 $repositoryRoot = Split-Path -Parent $PSScriptRoot
@@ -17,8 +19,14 @@ New-Item -ItemType Directory -Path $resolvedWorkRoot -Force | Out-Null
 $launcher = Join-Path $PSScriptRoot 'launch_in_emulator.ps1'
 $playerRoot = Split-Path -Parent ([IO.Path]::GetFullPath($ArtifactPath))
 $startupLog = Join-Path $playerRoot 'helengine_windows.startup.log'
-$normalGolden = Join-Path $repositoryRoot 'regression/golden/axis_test.png'
-$overlayGolden = Join-Path $repositoryRoot 'regression/golden/axis_test.overlay.png'
+if ([string]::IsNullOrWhiteSpace($GoldenRootPath)) {
+    $GoldenRootPath = Join-Path $repositoryRoot 'regression/golden'
+}
+$normalGolden = Join-Path $GoldenRootPath 'axis_test.png'
+$overlayGolden = Join-Path $GoldenRootPath 'axis_test.overlay.png'
+foreach ($golden in @($normalGolden, $overlayGolden)) {
+    if (-not (Test-Path -LiteralPath $golden -PathType Leaf)) { throw "Missing comparison golden: $golden" }
+}
 
 function Invoke-Comparison {
     param([string[]]$Arguments)
