@@ -676,6 +676,23 @@ struct PSInput {
 float4 PSMain(PSInput input) : SV_TARGET {
     return DiffuseTexture.Sample(DiffuseSampler, input.UV) * input.Color;
 }
+
+float4 FontGrayscalePS(PSInput input) : SV_TARGET {
+    return float4(input.Color.rgb, DiffuseTexture.Sample(DiffuseSampler, input.UV).a * input.Color.a);
+}
+
+struct FontBlendOutput {
+    float4 Foreground : SV_Target0;
+    float4 Coverage : SV_Target1;
+};
+
+FontBlendOutput FontClearTypePS(PSInput input) {
+    float4 mask = DiffuseTexture.Sample(DiffuseSampler, input.UV) * input.Color.a;
+    FontBlendOutput output;
+    output.Foreground = float4(input.Color.rgb * mask.rgb, mask.a);
+    output.Coverage = mask;
+    return output;
+}
 )";
 
         /// Vertex shader used by the native rounded-rect SDF pass.
@@ -3303,6 +3320,9 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
             && QuadInputLayout
             && QuadVertexShader
             && QuadPixelShader
+            && FontClearTypePixelShader
+            && FontGrayscalePixelShader
+            && FontClearTypeBlendState
             && RoundedRectVertexShader
             && RoundedRectPixelShader
             && RoundedRectConstantBuffer
@@ -3370,6 +3390,20 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
                 nullptr,
                 QuadPixelShader.GetAddressOf()),
             "ID3D11Device::CreatePixelShader failed for the Windows 2D pixel shader.");
+
+        for (const char* entryPoint : { "FontClearTypePS", "FontGrayscalePS" }) {
+            Microsoft::WRL::ComPtr<ID3DBlob> fontBytecode;
+            compileErrors.Reset();
+            ThrowIfFailed(
+                D3DCompile(QuadPixelShaderSource, std::strlen(QuadPixelShaderSource), nullptr, nullptr, nullptr,
+                    entryPoint, "ps_4_0", 0, 0, fontBytecode.GetAddressOf(), compileErrors.GetAddressOf()),
+                "D3DCompile failed for the Windows font pixel shader.");
+            ID3D11PixelShader** shaderAddress = std::strcmp(entryPoint, "FontClearTypePS") == 0
+                ? FontClearTypePixelShader.GetAddressOf() : FontGrayscalePixelShader.GetAddressOf();
+            ThrowIfFailed(
+                device->CreatePixelShader(fontBytecode->GetBufferPointer(), fontBytecode->GetBufferSize(), nullptr, shaderAddress),
+                "ID3D11Device::CreatePixelShader failed for the Windows font pixel shader.");
+        }
 
         Microsoft::WRL::ComPtr<ID3DBlob> roundedRectVertexShaderBytecode;
         Microsoft::WRL::ComPtr<ID3DBlob> roundedRectPixelShaderBytecode;
@@ -3483,6 +3517,14 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
         ThrowIfFailed(
             device->CreateBlendState(&blendDescription, AlphaBlendState.GetAddressOf()),
             "ID3D11Device::CreateBlendState failed for the Windows 2D alpha blend state.");
+
+        D3D11_BLEND_DESC fontBlendDescription = blendDescription;
+        fontBlendDescription.RenderTarget[0].SrcBlend = D3D11_BLEND_ONE;
+        fontBlendDescription.RenderTarget[0].DestBlend = D3D11_BLEND_INV_SRC1_COLOR;
+        fontBlendDescription.RenderTarget[0].DestBlendAlpha = D3D11_BLEND_INV_SRC1_ALPHA;
+        ThrowIfFailed(
+            device->CreateBlendState(&fontBlendDescription, FontClearTypeBlendState.GetAddressOf()),
+            "ID3D11Device::CreateBlendState failed for the Windows ClearType blend state.");
 
         D3D11_BLEND_DESC premultipliedDestinationBlendDescription {};
         premultipliedDestinationBlendDescription.RenderTarget[0].BlendEnable = TRUE;
@@ -3598,7 +3640,7 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
     }
 
     /// Configures the DirectX11 state used by one textured quad draw.
-    void Win32RenderManager2D::PrepareTexturedQuadDraw(ID3D11ShaderResourceView* textureView) {
+    void Win32RenderManager2D::PrepareTexturedQuadDraw(ID3D11ShaderResourceView* textureView, bool rgbFontCoverage, bool allowClearType) {
         EnsurePipelineState();
 
         ID3D11DeviceContext* context = Bootstrap.GetDeviceContext();
@@ -3616,6 +3658,9 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
         } else {
             context->OMSetBlendState(AlphaBlendState.Get(), blendFactor, 0xFFFFFFFFu);
         }
+        if (rgbFontCoverage && allowClearType && AlphaMode == Win32RenderAlphaMode::Straight) {
+            context->OMSetBlendState(FontClearTypeBlendState.Get(), blendFactor, 0xFFFFFFFFu);
+        }
         context->IASetInputLayout(QuadInputLayout.Get());
         context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP);
         const UINT stride = sizeof(Win32QuadVertex);
@@ -3624,6 +3669,10 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
         context->IASetVertexBuffers(0, 1, &quadVertexBuffer, &stride, &offset);
         context->VSSetShader(QuadVertexShader.Get(), nullptr, 0);
         context->PSSetShader(QuadPixelShader.Get(), nullptr, 0);
+        if (rgbFontCoverage) {
+            context->PSSetShader(allowClearType && AlphaMode == Win32RenderAlphaMode::Straight
+                ? FontClearTypePixelShader.Get() : FontGrayscalePixelShader.Get(), nullptr, 0);
+        }
         context->PSSetShaderResources(0, 1, &textureView);
         ID3D11SamplerState* samplerState = TextureSamplerState.Get();
         context->PSSetSamplers(0, 1, &samplerState);
@@ -3743,12 +3792,14 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
         float width,
         float height,
         float4 sourceRect,
-        byte4 color) {
+        byte4 color,
+        bool rgbFontCoverage,
+        bool allowClearType) {
         if (!HasActiveViewport || textureView == nullptr || width <= 0.0f || height <= 0.0f || CurrentViewport.Width <= 0.0f || CurrentViewport.Height <= 0.0f) {
             return;
         }
 
-        PrepareTexturedQuadDraw(textureView);
+        PrepareTexturedQuadDraw(textureView, rgbFontCoverage, allowClearType);
 
         const float leftNdc = (((x - CurrentViewport.TopLeftX) / CurrentViewport.Width) * 2.0f) - 1.0f;
         const float rightNdc = ((((x + width) - CurrentViewport.TopLeftX) / CurrentViewport.Width) * 2.0f) - 1.0f;
@@ -4419,6 +4470,9 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
         QuadInputLayout.Reset();
         QuadVertexShader.Reset();
         QuadPixelShader.Reset();
+        FontClearTypePixelShader.Reset();
+        FontGrayscalePixelShader.Reset();
+        FontClearTypeBlendState.Reset();
         RoundedRectVertexShader.Reset();
         RoundedRectPixelShader.Reset();
         TextureSamplerState.Reset();
@@ -4485,7 +4539,12 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
         DrawTexturedQuadTransformed(textureView, position.X, position.Y, width, height, rotationRadians, sprite->get_SourceRect(), sprite->get_Color());
     }
 
-    /// Accepts a text draw request without issuing backend rendering yet.
+    /// Returns whether runtime font atlases support independent RGB coverage and grayscale fallback.
+    bool Win32RenderManager2D::get_SupportsRgbFontCoverage() {
+        return true;
+    }
+
+    /// Draws glyphs with subpixel coverage on opaque surfaces and grayscale on transparent surfaces.
     void Win32RenderManager2D::DrawText(ITextDrawable2D* text) {
         if (text == nullptr || text->get_Parent() == nullptr || !text->get_Parent()->get_IsHierarchyEnabled()) {
             return;
@@ -4521,8 +4580,11 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
 
         const float3 position = text->get_Parent()->get_Position();
         const double baseX = std::round(position.X);
+        const bool rgbFontCoverage = font->get_Texture()->get_UsesRgbFontCoverage();
+        const double fontScale = std::max(static_cast<double>(text->get_FontScale()), 0.0001);
+        const bool allowClearType = std::abs(fontScale - 1.0) < 0.00001;
         const double baseY = std::round(position.Y);
-        const double lineHeight = std::max(static_cast<double>(font->get_LineHeight()), 1.0);
+        const double lineHeight = std::max(static_cast<double>(font->get_LineHeight()) * fontScale, 1.0);
         const float atlasWidth = static_cast<float>(std::max(font->get_AtlasWidth(), 1));
         const float atlasHeight = static_cast<float>(std::max(font->get_AtlasHeight(), 1));
         const float spaceWidth = font->get_FontInfo() != nullptr ? font->get_FontInfo()->get_SpaceWidth() : 0.0f;
@@ -4537,7 +4599,7 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
             }
 
             if (character == ' ') {
-                offsetX += spaceWidth;
+                offsetX += spaceWidth * fontScale;
                 continue;
             }
 
@@ -4547,10 +4609,12 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
             }
 
             const float4 sourceRect = glyph.SourceRect;
-            const float glyphWidth = sourceRect.Z * atlasWidth;
-            const float glyphHeight = sourceRect.W * atlasHeight;
-            const float drawX = static_cast<float>(baseX + offsetX);
-            const float drawY = static_cast<float>(baseY + std::round(offsetY) + glyph.OffsetY);
+            const float glyphWidth = static_cast<float>(sourceRect.Z * atlasWidth * fontScale);
+            const float glyphHeight = static_cast<float>(sourceRect.W * atlasHeight * fontScale);
+            const bool snapSubpixels = rgbFontCoverage && allowClearType && AlphaMode == Win32RenderAlphaMode::Straight;
+            const float drawX = static_cast<float>(snapSubpixels ? std::round(baseX + offsetX) : baseX + offsetX);
+            const double glyphY = baseY + std::round(offsetY) + (glyph.OffsetY * fontScale);
+            const float drawY = static_cast<float>(snapSubpixels ? std::round(glyphY) : glyphY);
             if (!HasWritten2DDraw) {
                 AppendRenderDiagnosticsLine(
                     "2d.draw_text glyph pos="
@@ -4561,9 +4625,9 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
                     + std::to_string(glyphHeight));
                 HasWritten2DDraw = true;
             }
-            DrawTexturedQuad(textureView, drawX, drawY, glyphWidth, glyphHeight, sourceRect, text->get_Color());
+            DrawTexturedQuad(textureView, drawX, drawY, glyphWidth, glyphHeight, sourceRect, text->get_Color(), rgbFontCoverage, allowClearType);
 
-            const double advance = glyph.AdvanceWidth > 0.0f ? glyph.AdvanceWidth : glyphWidth;
+            const double advance = glyph.AdvanceWidth > 0.0f ? glyph.AdvanceWidth * fontScale : glyphWidth;
             offsetX += advance;
         }
     }
