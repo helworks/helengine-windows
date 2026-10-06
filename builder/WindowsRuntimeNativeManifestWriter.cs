@@ -48,8 +48,8 @@ public sealed class WindowsRuntimeNativeManifestWriter {
         string headerPath = Path.Combine(runtimeRootPath, "runtime_startup_manifest.hpp");
         string sourcePath = Path.Combine(runtimeRootPath, "runtime_startup_manifest.cpp");
 
-        File.WriteAllText(headerPath, BuildStartupManifestHeaderContents());
-        File.WriteAllText(sourcePath, BuildStartupManifestSourceContents(manifest, startupSceneRelativePath));
+        WriteIfChanged(headerPath, BuildStartupManifestHeaderContents());
+        WriteIfChanged(sourcePath, BuildStartupManifestSourceContents(manifest, startupSceneRelativePath));
     }
 
     /// <summary>
@@ -61,8 +61,8 @@ public sealed class WindowsRuntimeNativeManifestWriter {
         string headerPath = Path.Combine(runtimeRootPath, "runtime_scene_catalog_manifest.hpp");
         string sourcePath = Path.Combine(runtimeRootPath, "runtime_scene_catalog_manifest.cpp");
 
-        File.WriteAllText(headerPath, BuildSceneCatalogManifestHeaderContents());
-        File.WriteAllText(sourcePath, BuildSceneCatalogManifestSourceContents(manifest));
+        WriteIfChanged(headerPath, BuildSceneCatalogManifestHeaderContents());
+        WriteIfChanged(sourcePath, BuildSceneCatalogManifestSourceContents(manifest));
     }
 
     /// <summary>
@@ -74,8 +74,8 @@ public sealed class WindowsRuntimeNativeManifestWriter {
         string headerPath = Path.Combine(runtimeRootPath, "runtime_code_module_manifest.hpp");
         string sourcePath = Path.Combine(runtimeRootPath, "runtime_code_module_manifest.cpp");
 
-        File.WriteAllText(headerPath, BuildCodeModuleManifestHeaderContents());
-        File.WriteAllText(sourcePath, BuildCodeModuleManifestSourceContents(manifest.CodeModules));
+        WriteIfChanged(headerPath, BuildCodeModuleManifestHeaderContents());
+        WriteIfChanged(sourcePath, BuildCodeModuleManifestSourceContents(manifest.CodeModules));
     }
 
     /// <summary>
@@ -89,8 +89,21 @@ public sealed class WindowsRuntimeNativeManifestWriter {
         string headerPath = Path.Combine(runtimeRootPath, "runtime_player_settings_manifest.hpp");
         string sourcePath = Path.Combine(runtimeRootPath, "player_settings.cpp");
 
-        File.WriteAllText(headerPath, BuildPlayerSettingsManifestHeaderContents());
-        File.WriteAllText(sourcePath, BuildPlayerSettingsManifestSourceContents(defaultWindowWidth, defaultWindowHeight));
+        WriteIfChanged(headerPath, BuildPlayerSettingsManifestHeaderContents());
+        WriteIfChanged(sourcePath, BuildPlayerSettingsManifestSourceContents(defaultWindowWidth, defaultWindowHeight));
+    }
+
+    /// <summary>
+    /// Updates a generated native input only when its contents change, preserving Ninja's timestamp-based object cache.
+    /// </summary>
+    /// <param name="path">Generated native file path.</param>
+    /// <param name="contents">Complete generated file contents.</param>
+    static void WriteIfChanged(string path, string contents) {
+        if (File.Exists(path) && string.Equals(File.ReadAllText(path), contents, StringComparison.Ordinal)) {
+            return;
+        }
+
+        File.WriteAllText(path, contents);
     }
 
     /// <summary>

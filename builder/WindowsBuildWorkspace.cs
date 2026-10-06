@@ -41,7 +41,6 @@ public static class WindowsBuildWorkspace {
         ValidateGeneratedFunctionProfilingConfiguration(profileResolution, request.SelectedCodegenOptionValues);
 
         ResetDirectoryIfPresent(request.OutputRoot);
-        ResetDirectoryIfPresent(builderWorkingRoot);
         Directory.CreateDirectory(request.OutputRoot);
         Directory.CreateDirectory(builderWorkingRoot);
 
@@ -154,7 +153,9 @@ public static class WindowsBuildWorkspace {
             totalItems,
             "Running native Windows build."));
 
-        string nativeBuildRoot = Path.Combine(builderWorkingRoot, "native");
+        string nativeBuildRoot = string.IsNullOrWhiteSpace(request.NativeObjectCacheRoot)
+            ? Path.Combine(builderWorkingRoot, "native")
+            : Path.GetFullPath(request.NativeObjectCacheRoot);
 
         try {
             WindowsNativeBuildResult nativeBuildResult = nativeBuildExecutor.Build(

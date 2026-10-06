@@ -295,10 +295,10 @@ public class WindowsPlatformAssetBuilderTests {
     }
 
     /// <summary>
-    /// Verifies the builder copies staged payloads into the output root.
+    /// Verifies payload staging leaves an existing native object cache intact.
     /// </summary>
     [Fact]
-    public async Task BuildAsync_copies_payloads_into_the_output_root() {
+    public async Task BuildAsync_copies_payloads_into_the_output_root_and_preserves_native_cache() {
         string workingRoot = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
         string outputRoot = Path.Combine(workingRoot, "out");
         string sourceRoot = Path.Combine(workingRoot, "project");
@@ -376,6 +376,9 @@ public class WindowsPlatformAssetBuilderTests {
             WindowsPlatformAssetBuilder builder = new(nativeBuildExecutor);
             RecordingProgressReporter progressReporter = new();
             RecordingDiagnosticReporter diagnosticReporter = new();
+            string cachedObjectPath = Path.Combine(workingRoot, "tmp", "native", "previous-build.obj");
+            Directory.CreateDirectory(Path.GetDirectoryName(cachedObjectPath)!);
+            File.WriteAllText(cachedObjectPath, "cached object");
 
             PlatformBuildReport report = await builder.BuildAsync(request, progressReporter, diagnosticReporter, CancellationToken.None);
 
@@ -387,6 +390,7 @@ public class WindowsPlatformAssetBuilderTests {
             Assert.True(File.Exists(Path.Combine(outputRoot, "cooked", "assets", "textures", "checker.png")));
             Assert.True(File.Exists(Path.Combine(outputRoot, "helengine_windows.exe")));
             Assert.True(File.Exists(Path.Combine(workingRoot, "tmp", "windows-build-manifest.json")));
+            Assert.Equal("cached object", File.ReadAllText(cachedObjectPath));
             Assert.False(File.Exists(Path.Combine(outputRoot, "windows-build-manifest.json")));
         } finally {
             try {
@@ -522,6 +526,7 @@ public class WindowsPlatformAssetBuilderTests {
         string outputRoot = Path.Combine(workingRoot, "out");
         string sourceRoot = Path.Combine(workingRoot, "project");
         string generatedCoreRoot = Path.Combine(workingRoot, "generated-core");
+        string nativeCacheRoot = Path.Combine(workingRoot, "cache", "native");
         string sceneSourcePath = Path.Combine(sourceRoot, "scenes", "main-menu.hasset");
 
         Directory.CreateDirectory(Path.GetDirectoryName(sceneSourcePath)!);
@@ -579,7 +584,8 @@ public class WindowsPlatformAssetBuilderTests {
                     ["default-height"] = "720"
                 },
                 new Dictionary<string, string>(),
-                generatedCoreRoot);
+                generatedCoreRoot,
+                nativeObjectCacheRoot: nativeCacheRoot);
 
             RecordingNativeBuildExecutor nativeBuildExecutor = new();
             WindowsPlatformAssetBuilder builder = new(nativeBuildExecutor);
@@ -592,6 +598,7 @@ public class WindowsPlatformAssetBuilderTests {
             Assert.Empty(diagnosticReporter.Diagnostics);
             Assert.True(progressReporter.Updates.Count >= 3);
             Assert.True(nativeBuildExecutor.WasCalled);
+            Assert.Equal(nativeCacheRoot, nativeBuildExecutor.BuildRoot);
             Assert.Equal(Path.Combine(sourceRoot, "code"), nativeBuildExecutor.StagedCodeRootPath);
             Assert.True(File.Exists(Path.Combine(outputRoot, "helengine_windows.exe")));
             Assert.True(File.Exists(Path.Combine(outputRoot, "cooked", "scenes", "main-menu.hasset")));

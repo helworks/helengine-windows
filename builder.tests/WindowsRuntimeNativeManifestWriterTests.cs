@@ -131,6 +131,16 @@ public sealed class WindowsRuntimeNativeManifestWriterTests : IDisposable {
         Assert.Contains("he_get_runtime_default_window_width", settingsSource, StringComparison.Ordinal);
         Assert.Contains("640", settingsSource, StringComparison.Ordinal);
         Assert.Contains("480", settingsSource, StringComparison.Ordinal);
+
+        DateTime stableTime = new(2020, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+        File.SetLastWriteTimeUtc(settingsSourcePath, stableTime);
+        writer.Write(GeneratedCoreRootPath, manifest, graphicsOptionValues);
+        Assert.Equal(stableTime, File.GetLastWriteTimeUtc(settingsSourcePath));
+
+        graphicsOptionValues["default-width"] = "800";
+        writer.Write(GeneratedCoreRootPath, manifest, graphicsOptionValues);
+        Assert.NotEqual(stableTime, File.GetLastWriteTimeUtc(settingsSourcePath));
+        Assert.Contains("800", File.ReadAllText(settingsSourcePath), StringComparison.Ordinal);
     }
 
     /// <summary>
