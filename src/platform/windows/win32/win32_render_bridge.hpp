@@ -445,6 +445,9 @@ namespace helengine::windows {
         /// Builds a placeholder runtime texture from raw asset metadata.
         RuntimeTexture* BuildTextureFromRaw(TextureAsset* data) override;
 
+        /// Returns whether runtime font atlases support RGB coverage with grayscale fallback.
+        bool get_SupportsRgbFontCoverage() override;
+
         /// Releases one runtime texture previously created by the Windows renderer.
         void ReleaseTexture(RuntimeTexture* texture) override;
 
@@ -493,7 +496,7 @@ namespace helengine::windows {
         ID3D11ShaderResourceView* ResolveTextureResourceView(RuntimeTexture* texture) const;
 
         /// Configures the DirectX11 state used by one textured quad draw.
-        void PrepareTexturedQuadDraw(ID3D11ShaderResourceView* textureView);
+        void PrepareTexturedQuadDraw(ID3D11ShaderResourceView* textureView, bool rgbFontCoverage = false, bool allowClearType = true);
 
         /// Draws one textured quad in window-space pixel coordinates.
         void DrawTexturedQuad(
@@ -503,7 +506,9 @@ namespace helengine::windows {
             float width,
             float height,
             float4 sourceRect,
-            byte4 color);
+            byte4 color,
+            bool rgbFontCoverage = false,
+            bool allowClearType = true);
 
         /// Draws one textured quad in window-space pixel coordinates after applying a clockwise 2D rotation around its center.
         void DrawTexturedQuadTransformed(
@@ -564,6 +569,12 @@ namespace helengine::windows {
         /// Stores the fixed 2D quad pixel shader.
         Microsoft::WRL::ComPtr<ID3D11PixelShader> QuadPixelShader;
 
+        /// Composites physical RGB glyph coverage against the opaque back buffer.
+        Microsoft::WRL::ComPtr<ID3D11PixelShader> FontClearTypePixelShader;
+
+        /// Uses atlas alpha when the back buffer requires transparent composition.
+        Microsoft::WRL::ComPtr<ID3D11PixelShader> FontGrayscalePixelShader;
+
         /// Stores the fixed rounded-rect vertex shader.
         Microsoft::WRL::ComPtr<ID3D11VertexShader> RoundedRectVertexShader;
 
@@ -575,6 +586,9 @@ namespace helengine::windows {
 
         /// Stores the alpha-blend state used by 2D UI draws.
         Microsoft::WRL::ComPtr<ID3D11BlendState> AlphaBlendState;
+
+        /// Attenuates each background channel using the font shader's secondary output.
+        Microsoft::WRL::ComPtr<ID3D11BlendState> FontClearTypeBlendState;
 
         /// Stores the Premultiplied-mode blend state shared by the 2D draws and each camera's 3D pass: straight-alpha
         /// source colors (SRC_ALPHA/INV_SRC_ALPHA) blended over a premultiplied destination whose alpha accumulates as
