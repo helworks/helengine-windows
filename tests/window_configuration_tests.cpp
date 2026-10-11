@@ -19,7 +19,19 @@ namespace helengine::windows {
             if (overlay.GetMode() != Win32WindowMode::Overlay || overlay.GetWidth() != 800) {
                 throw std::runtime_error("Overlay window configuration was not preserved.");
             }
+            Win32AdditionalWindowSettings desktop = Win32AdditionalWindowSettings::Parse("wallpaper,desktop,-1920,0,1920,1080");
+            if (desktop.GetMode() != Win32WindowMode::Desktop || desktop.GetLeft() != -1920) {
+                throw std::runtime_error("Desktop window configuration was not preserved.");
+            }
+            wchar_t desktopExecutable[] = L"player.exe";
+            wchar_t desktopFlag[] = L"--window-mode";
+            wchar_t desktopMode[] = L"desktop";
+            wchar_t* desktopArguments[] = { desktopExecutable, desktopFlag, desktopMode };
+            if (Win32CommandLineOptions::Parse(3, desktopArguments).GetWindowMode() != Win32WindowMode::Desktop) {
+                throw std::runtime_error("Primary desktop mode was not parsed.");
+            }
             const char* invalid[] = { "", "main,normal,0,0,640,360", "../escape,normal,0,0,640,360",
+                "a,desktop,2147483647,0,640,360", "a,desktop,0,2147483647,640,360",
                 "a,other,0,0,640,360", "a,normal,0,0,0,360", "a,normal,0,0,-1,360",
                 "a,normal,0,0,16385,360", "a,normal,0,0,640,0", "a,normal,0,0,640,360,extra",
                 "a,normal,0,0,640", "a,normal,x,0,640,360", "a,normal,2147483648,0,640,360",

@@ -57,6 +57,7 @@ if(NOT HELENGINE_WINDOWS_RENDER_BACKEND STREQUAL "DirectX11")
 endif()
 
 set(HELENGINE_WINDOWS_SOURCES
+    src/helengine_windows.manifest
     src/main.cpp
     src/platform/windows/runtime/runtime_memory_diagnostics_provider.cpp
     src/platform/windows/runtime/runtime_memory_snapshot.cpp
@@ -79,6 +80,7 @@ set(HELENGINE_WINDOWS_SOURCES
     src/platform/windows/win32/win32_overlay_hit_test_controller.cpp
     src/platform/windows/win32/win32_additional_window_settings.cpp
     src/platform/windows/win32/win32_secondary_window.cpp
+    src/platform/windows/win32/win32_desktop_host.cpp
     src/platform/windows/win32/win32_window.cpp
     src/platform/windows/win32/win32_window_mode_names.cpp
     src/platform/windows/win32/win32_window_mode_settings.cpp
@@ -175,3 +177,21 @@ add_executable(helengine_windows_window_tests EXCLUDE_FROM_ALL
 target_include_directories(helengine_windows_window_tests PRIVATE src)
 target_compile_features(helengine_windows_window_tests PRIVATE cxx_std_20)
 target_link_libraries(helengine_windows_window_tests PRIVATE shell32)
+
+# Desktop tests create their own shell substitutes and never mutate Explorer-owned windows.
+add_executable(helengine_windows_desktop_tests EXCLUDE_FROM_ALL
+    src/helengine_windows.manifest
+    tests/desktop_host_tests.cpp
+    src/platform/windows/win32/win32_window.cpp
+    src/platform/windows/win32/win32_activity_tracker.cpp
+    src/platform/windows/win32/win32_dpi_window_sizing.cpp
+    src/platform/windows/win32/win32_window_mode_names.cpp
+    src/platform/windows/directx11/directx11_host_fingerprint.cpp
+    src/platform/windows/win32/win32_desktop_host.cpp
+    src/platform/windows/win32/win32_window_style.cpp
+    src/platform/windows/directx11/directx11_bootstrap.cpp
+    src/platform/windows/directx11/directx11_hresult_formatter.cpp)
+target_include_directories(helengine_windows_desktop_tests PRIVATE src)
+target_compile_features(helengine_windows_desktop_tests PRIVATE cxx_std_20)
+target_compile_definitions(helengine_windows_desktop_tests PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
+target_link_libraries(helengine_windows_desktop_tests PRIVATE user32 gdi32 d3d11 dcomp dxgi)

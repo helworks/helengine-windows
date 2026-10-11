@@ -28,6 +28,16 @@ public static class HostFingerprintComparer {
             }
         }
 
+        if (recorded.WindowMode == "desktop" && actual.WindowMode == "desktop") {
+            foreach (string fieldName in HostFingerprint.DesktopComparedFieldNames) {
+                string recordedValue = recorded.Fields[fieldName];
+                string actualValue = actual.Fields[fieldName];
+                if (!string.Equals(recordedValue, actualValue, StringComparison.Ordinal)) {
+                    failures.Add($"fingerprint {sceneId} {fieldName} recorded={recordedValue} actual={actualValue}");
+                }
+            }
+        }
+
         failures.AddRange(CheckHealth(sceneId, actual));
 
         List<string> warnings = new();

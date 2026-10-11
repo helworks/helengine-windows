@@ -18,10 +18,12 @@ namespace helengine::windows {
         /// <param name="height">Initial back-buffer height in pixels.</param>
         /// <param name="useComposition">True only in overlay mode: create a premultiplied composition swap chain and
         /// the DirectComposition device, target and visual instead of the window swap chain.</param>
-        DirectX11Bootstrap(HWND windowHandle, int width, int height, bool useComposition);
+        /// <param name="useDesktop">Selects an opaque blt swap chain for a layered Explorer child; false retains normal flip presentation.</param>
+        DirectX11Bootstrap(HWND windowHandle, int width, int height, bool useComposition, bool useDesktop = false);
 
         /// Creates an additional swap chain using the primary device and context; resource caches remain shared.
-        DirectX11Bootstrap(HWND windowHandle, int width, int height, bool useComposition, DirectX11Bootstrap& sharedDevice);
+        /// useComposition selects overlay alpha; useDesktop selects opaque blt presentation and cannot accompany composition.
+        DirectX11Bootstrap(HWND windowHandle, int width, int height, bool useComposition, DirectX11Bootstrap& sharedDevice, bool useDesktop = false);
 
         /// Releases all DirectX11 resources.
         ~DirectX11Bootstrap();
@@ -93,6 +95,9 @@ namespace helengine::windows {
 
         /// Stores whether the swap chain is a composition swap chain shown through DirectComposition (overlay mode).
         bool UseComposition;
+
+        /// Selects blt presentation for opaque layered children in Explorer; normal windows keep flip presentation.
+        bool UseDesktop;
 
         /// Stores the Direct3D 11 device.
         Microsoft::WRL::ComPtr<ID3D11Device> Device;

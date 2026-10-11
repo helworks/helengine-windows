@@ -1,5 +1,6 @@
 #include "platform/windows/win32/win32_secondary_window.hpp"
 #include "platform/windows/win32/win32_application.hpp"
+#include "platform/windows/win32/win32_desktop_host.hpp"
 
 #include <Windows.h>
 #include <DbgHelp.h>
@@ -12,6 +13,7 @@
 #include <array>
 #include <algorithm>
 #include <chrono>
+#include <cctype>
 #include <csignal>
 #include <crtdbg.h>
 #include <cstdio>
@@ -688,6 +690,7 @@ namespace helengine::windows {
         ApplyDpiAwareness(dpiAwarenessSettings);
         Win32IdleThrottleSettings idleThrottleSettings = Win32IdleThrottleSettings::Resolve(profile, CommandLineOptions);
         WindowModeSettings = std::make_unique<Win32WindowModeSettings>(windowModeSettings);
+        ConfigureDesktopMonitors(windowModeSettings);
         if (windowModeSettings.GetWindowMode() == Win32WindowMode::Overlay) {
             RECT overlayRectangle = ResolveOverlayRectangle(windowModeSettings, profile);
             int overlayWidth = overlayRectangle.right - overlayRectangle.left;
@@ -705,6 +708,11 @@ namespace helengine::windows {
                 << " size=" << overlayWidth << "x" << overlayHeight << '.';
             std::string overlayBoundsMessage = overlayBoundsBuilder.str();
             WriteLifecycleLog(overlayBoundsMessage.c_str());
+        } else if (windowModeSettings.GetWindowMode() == Win32WindowMode::Desktop) {
+            const RECT& bounds = DesktopMonitorRectangles.front();
+            MainWindow = std::make_unique<Win32Window>(L"HelEngine Desktop", bounds.left, bounds.top,
+                bounds.right - bounds.left, bounds.bottom - bounds.top, Win32WindowStyle::Desktop());
+            WriteLifecycleLog("Desktop mode configured: opaque wallpaper behind icons; monitor coverage fixed at startup.");
         } else {
             MainWindow = std::make_unique<Win32Window>(L"HelEngine Windows Host", CW_USEDEFAULT, CW_USEDEFAULT, profile.ResolutionWidth, profile.ResolutionHeight, Win32WindowStyle::Normal());
         }
@@ -736,6 +744,10 @@ namespace helengine::windows {
                 << '.';
             std::string message = messageBuilder.str();
             WriteLifecycleLog(message.c_str());
+        } else if (windowModeSettings.GetWindowMode() == Win32WindowMode::Desktop) {
+            std::string message = "Desktop client size: " + std::to_string(MainWindow->GetClientWidth())
+                + "x" + std::to_string(MainWindow->GetClientHeight()) + ".";
+            WriteLifecycleLog(message.c_str());
         } else {
             std::ostringstream messageBuilder;
             messageBuilder << "Main window configured to default client size "
@@ -755,7 +767,8 @@ namespace helengine::windows {
             MainWindow->GetHandle(),
             MainWindow->GetClientWidth(),
             MainWindow->GetClientHeight(),
-            WindowModeSettings->GetWindowMode() == Win32WindowMode::Overlay);
+            WindowModeSettings->GetWindowMode() == Win32WindowMode::Overlay,
+            WindowModeSettings->GetWindowMode() == Win32WindowMode::Desktop);
         Presenter = std::make_unique<DirectX11Presenter>(*Bootstrap);
         if (CommandLineOptions.HasCapturePath()) {
             BackBufferCapture = std::make_unique<DirectX11BackBufferCapture>(*Bootstrap);
@@ -1833,6 +1846,8 @@ namespace helengine::windows {
             for (const auto& view : SecondaryWindows) { view->GetWindow().RethrowPendingException(); }
         }
 
+        MainWindow->ValidateDesktopAttachment();
+        for (const auto& view : SecondaryWindows) { view->GetWindow().ValidateDesktopAttachment(); }
         return true;
     }
 
@@ -2923,13 +2938,37 @@ namespace helengine::windows {
         std::fflush(DebugAllocationLogFile);
     }
 #endif
+    /// Resolves startup monitor coverage and validates automatic-view limits before creating native resources.
+    void Win32Application::ConfigureDesktopMonitors(const Win32WindowModeSettings& windowModeSettings) {
+        if (windowModeSettings.GetWindowMode() == Win32WindowMode::Desktop) {
+            DesktopMonitorRectangles = Win32DesktopHost::GetMonitorRectangles();
+            if (DesktopMonitorRectangles.size() + CommandLineOptions.GetAdditionalWindows().size() > 16) {
+                throw Win32ExitRequest(2, "Desktop monitors and explicit windows exceed the maximum of 16 views.");
+            }
+            for (const auto& settings : CommandLineOptions.GetAdditionalWindows()) {
+                std::string tag = settings.GetTag();
+                for (char& character : tag) { character = static_cast<char>(std::tolower(static_cast<unsigned char>(character))); }
+                if (tag.rfind("desktop-monitor-", 0) == 0) {
+                    throw Win32ExitRequest(2, "The desktop-monitor- tag prefix is reserved for automatic monitor views.");
+                }
+            }
+        }
+    }
+
     /// Creates independent secondary presentation resources after process DPI and the primary device are ready.
     void Win32Application::CreateSecondaryWindows() {
-        if (CommandLineOptions.GetAdditionalWindows().empty()) { return; }
+        std::vector<Win32AdditionalWindowSettings> windows = CommandLineOptions.GetAdditionalWindows();
+        for (size_t index = 1; index < DesktopMonitorRectangles.size(); index++) {
+            const RECT& bounds = DesktopMonitorRectangles[index];
+            windows.push_back(Win32AdditionalWindowSettings::Parse("desktop-monitor-" + std::to_string(index + 1)
+                + ",desktop," + std::to_string(bounds.left) + "," + std::to_string(bounds.top)
+                + "," + std::to_string(bounds.right - bounds.left) + "," + std::to_string(bounds.bottom - bounds.top)));
+        }
+        if (windows.empty()) { return; }
         MultipleWindowsEnabled = true;
-        Win32DpiAwareness awareness = AreDpiAwarenessContextsEqual(GetWindowDpiAwarenessContext(MainWindow->GetHandle()),
+        Win32DpiAwareness awareness = AreDpiAwarenessContextsEqual(GetThreadDpiAwarenessContext(),
             DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2) ? Win32DpiAwareness::PerMonitorV2 : Win32DpiAwareness::Unaware;
-        for (const auto& settings : CommandLineOptions.GetAdditionalWindows()) {
+        for (const auto& settings : windows) {
             SecondaryWindows.push_back(std::make_unique<Win32SecondaryWindow>(settings, *Bootstrap, awareness,
                 ActivityTracker.get(), CommandLineOptions));
             std::string message = "Secondary window initialized: " + settings.GetTag();

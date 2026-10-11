@@ -25,6 +25,10 @@ namespace HelEngine.Windows.Tests {
         [System.Runtime.InteropServices.DllImport("user32.dll")]
         static extern bool EnumWindows(EnumerationCallback callback, System.IntPtr data);
 
+        /// <summary>Enumerates descendant windows so process-owned wallpaper children are included.</summary>
+        [System.Runtime.InteropServices.DllImport("user32.dll")]
+        static extern bool EnumChildWindows(System.IntPtr parent, EnumerationCallback callback, System.IntPtr data);
+
         /// <summary>Retrieves the process owning a candidate window.</summary>
         [System.Runtime.InteropServices.DllImport("user32.dll")]
         static extern uint GetWindowThreadProcessId(System.IntPtr handle, out uint processId);
@@ -57,22 +61,36 @@ namespace HelEngine.Windows.Tests {
         [System.Runtime.InteropServices.DllImport("user32.dll")]
         static extern bool SetWindowPos(System.IntPtr handle, System.IntPtr after, int left, int top, int width, int height, uint flags);
 
-        /// <summary>Finds top-level handles owned exclusively by the specified acceptance process.</summary>
+        /// <summary>Finds top-level and descendant handles owned exclusively by the specified acceptance process.</summary>
         /// <param name="processId">Process started by the acceptance launcher.</param>
         /// <returns>Captions and handles belonging to that process.</returns>
         public static System.Collections.Generic.Dictionary<string, System.IntPtr> FindWindows(int processId) {
             var result = new System.Collections.Generic.Dictionary<string, System.IntPtr>();
-            EnumWindows(delegate(System.IntPtr handle, System.IntPtr data) {
-                uint owner;
-                GetWindowThreadProcessId(handle, out owner);
-                if (owner == (uint)processId && IsWindowVisible(handle)) {
-                    var caption = new System.Text.StringBuilder(256);
-                    GetWindowText(handle, caption, caption.Capacity);
-                    result[caption.ToString()] = handle;
-                }
+            if (!EnumWindows(delegate(System.IntPtr handle, System.IntPtr data) {
+                RecordOwnedWindow(handle, processId, result);
+                EnumChildWindows(handle, delegate(System.IntPtr child, System.IntPtr childData) {
+                    RecordOwnedWindow(child, processId, result);
+                    return true;
+                }, System.IntPtr.Zero);
                 return true;
-            }, System.IntPtr.Zero);
+            }, System.IntPtr.Zero)) {
+                throw new System.InvalidOperationException("Could not enumerate acceptance windows.");
+            }
             return result;
+        }
+
+        /// <summary>Records a visible view only after verifying that the acceptance process owns it.</summary>
+        /// <param name="handle">Candidate top-level or descendant handle.</param>
+        /// <param name="processId">Acceptance player's process identifier.</param>
+        /// <param name="result">Caption map receiving only player-owned views.</param>
+        static void RecordOwnedWindow(System.IntPtr handle, int processId, System.Collections.Generic.Dictionary<string, System.IntPtr> result) {
+            uint owner;
+            GetWindowThreadProcessId(handle, out owner);
+            if (owner == (uint)processId && IsWindowVisible(handle)) {
+                var caption = new System.Text.StringBuilder(256);
+                GetWindowText(handle, caption, caption.Capacity);
+                result[caption.ToString()] = handle;
+            }
         }
 
         /// <summary>Minimizes only the supplied test-owned window.</summary>

@@ -16,7 +16,7 @@ namespace helengine::windows {
     class Win32WindowModeNames {
     public:
         /// Parses a windowMode string into its enum value. Returns false, leaving windowMode unchanged, when text
-        /// is not exactly "normal" or "overlay".
+        /// is not exactly "normal", "overlay" or "desktop".
         static bool TryParseWindowMode(const std::string& text, Win32WindowMode& windowMode);
 
         /// Parses an overlayBounds string into its enum value. Returns false, leaving overlayBounds unchanged, when
@@ -27,7 +27,7 @@ namespace helengine::windows {
         /// unchanged, when text is not exactly "camera" or "transparent".
         static bool TryParseOverlayBackground(const std::string& text, Win32OverlayBackground& overlayBackground);
 
-        /// Returns the exact accepted text for a window mode: "normal" or "overlay".
+        /// Returns the exact accepted text for a window mode: "normal", "overlay" or "desktop".
         static const char* ToText(Win32WindowMode windowMode);
 
         /// Returns the exact accepted text for an overlay bounds source: "monitor" or "profile".

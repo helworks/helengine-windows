@@ -12,7 +12,7 @@ Core.Update runs once per host frame. Core.Draw commits pending scene operations
 
 The primary window remains the shared UI layout reference, including its last usable dimensions while minimized. Resizing a secondary window updates its registry entry and GPU surface without changing that reference. Closing a secondary unregisters it and releases its resources. Closing the primary ends the process. A visible secondary continues rendering while the primary is minimized; when all views are minimized, the host waits for activity.
 
-These are views of a shared scene. Independent scenes, cameras assigned to specific windows, independently laid-out UI, runtime window creation, profile-driven window lists and the desktop-background role are future work.
+These are views of a shared scene. Independent scenes, cameras assigned to specific windows, independently laid-out UI, runtime window creation, profile-driven window lists remain future work. The desktop-background role is implemented in [stage 3d](2026-10-11-desktop-background-design.md).
 
 ## Configuration
 

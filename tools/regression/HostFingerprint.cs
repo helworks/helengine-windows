@@ -5,8 +5,8 @@ using System.Globalization;
 /// <summary>
 /// The host-layer facts of one player run, as written by the player's HOST_FINGERPRINT startup-log line in --frames
 /// mode: the swap-chain description, the window styles, the client size, the Present count and failures, the frame
-/// count, whether the idle throttle was enabled and how many frames ran idle and active, the window mode (normal or
-/// overlay), the window tag, the window's DPI and DPI awareness, the window rectangle (or "default" in normal mode),
+/// count, whether the idle throttle was enabled and how many frames ran idle and active, the window mode (normal,
+/// overlay or desktop), the window tag, the window's DPI and DPI awareness, the window rectangle (or "default" in normal mode),
 /// and the wall-clock time from the first to the last Present. Every field except the elapsed time is compared
 /// exactly between a record and a verify run; the elapsed time is only a coarse pacing signal.
 /// </summary>
@@ -30,15 +30,19 @@ public sealed class HostFingerprint {
     };
 
     /// <summary>
-    /// The compared fields whose values must be whole non-negative numbers: the frame and Present counters, which
-    /// rules also compare numerically, and the window's DPI, which is otherwise compared as plain text.
+    /// The shell attachment fields required and compared only for desktop views.
+    /// </summary>
+    public static readonly IReadOnlyList<string> DesktopComparedFieldNames = new[] { "desktopParent", "desktopRect" };
+
+    /// <summary>
+    /// Numeric counters and window DPI that must parse as whole non-negative values.
     /// </summary>
     static readonly IReadOnlyList<string> WholeNumberFieldNames = new[] { "presentCount", "presentFailures", "frames", "idleFrames", "activeFrames", "dpi" };
 
     /// <summary>
     /// Initializes a fingerprint from its compared fields and its elapsed time.
     /// </summary>
-    /// <param name="fields">The compared fields by name; must contain exactly <see cref="ComparedFieldNames"/>.</param>
+    /// <param name="fields">The compared fields by name; contains <see cref="ComparedFieldNames"/> and, for desktop mode, <see cref="DesktopComparedFieldNames"/>.</param>
     /// <param name="elapsedMilliseconds">Milliseconds from the first to the last Present of the run.</param>
     public HostFingerprint(IReadOnlyDictionary<string, string> fields, long elapsedMilliseconds) {
         Fields = fields;
@@ -46,7 +50,7 @@ public sealed class HostFingerprint {
     }
 
     /// <summary>
-    /// Gets the compared fields by name, exactly <see cref="ComparedFieldNames"/>, with the values as the player wrote them.
+    /// Gets common and mode-specific compared fields with the exact values written by the player.
     /// </summary>
     public IReadOnlyDictionary<string, string> Fields { get; }
 
@@ -81,7 +85,7 @@ public sealed class HostFingerprint {
     public long IdleFrames => long.Parse(Fields["idleFrames"], CultureInfo.InvariantCulture);
 
     /// <summary>
-    /// Gets how the player's main window presented itself for the run, as written by the player: "normal" or "overlay".
+    /// Gets how the player's main window presented itself for the run, as written by the player: "normal", "overlay" or "desktop".
     /// </summary>
     public string WindowMode => Fields["windowMode"];
 
@@ -115,7 +119,7 @@ public sealed class HostFingerprint {
                 }
 
                 elapsedText = value;
-            } else if (!ComparedFieldNames.Contains(name)) {
+            } else if (!ComparedFieldNames.Contains(name) && !DesktopComparedFieldNames.Contains(name)) {
                 throw new FormatException($"Host fingerprint field '{name}' is unknown.");
             } else if (!fields.TryAdd(name, value)) {
                 throw new FormatException($"Host fingerprint field '{name}' appears more than once.");
@@ -125,6 +129,16 @@ public sealed class HostFingerprint {
         foreach (string fieldName in ComparedFieldNames) {
             if (!fields.ContainsKey(fieldName)) {
                 throw new FormatException($"Host fingerprint field '{fieldName}' is missing.");
+            }
+        }
+
+        foreach (string fieldName in DesktopComparedFieldNames) {
+            if (fields["windowMode"] == "desktop") {
+                if (!fields.TryGetValue(fieldName, out string value) || string.IsNullOrWhiteSpace(value)) {
+                    throw new FormatException($"Desktop host fingerprint field '{fieldName}' is missing or empty.");
+                }
+            } else if (fields.ContainsKey(fieldName)) {
+                throw new FormatException($"Host fingerprint field '{fieldName}' is valid only for desktop mode.");
             }
         }
 
