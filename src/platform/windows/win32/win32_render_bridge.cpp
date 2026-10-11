@@ -1445,7 +1445,7 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
         ShadowMapDepthStencilView.Reset();
     }
 
-    /// Draws every registered camera to the Windows back buffer in camera order.
+    /// Draws cameras assigned to the selected host view in camera order, retaining shared cameras.
     void Win32RenderManager3D::Draw() {
         if (!IsAlphaModeConfigured) {
             throw std::logic_error("The Windows 3D render bridge alpha mode must be configured before the first Draw.");
@@ -1499,6 +1499,9 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
             }
 
             if (camera->get_RenderTarget() != nullptr) {
+                continue;
+            }
+            if (!IsCameraVisibleInWindow(camera, get_RenderWindowHandle())) {
                 continue;
             }
 
@@ -4672,10 +4675,11 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
 #endif
 #if __has_include("RenderManager2D.hpp")
     /// Changes only the output surface and per-view composition state; all uploaded assets stay on one device.
-    void Win32RenderManager3D::SelectOutputWindow(DirectX11Bootstrap& output, Win32RenderAlphaMode alphaMode, Win32OverlayBackground background) {
+    void Win32RenderManager3D::SelectOutputWindow(intptr_t windowHandle, DirectX11Bootstrap& output, Win32RenderAlphaMode alphaMode, Win32OverlayBackground background) {
         if (!IsAlphaModeConfigured || output.GetDevice() != Bootstrap.GetDevice()) {
             throw std::logic_error("Output selection requires an initialized renderer and a shared DirectX11 device.");
         }
+        SelectRenderWindow(windowHandle);
         OutputBootstrap = &output;
         AlphaMode = alphaMode;
         OverlayBackground = background;

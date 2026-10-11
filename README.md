@@ -37,6 +37,12 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\launch_in_emulator
 
 Closing a secondary view leaves the player running. Closing the primary view ends the process. See the [stage 3c design and validation](docs/superpowers/specs/2026-10-06-multiple-windows-design.md) for configuration limits, captures, and the shared-scene scope.
 
+## Camera Routing
+
+Cameras can select a view using `OutputWindowTag`: empty renders in every view, main selects the primary, and a secondary tag such as glass selects that named view. Combine this with existing layer masks to show wallpaper and overlay UI from separate cameras in one scene and simulation.
+
+Pointer routing uses the selected input view's camera assignments. Camera-bound UI viewports, anchors and reference-canvas scaling follow that camera's window size and react independently to resizing. Shared cameras and screen-bound viewports use the primary size. See the [camera routing design and validation](docs/superpowers/specs/2026-10-11-window-camera-routing-design.md) for authoring and lifecycle rules.
+
 ## Desktop Background (stage 3d)
 
 Use `--window-mode desktop` to cover every startup monitor behind desktop icons. Add `--window wallpaper,desktop,left,top,width,height` for an explicit wallpaper view alongside ordinary or overlay windows. Desktop views are opaque, ignore input, and open without activation.
