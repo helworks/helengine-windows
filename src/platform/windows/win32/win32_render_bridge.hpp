@@ -123,7 +123,7 @@ namespace helengine::windows {
     class Win32RenderManager3D : public RenderManager3D, public IRenderVisitor3D, public IShaderRenderManager3D {
     public:
         /// Selects a window's output surface and alpha contract on the same device before drawing that view.
-        void SelectOutputWindow(DirectX11Bootstrap& output, Win32RenderAlphaMode alphaMode, Win32OverlayBackground background);
+        void SelectOutputWindow(intptr_t windowHandle, DirectX11Bootstrap& output, Win32RenderAlphaMode alphaMode, Win32OverlayBackground background);
 
         /// Creates the native renderer bridge for one DirectX11 bootstrap and its shared active 2D renderer.
         Win32RenderManager3D(DirectX11Bootstrap& bootstrap, Win32RenderManager2D& renderManager2D);

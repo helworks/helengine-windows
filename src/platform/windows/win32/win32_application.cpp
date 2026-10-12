@@ -819,6 +819,7 @@ namespace helengine::windows {
         for (const auto& view : SecondaryWindows) {
             EngineRenderManager3D->AddWindow(reinterpret_cast<intptr_t>(view->GetRegisteredHandle()),
                 view->GetWindow().GetClientWidth(), view->GetWindow().GetClientHeight());
+            EngineRenderManager3D->SetWindowTag(reinterpret_cast<intptr_t>(view->GetRegisteredHandle()), view->GetTag());
         }
 
         PlatformInfo* platformInfo = BuildRuntimePlatformInfo();
@@ -3065,7 +3066,7 @@ namespace helengine::windows {
             if (Bootstrap->GetWidth() != primaryWidth || Bootstrap->GetHeight() != primaryHeight) {
                 Bootstrap->Resize(primaryWidth, primaryHeight);
             }
-            EngineRenderManager3D->SelectOutputWindow(*Bootstrap, WindowModeSettings->GetWindowMode() == Win32WindowMode::Overlay
+            EngineRenderManager3D->SelectOutputWindow(reinterpret_cast<intptr_t>(MainWindow->GetHandle()), *Bootstrap, WindowModeSettings->GetWindowMode() == Win32WindowMode::Overlay
                 ? Win32RenderAlphaMode::Premultiplied : Win32RenderAlphaMode::Straight, WindowModeSettings->GetOverlayBackground());
             EngineCore->Draw();
             coreDrawCompleted = true;
@@ -3097,14 +3098,14 @@ namespace helengine::windows {
             }
             DirectX11Bootstrap& output = view->GetBootstrap();
             if (output.GetWidth() != width || output.GetHeight() != height) { output.Resize(width, height); }
-            EngineRenderManager3D->SelectOutputWindow(output, view->GetMode() == Win32WindowMode::Overlay
+            EngineRenderManager3D->SelectOutputWindow(handle, output, view->GetMode() == Win32WindowMode::Overlay
                 ? Win32RenderAlphaMode::Premultiplied : Win32RenderAlphaMode::Straight, Win32OverlayBackground::Transparent);
             if (!coreDrawCompleted) { EngineCore->Draw(); coreDrawCompleted = true; }
             else { EngineRenderManager3D->Draw(); }
             view->CompleteFrame(!pacedPresentation, CurrentFrameIsIdle, finalFrame);
             pacedPresentation = true;
         }
-        EngineRenderManager3D->SelectOutputWindow(*Bootstrap, WindowModeSettings->GetWindowMode() == Win32WindowMode::Overlay
+        EngineRenderManager3D->SelectOutputWindow(reinterpret_cast<intptr_t>(MainWindow->GetHandle()), *Bootstrap, WindowModeSettings->GetWindowMode() == Win32WindowMode::Overlay
             ? Win32RenderAlphaMode::Premultiplied : Win32RenderAlphaMode::Straight, WindowModeSettings->GetOverlayBackground());
         if (CommandLineOptions.HasFrameLimit()) { RenderedFrameCount++; }
         if (finalFrame) {
