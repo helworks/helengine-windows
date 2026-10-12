@@ -793,6 +793,7 @@ namespace helengine::windows {
         options->RenderList2DInitialCapacity = 64;
         options->RenderList3DInitialCapacity = 64;
         options->SceneCatalog = BuildRuntimeSceneCatalog();
+        options->SceneLoadingBudgetMilliseconds = he_get_runtime_scene_loading_budget_milliseconds();
 #if defined(HELENGINE_WINDOWS_PHYSICS_FIXED_STEP_HERTZ)
         options->PhysicsFixedStepSeconds = 1.0 / static_cast<double>(HELENGINE_WINDOWS_PHYSICS_FIXED_STEP_HERTZ);
 #endif
@@ -1339,8 +1340,30 @@ namespace helengine::windows {
             throw std::runtime_error("Windows startup scene loading requires an initialized scene manager.");
         }
 
-        EngineCore->get_SceneManager()->LoadScene(startupEntry->get_SceneId(), SceneLoadMode::Single);
-        WriteLifecycleLog("Packaged startup scene applied through scene manager.");
+        const std::string loadingScreenSceneId = he_get_runtime_loading_screen_scene_id();
+        if (loadingScreenSceneId.empty() || loadingScreenSceneId == startupEntry->get_SceneId()) {
+            EngineCore->get_SceneManager()->LoadScene(startupEntry->get_SceneId(), SceneLoadMode::Single);
+            WriteLifecycleLog("Packaged startup scene applied through scene manager.");
+        } else {
+            RuntimeSceneCatalogEntry* loadingScreenEntry = nullptr;
+            for (int32_t entryIndex = 0; entryIndex < catalogEntries->get_Length(); entryIndex++) {
+                RuntimeSceneCatalogEntry* candidateEntry = (*catalogEntries)[entryIndex];
+                if (candidateEntry != nullptr && candidateEntry->get_SceneId() == loadingScreenSceneId) {
+                    if (loadingScreenEntry != nullptr) {
+                        throw std::runtime_error("Packaged loading screen scene id is ambiguous: " + loadingScreenSceneId);
+                    }
+                    loadingScreenEntry = candidateEntry;
+                }
+            }
+            if (loadingScreenEntry == nullptr) {
+                throw std::runtime_error("Packaged loading screen is absent from the runtime catalog: " + loadingScreenSceneId);
+            }
+            EngineCore->get_SceneManager()->LoadScene(loadingScreenSceneId, SceneLoadMode::Additive);
+            EngineCore->get_SceneManager()->CommitPendingOperationsAtFrameBoundary();
+            WriteLifecycleLog(("Persistent loading screen prepared: " + loadingScreenSceneId).c_str());
+            EngineCore->get_SceneManager()->RequestSceneTransition(startupEntry->get_SceneId());
+            WriteLifecycleLog(("Packaged startup scene transition queued: " + startupEntry->get_SceneId()).c_str());
+        }
 #endif
     }
 

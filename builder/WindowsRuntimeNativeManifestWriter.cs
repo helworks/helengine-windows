@@ -117,6 +117,8 @@ public sealed class WindowsRuntimeNativeManifestWriter {
         builder.AppendLine("const char* he_get_runtime_startup_scene_relative_path();");
         builder.AppendLine("const char* he_get_runtime_platform_name();");
         builder.AppendLine("const char* he_get_runtime_platform_version();");
+        builder.AppendLine("double he_get_runtime_scene_loading_budget_milliseconds();");
+        builder.AppendLine("const char* he_get_runtime_loading_screen_scene_id();");
         return builder.ToString();
     }
 
@@ -150,6 +152,17 @@ public sealed class WindowsRuntimeNativeManifestWriter {
         if (manifest == null) {
             throw new ArgumentNullException(nameof(manifest));
         }
+        if (double.IsNaN(manifest.SceneLoadingBudgetMilliseconds) || double.IsInfinity(manifest.SceneLoadingBudgetMilliseconds)
+            || manifest.SceneLoadingBudgetMilliseconds <= 0d) {
+            throw new InvalidOperationException("Scene loading budget must be finite and greater than zero.");
+        }
+        if (!string.IsNullOrEmpty(manifest.LoadingScreenSceneId)) {
+            int matches = 0;
+            foreach (PlatformBuildScene scene in manifest.Scenes) {
+                if (string.Equals(scene.SceneId, manifest.LoadingScreenSceneId, StringComparison.Ordinal)) { matches++; }
+            }
+            if (matches != 1) { throw new InvalidOperationException("Loading-screen scene must identify exactly one packaged runtime scene."); }
+        }
 
         StringBuilder builder = new();
         builder.AppendLine("#include \"runtime/runtime_startup_manifest.hpp\"");
@@ -157,6 +170,8 @@ public sealed class WindowsRuntimeNativeManifestWriter {
         builder.AppendLine("static const char kRuntimeStartupSceneRelativePath[] = \"" + EscapeCppStringLiteral(startupSceneRelativePath) + "\";");
         builder.AppendLine("static const char kRuntimePlatformName[] = \"" + EscapeCppStringLiteral(manifest.PlatformName) + "\";");
         builder.AppendLine("static const char kRuntimePlatformVersion[] = \"" + EscapeCppStringLiteral(manifest.PlatformVersion) + "\";");
+        builder.AppendLine("static const double kRuntimeSceneLoadingBudgetMilliseconds = " + manifest.SceneLoadingBudgetMilliseconds.ToString("R", CultureInfo.InvariantCulture) + ";");
+        builder.AppendLine("static const char kRuntimeLoadingScreenSceneId[] = \"" + EscapeCppStringLiteral(manifest.LoadingScreenSceneId) + "\";");
         builder.AppendLine();
         builder.AppendLine("const char* he_get_runtime_startup_scene_relative_path() {");
         builder.AppendLine("    return kRuntimeStartupSceneRelativePath;");
@@ -168,6 +183,12 @@ public sealed class WindowsRuntimeNativeManifestWriter {
         builder.AppendLine();
         builder.AppendLine("const char* he_get_runtime_platform_version() {");
         builder.AppendLine("    return kRuntimePlatformVersion;");
+        builder.AppendLine("}");
+        builder.AppendLine("double he_get_runtime_scene_loading_budget_milliseconds() {");
+        builder.AppendLine("    return kRuntimeSceneLoadingBudgetMilliseconds;");
+        builder.AppendLine("}");
+        builder.AppendLine("const char* he_get_runtime_loading_screen_scene_id() {");
+        builder.AppendLine("    return kRuntimeLoadingScreenSceneId;");
         builder.AppendLine("}");
         return builder.ToString();
     }

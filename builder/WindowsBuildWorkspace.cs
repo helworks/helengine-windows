@@ -543,11 +543,37 @@ public static class WindowsBuildWorkspace {
     }
 
     /// <summary>
-    /// Resolves the Windows repository root from the builder assembly location.
+    /// Resolves the explicit Windows source repository used by isolated builders, retaining the installed assembly layout when no override is configured.
     /// </summary>
     /// <returns>The Windows repository root path.</returns>
     static string ResolveRepositoryRoot() {
-        string assemblyLocation = typeof(WindowsBuildWorkspace).Assembly.Location;
+        return ResolveRepositoryRoot(
+            Environment.GetEnvironmentVariable("HELENGINE_WINDOWS_REPOSITORY_ROOT") ?? string.Empty,
+            typeof(WindowsBuildWorkspace).Assembly.Location);
+    }
+
+    /// <summary>
+    /// Validates an explicit Windows repository before native configuration, or derives the existing installed root from the builder assembly path.
+    /// </summary>
+    /// <param name="configuredRoot">Optional absolute source checkout selected by the native build environment.</param>
+    /// <param name="assemblyLocation">Builder assembly path used only when the explicit repository is absent.</param>
+    /// <returns>The normalized repository root for the native CMake source directory.</returns>
+    internal static string ResolveRepositoryRoot(string configuredRoot, string assemblyLocation) {
+        if (!string.IsNullOrWhiteSpace(configuredRoot)) {
+            string selectedRoot = configuredRoot.Trim();
+            if (!Path.IsPathFullyQualified(selectedRoot)) {
+                throw new InvalidOperationException("HELENGINE_WINDOWS_REPOSITORY_ROOT must name an absolute Windows repository directory.");
+            }
+
+            string repositoryRoot = Path.GetFullPath(selectedRoot);
+            if (!Directory.Exists(repositoryRoot)
+                || !File.Exists(Path.Combine(repositoryRoot, "CMakeLists.txt"))
+                || !File.Exists(Path.Combine(repositoryRoot, "src", "platform", "windows", "win32", "win32_application.cpp"))) {
+                throw new InvalidOperationException($"HELENGINE_WINDOWS_REPOSITORY_ROOT '{repositoryRoot}' is not a Windows source repository with CMakeLists.txt and the native application source.");
+            }
+            return repositoryRoot;
+        }
+
         if (string.IsNullOrWhiteSpace(assemblyLocation)) {
             throw new InvalidOperationException("Unable to resolve the Windows builder assembly location.");
         }
