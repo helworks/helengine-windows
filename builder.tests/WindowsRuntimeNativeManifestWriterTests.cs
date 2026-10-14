@@ -79,6 +79,8 @@ public sealed class WindowsRuntimeNativeManifestWriterTests : IDisposable {
         Assert.True(File.Exists(sceneCatalogSourcePath));
 
         string sceneCatalogSource = File.ReadAllText(sceneCatalogSourcePath);
+        Assert.Contains("PlatformSettingsConfiguration* he_create_runtime_platform_settings();", File.ReadAllText(Path.Combine(runtimeRootPath, "runtime_startup_manifest.hpp")));
+        Assert.Contains("PlatformSettingsSerializer::ReadBytes(&bytes)", File.ReadAllText(Path.Combine(runtimeRootPath, "runtime_startup_manifest.cpp")));
         Assert.Contains("he_runtime_scene_catalog_entries", sceneCatalogSource, StringComparison.Ordinal);
         Assert.Contains("scenes/DemoDiscMainMenu.helen", sceneCatalogSource, StringComparison.Ordinal);
         Assert.Contains("cooked/scenes/rendering/cube_test.hasset", sceneCatalogSource, StringComparison.Ordinal);

@@ -29,6 +29,7 @@ class PlatformInfo;
 class RenderManager2D;
 class RenderManager3D;
 class RuntimeSceneCatalog;
+class PlatformSettingsConfiguration;
 class SceneAsset;
 class float4;
 
@@ -49,6 +50,10 @@ namespace helengine::windows {
 
     /// Owns Windows host startup and the main message/render loop for the native player.
     class Win32Application {
+#if __has_include("Core.hpp")
+        /// Retains the user-authored catalog until the borrowing core is disposed.
+        std::unique_ptr<::PlatformSettingsConfiguration> RuntimeSettings;
+#endif
     public:
         /// Creates the application runner with no initialized native resources.
         Win32Application();

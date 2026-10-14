@@ -70,6 +70,7 @@
 #include "PlatformInfo.hpp"
 #include "RenderManager2D.hpp"
 #include "RenderManager3D.hpp"
+#include "PlatformSettingsConfiguration.hpp"
 #include "RuntimeSceneLoadService.hpp"
 #include "SceneAsset.hpp"
 #include "SceneManager.hpp"
@@ -562,6 +563,7 @@ namespace helengine::windows {
         delete EngineAudioBackend;
         delete EngineInputBackend;
         delete EngineRenderManager3D;
+        if (RuntimeSettings) RuntimeSettings->Dispose();
         delete EngineRenderManager2D;
 #endif
         // The tracker is destroyed before MainWindow (reverse declaration order), and the window's destructor still
@@ -802,9 +804,12 @@ namespace helengine::windows {
         options->set_RuntimeDiagnosticsProvider(RuntimeDiagnosticsProvider.get());
 #endif
         EngineCore = new Core(options);
+        RuntimeSettings.reset(he_create_runtime_platform_settings());
+        options->set_PlatformSettingsConfiguration(RuntimeSettings.get());
 
         EngineRenderManager2D = new Win32RenderManager2D(*Bootstrap);
         EngineRenderManager3D = new Win32RenderManager3D(*Bootstrap, *EngineRenderManager2D);
+        EngineRenderManager3D->set_ShadowsEnabled(he_get_runtime_shadows_enabled());
         Win32RenderAlphaMode renderAlphaMode = WindowModeSettings->GetWindowMode() == Win32WindowMode::Overlay ? Win32RenderAlphaMode::Premultiplied : Win32RenderAlphaMode::Straight;
         EngineRenderManager2D->ConfigureAlphaMode(renderAlphaMode);
         EngineRenderManager3D->ConfigureAlphaMode(renderAlphaMode, WindowModeSettings->GetOverlayBackground());

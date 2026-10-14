@@ -2358,7 +2358,8 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
         Win32ForwardLightConstants constants {};
         DirectX::XMFLOAT3 ambientLightColor(0.0f, 0.0f, 0.0f);
         int32_t packedLightCount = 0;
-        for (std::size_t lightIndex = 0; lightIndex < lights.size() && packedLightCount < 4; lightIndex++) {
+        const int32_t lightBudget = std::clamp(get_MaximumVisibleLights(), 0, 4);
+        for (std::size_t lightIndex = 0; lightIndex < lights.size() && packedLightCount < lightBudget; lightIndex++) {
             LightComponent* light = lights[lightIndex];
             if (light == nullptr || light->get_Parent() == nullptr) {
                 continue;
@@ -2507,7 +2508,10 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
     }
 
     /// Finds the first visible shadow-enabled directional light affecting the current camera.
-    DirectionalLightComponent* Win32RenderManager3D::FindPrimaryDirectionalShadowLight(const std::vector<LightComponent*>& lights) const {
+    DirectionalLightComponent* Win32RenderManager3D::FindPrimaryDirectionalShadowLight(const std::vector<LightComponent*>& lights) {
+        if (!get_ShadowsEnabled() || get_MaximumVisibleLights() == 0) {
+            return nullptr;
+        }
         for (std::size_t lightIndex = 0; lightIndex < lights.size(); lightIndex++) {
             DirectionalLightComponent* light = dynamic_cast<DirectionalLightComponent*>(lights[lightIndex]);
             if (light == nullptr || light->get_Parent() == nullptr) {

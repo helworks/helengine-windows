@@ -117,6 +117,8 @@ public sealed class WindowsRuntimeNativeManifestWriter {
         builder.AppendLine("const char* he_get_runtime_startup_scene_relative_path();");
         builder.AppendLine("const char* he_get_runtime_platform_name();");
         builder.AppendLine("const char* he_get_runtime_platform_version();");
+        builder.AppendLine("bool he_get_runtime_shadows_enabled();");
+        builder.Append(PlatformSettingsNativeSourceWriter.BuildDeclarations());
         builder.AppendLine("double he_get_runtime_scene_loading_budget_milliseconds();");
         builder.AppendLine("const char* he_get_runtime_loading_screen_scene_id();");
         return builder.ToString();
@@ -166,10 +168,15 @@ public sealed class WindowsRuntimeNativeManifestWriter {
 
         StringBuilder builder = new();
         builder.AppendLine("#include \"runtime/runtime_startup_manifest.hpp\"");
+        builder.AppendLine("#include \"PlatformSettingsSerializer.hpp\"");
+        builder.AppendLine("#include <cstdint>");
         builder.AppendLine();
         builder.AppendLine("static const char kRuntimeStartupSceneRelativePath[] = \"" + EscapeCppStringLiteral(startupSceneRelativePath) + "\";");
         builder.AppendLine("static const char kRuntimePlatformName[] = \"" + EscapeCppStringLiteral(manifest.PlatformName) + "\";");
         builder.AppendLine("static const char kRuntimePlatformVersion[] = \"" + EscapeCppStringLiteral(manifest.PlatformVersion) + "\";");
+        builder.AppendLine("static const bool kRuntimeShadowsEnabled = " + (manifest.ShadowsEnabled ? "true" : "false") + ";");
+        builder.AppendLine("bool he_get_runtime_shadows_enabled() { return kRuntimeShadowsEnabled; }");
+        builder.Append(PlatformSettingsNativeSourceWriter.BuildFactory(manifest.PlatformSettingsConfiguration, manifest.PlatformName));
         builder.AppendLine("static const double kRuntimeSceneLoadingBudgetMilliseconds = " + manifest.SceneLoadingBudgetMilliseconds.ToString("R", CultureInfo.InvariantCulture) + ";");
         builder.AppendLine("static const char kRuntimeLoadingScreenSceneId[] = \"" + EscapeCppStringLiteral(manifest.LoadingScreenSceneId) + "\";");
         builder.AppendLine();

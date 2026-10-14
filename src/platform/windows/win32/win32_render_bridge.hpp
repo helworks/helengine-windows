@@ -232,7 +232,7 @@ namespace helengine::windows {
         void PrepareShadowState(ICamera* camera, const std::vector<LightComponent*>& lights);
 
         /// Finds the first visible shadow-enabled directional light affecting the current camera.
-        DirectionalLightComponent* FindPrimaryDirectionalShadowLight(const std::vector<LightComponent*>& lights) const;
+        DirectionalLightComponent* FindPrimaryDirectionalShadowLight(const std::vector<LightComponent*>& lights);
 
         /// Renders the current scene depth from the active directional light into the shared shadow map.
         void RenderDirectionalShadowMap(ICamera* camera, DirectionalLightComponent* light);
