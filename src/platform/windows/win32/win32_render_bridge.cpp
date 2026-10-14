@@ -4318,6 +4318,41 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
         return runtimeTexture;
     }
 
+    /// Borrows the application's device without creating a second device or adapter relationship.
+    ID3D11Device* Win32RenderManager2D::GetGraphicsDevice() const { return Bootstrap.GetDevice(); }
+
+    /// Borrows the application's immediate context for scoped native composition.
+    ID3D11DeviceContext* Win32RenderManager2D::GetGraphicsContext() const { return Bootstrap.GetDeviceContext(); }
+
+    /// Imports one native producer's texture into the ordinary renderer ownership and diagnostics contracts.
+    RuntimeTexture* Win32RenderManager2D::ImportGpuTexture(ID3D11Texture2D* texture) {
+        if (texture == nullptr) { throw std::invalid_argument("A GPU texture is required."); }
+        Microsoft::WRL::ComPtr<ID3D11Device> device;
+        texture->GetDevice(&device);
+        D3D11_TEXTURE2D_DESC description {};
+        texture->GetDesc(&description);
+        if (device.Get() != Bootstrap.GetDevice() || description.Format != DXGI_FORMAT_R8G8B8A8_UNORM
+            || (description.BindFlags & D3D11_BIND_SHADER_RESOURCE) == 0 || description.ArraySize != 1
+            || description.MipLevels != 1 || description.SampleDesc.Count != 1
+            || description.Width == 0 || description.Height == 0 || description.Width > 65535 || description.Height > 65535) {
+            throw std::invalid_argument("GPU imports require a same-device, single-sample RGBA8 shader-readable texture.");
+        }
+        auto resource = std::make_unique<Win32TextureResource>();
+        resource->Texture = texture;
+        resource->Width = description.Width; resource->Height = description.Height;
+        resource->OwnerCount = resource->EngineOwnedOwnerCount = 1;
+        ThrowIfFailed(Bootstrap.GetDevice()->CreateShaderResourceView(texture, nullptr, &resource->ShaderResourceView),
+            "Cannot create the imported GPU texture's shader resource view.");
+        std::string id = BuildGeneratedTextureResourceId();
+        auto owner = std::make_unique<RuntimeTexture>();
+        owner->set_Id(id); owner->set_Width(description.Width); owner->set_Height(description.Height); owner->set_IsEngineOwned(true);
+        TextureResources.emplace(id, std::move(resource));
+        RuntimeTextureResourceOwners.emplace(owner.get(), TextureResources.at(id).get());
+        EngineOwnedTextureResourceIds.insert(id);
+        RuntimeRenderDiagnostics::RecordAssetBuild("texture", id, "same-device GPU import", TextureResources.size());
+        return owner.release();
+    }
+
     /// Releases one runtime texture previously created by the Windows renderer.
     void Win32RenderManager2D::ReleaseTexture(RuntimeTexture* texture) {
         if (texture == nullptr) {

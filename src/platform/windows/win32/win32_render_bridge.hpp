@@ -445,6 +445,15 @@ namespace helengine::windows {
         /// Builds a placeholder runtime texture from raw asset metadata.
         RuntimeTexture* BuildTextureFromRaw(TextureAsset* data) override;
 
+        /// Borrows the shared graphics device for native offscreen producers on the render thread.
+        ID3D11Device* GetGraphicsDevice() const;
+
+        /// Borrows the render-thread immediate context; producers must restore its pipeline state before returning.
+        ID3D11DeviceContext* GetGraphicsContext() const;
+
+        /// Registers a same-device RGBA8 shader resource without a CPU upload. ReleaseTexture releases the returned owner.
+        RuntimeTexture* ImportGpuTexture(ID3D11Texture2D* texture);
+
         /// Returns whether runtime font atlases support RGB coverage with grayscale fallback.
         bool get_SupportsRgbFontCoverage() override;
 
