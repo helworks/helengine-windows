@@ -3005,11 +3005,11 @@ namespace helengine::windows {
         }
     }
 
-    /// Checks all views so a minimized primary window does not suspend visible secondary views.
+    /// Checks visible views so hidden outputs suspend rendering while visible secondary views remain active.
     bool Win32Application::HasRenderableWindow() const {
-        if (MainWindow->GetClientWidth() > 0 && MainWindow->GetClientHeight() > 0) { return true; }
+        if (IsWindowVisible(MainWindow->GetHandle()) && MainWindow->GetClientWidth() > 0 && MainWindow->GetClientHeight() > 0) { return true; }
         for (const auto& view : SecondaryWindows) {
-            if (view->GetWindow().GetHandle() != nullptr && view->GetWindow().GetClientWidth() > 0
+            if (IsWindowVisible(view->GetWindow().GetHandle()) && view->GetWindow().GetClientWidth() > 0
                 && view->GetWindow().GetClientHeight() > 0) { return true; }
         }
         return false;
@@ -3060,14 +3060,20 @@ namespace helengine::windows {
         PollSceneTransitionDiagnostics();
         bool finalFrame = CommandLineOptions.HasFrameLimit() && RenderedFrameCount + 1 == CommandLineOptions.GetFrameLimit();
         bool coreDrawCompleted = false;
-        bool pacedPresentation = false;
+        // The last visible secondary output owns VSync so a passive overlay follows its monitor's refresh rate.
+        // Hidden outputs keep observing scene updates but consume no draw, hit-test or presentation work.
+        Win32SecondaryWindow* pacingView = nullptr;
+        for (const auto& view : SecondaryWindows) {
+            if (IsWindowVisible(view->GetWindow().GetHandle()) && view->GetWindow().GetClientWidth() > 0
+                && view->GetWindow().GetClientHeight() > 0) { pacingView = view.get(); }
+        }
         int primaryWidth = MainWindow->GetClientWidth();
         int primaryHeight = MainWindow->GetClientHeight();
         int2 primarySize = EngineRenderManager3D->GetWindowSize(reinterpret_cast<intptr_t>(MainWindow->GetHandle()));
         if (primarySize.X != primaryWidth || primarySize.Y != primaryHeight) {
             EngineRenderManager3D->OnWindowResize(reinterpret_cast<intptr_t>(MainWindow->GetHandle()), primaryWidth, primaryHeight);
         }
-        if (primaryWidth > 0 && primaryHeight > 0) {
+        if (primaryWidth > 0 && primaryHeight > 0 && IsWindowVisible(MainWindow->GetHandle())) {
             if (Bootstrap->GetWidth() != primaryWidth || Bootstrap->GetHeight() != primaryHeight) {
                 Bootstrap->Resize(primaryWidth, primaryHeight);
             }
@@ -3077,9 +3083,8 @@ namespace helengine::windows {
             coreDrawCompleted = true;
             if (BackBufferCapture && finalFrame) { BackBufferCapture->CaptureToBmp(CommandLineOptions.GetCapturePath()); }
             if (OverlayHitTestController) { OverlayHitTestController->SampleFrame(); }
-            HRESULT result = Presenter->RenderFrame();
+            HRESULT result = pacingView == nullptr ? Presenter->RenderFrame() : Presenter->RenderFrameWithoutWait();
             if (FAILED(result)) { throw std::runtime_error(DirectX11HostFingerprint::DescribePresentFailure(result)); }
-            pacedPresentation = true;
             if (HostFingerprint) { HostFingerprint->RecordPresent(result); }
             if (CommandLineOptions.HasFrameLimit()) {
                 MultiWindowPrimaryFrames++;
@@ -3090,6 +3095,7 @@ namespace helengine::windows {
         }
         for (const auto& view : SecondaryWindows) {
             Win32Window& window = view->GetWindow();
+            if (!IsWindowVisible(window.GetHandle())) { continue; }
             int width = window.GetClientWidth();
             int height = window.GetClientHeight();
             intptr_t handle = reinterpret_cast<intptr_t>(view->GetRegisteredHandle());
@@ -3107,8 +3113,7 @@ namespace helengine::windows {
                 ? Win32RenderAlphaMode::Premultiplied : Win32RenderAlphaMode::Straight, Win32OverlayBackground::Transparent);
             if (!coreDrawCompleted) { EngineCore->Draw(); coreDrawCompleted = true; }
             else { EngineRenderManager3D->Draw(); }
-            view->CompleteFrame(!pacedPresentation, CurrentFrameIsIdle, finalFrame);
-            pacedPresentation = true;
+            view->CompleteFrame(view.get() == pacingView, CurrentFrameIsIdle, finalFrame);
         }
         EngineRenderManager3D->SelectOutputWindow(reinterpret_cast<intptr_t>(MainWindow->GetHandle()), *Bootstrap, WindowModeSettings->GetWindowMode() == Win32WindowMode::Overlay
             ? Win32RenderAlphaMode::Premultiplied : Win32RenderAlphaMode::Straight, WindowModeSettings->GetOverlayBackground());

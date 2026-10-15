@@ -87,6 +87,8 @@ namespace helengine::windows {
                     "Raised wallpaper was not placed between icons and WorkerW.");
             }
             DirectX11Bootstrap first(child, 640, 360, false, true);
+            Require((first.GetDevice()->GetCreationFlags() & D3D11_CREATE_DEVICE_BGRA_SUPPORT) != 0,
+                "The shared graphics device must support BGRA producer interoperability.");
             DXGI_SWAP_CHAIN_DESC1 description {};
             Require(SUCCEEDED(first.GetSwapChain()->GetDesc1(&description)), "Unable to read desktop swap-chain settings.");
             Require(description.SwapEffect == DXGI_SWAP_EFFECT_DISCARD && description.BufferCount == 1
