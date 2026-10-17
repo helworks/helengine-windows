@@ -20,7 +20,7 @@ namespace helengine::windows {
         Win32CommandLineOptions();
 
         /// Parses the given argument vector, skipping arguments[0] (the executable path). When no argument is a known
-        /// flag (--scene, --frames, --fixed-delta, --capture, --idle-throttle, --idle-after-ms, --idle-fps,
+        /// flag (--scene, --frames, --fixed-delta, --capture, --capture-every, --idle-throttle, --idle-after-ms, --idle-fps,
         /// --window-mode, --overlay-bounds, --overlay-background, --hit-test-probe, --dpi-awareness), nothing is
         /// validated: the arguments are only kept as ignored text (see GetIgnoredArguments) so launches that pass
         /// unrelated arguments, such as a file path split by CommandLineToArgvW, keep working exactly as before. Once
@@ -54,6 +54,12 @@ namespace helengine::windows {
 
         /// Gets the capture file path requested through --capture; only meaningful when HasCapturePath() is true.
         const std::wstring& GetCapturePath() const;
+
+        /// Selects the final frame, or regularly spaced frames when --capture-every is supplied (zero-based index).
+        bool ShouldCaptureFrame(int frameIndex) const;
+
+        /// Returns the original final-frame path or a numbered sibling path for periodic captures.
+        std::wstring GetCapturePathForFrame(int frameIndex) const;
 
         /// Gets whether --idle-throttle was supplied to opt into throttling the frame rate while the player is idle.
         bool HasIdleThrottle() const;
@@ -125,7 +131,7 @@ namespace helengine::windows {
         /// Stores validated secondary views; an empty list keeps the original single-window path.
         std::vector<Win32AdditionalWindowSettings> AdditionalWindows;
 
-        /// Returns whether the argument is one of the regression flags (--scene, --frames, --fixed-delta, --capture,
+        /// Returns whether the argument is one of the regression flags (--scene, --frames, --fixed-delta, --capture, --capture-every,
         /// --idle-throttle, --idle-after-ms, --idle-fps, --window-mode, --overlay-bounds, --overlay-background,
         /// --hit-test-probe, --dpi-awareness).
         static bool IsKnownFlag(const std::wstring& argument);
@@ -196,6 +202,9 @@ namespace helengine::windows {
 
         /// Stores the capture file path supplied through --capture.
         std::wstring CapturePath;
+
+        /// Stores the periodic capture interval; zero preserves the original final-frame capture behavior.
+        int CaptureEveryFrames;
 
         /// Stores whether --idle-throttle was supplied.
         bool IdleThrottleSupplied;

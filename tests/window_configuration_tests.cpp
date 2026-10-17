@@ -3,6 +3,7 @@
 #include <string>
 #include "platform/windows/win32/win32_additional_window_settings.hpp"
 #include "platform/windows/win32/win32_command_line_options.hpp"
+#include "platform/windows/win32/win32_input_replay.hpp"
 
 namespace helengine::windows {
     /// Exercises actual native configuration parsing without opening windows or graphics devices.
@@ -10,6 +11,8 @@ namespace helengine::windows {
     public:
         /// Runs positive, malformed, duplicate and range-validation cases against the production parsers.
         static void Run() {
+            TestInputReplay();
+            TestPeriodicCapture();
             Win32AdditionalWindowSettings normal = Win32AdditionalWindowSettings::Parse("preview,normal,-640,25,640,360");
             if (normal.GetTag() != "preview" || normal.GetMode() != Win32WindowMode::Normal || normal.GetLeft() != -640
                 || normal.GetTop() != 25 || normal.GetWidth() != 640 || normal.GetHeight() != 360) {
@@ -68,6 +71,58 @@ namespace helengine::windows {
             }
         }
     private:
+        /// Checks exact press/hold/release timing and rejects malformed or ambiguous capture recordings.
+        static void TestInputReplay() {
+            Win32InputReplay replay;
+            if (replay.IsEnabled()) { throw std::runtime_error("Replay unexpectedly owns the default keyboard."); }
+            std::istringstream input("# frame then held Win32 key codes\n0\n2 68\n4 65 32\n5\n");
+            replay.Load(input);
+            if (!replay.IsEnabled() || !replay.NextKeys().empty() || !replay.NextKeys().empty()
+                || replay.NextKeys() != std::vector<int>{68} || replay.NextKeys() != std::vector<int>{68}
+                || replay.NextKeys() != std::vector<int>({65,32}) || !replay.NextKeys().empty() || !replay.NextKeys().empty()) {
+                throw std::runtime_error("Recorded keyboard snapshots were not applied to the exact requested frames.");
+            }
+            const char* invalid[] = { "", "-1 65", "0 256", "0 0", "0 65 65", "2 65\n1", "0\n0 65", "0 nope", "1000001 65" };
+            for (const char* text : invalid) {
+                Win32InputReplay bad;
+                std::istringstream stream(text);
+                bool rejected = false;
+                try { bad.Load(stream); } catch (const std::invalid_argument&) { rejected = true; }
+                if (!rejected) { throw std::runtime_error("Malformed input recording was accepted."); }
+            }
+        }
+
+        /// Checks numbered capture cadence, original final-frame compatibility, and invalid interval rejection.
+        static void TestPeriodicCapture() {
+            wchar_t executable[] = L"player.exe";
+            wchar_t frames[] = L"--frames";
+            wchar_t count[] = L"13";
+            wchar_t capture[] = L"--capture";
+            wchar_t path[] = L"gameplay.bmp";
+            wchar_t every[] = L"--capture-every";
+            wchar_t interval[] = L"6";
+            wchar_t* arguments[] = { executable, frames, count, capture, path, every, interval };
+            Win32CommandLineOptions periodic = Win32CommandLineOptions::Parse(7, arguments);
+            if (!periodic.ShouldCaptureFrame(0) || periodic.ShouldCaptureFrame(1) || !periodic.ShouldCaptureFrame(6)
+                || !periodic.ShouldCaptureFrame(12) || periodic.ShouldCaptureFrame(13)
+                || periodic.GetCapturePathForFrame(12) != L"gameplay-000002.bmp") {
+                throw std::runtime_error("Periodic capture cadence or numbering was incorrect.");
+            }
+            Win32CommandLineOptions single = Win32CommandLineOptions::Parse(5, arguments);
+            if (single.ShouldCaptureFrame(0) || !single.ShouldCaptureFrame(12) || single.GetCapturePathForFrame(12) != path) {
+                throw std::runtime_error("Single final-frame capture behavior changed.");
+            }
+            wchar_t* missing[] = { executable, every, interval };
+            bool rejected = false;
+            try { Win32CommandLineOptions::Parse(3, missing); } catch (const std::invalid_argument&) { rejected = true; }
+            if (!rejected) { throw std::runtime_error("A periodic capture without a destination was accepted."); }
+            wchar_t zero[] = L"0";
+            arguments[6] = zero;
+            rejected = false;
+            try { Win32CommandLineOptions::Parse(7, arguments); } catch (const std::invalid_argument&) { rejected = true; }
+            if (!rejected) { throw std::runtime_error("A zero capture interval was accepted."); }
+        }
+
         /// Requires invalid secondary configurations to fail before any native window is created.
         static void ExpectInvalid(const std::string& value) {
             bool rejected = false;

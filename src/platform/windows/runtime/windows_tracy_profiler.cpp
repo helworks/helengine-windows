@@ -1,4 +1,31 @@
 #include "platform/windows/runtime/windows_tracy_profiler.hpp"
+#include "platform/windows/runtime/windows_cpu_profile_sink.hpp"
+
+#if defined(TRACY_ENABLE) && __has_include("IRuntimeCpuProfileSink.hpp")
+#include "Core.hpp"
+#include "ObjectManager.hpp"
+namespace helengine::windows {
+    /// Provides static storage for stable Tracy plot-name pointers until process termination.
+    WindowsCpuProfileSink WindowsCpuProfileSinkInstance;
+
+    /// Supplies the existing shared Core hook without changing the Core ABI or generated sources.
+    ::IRuntimeCpuProfileSink* GetWindowsCpuProfileSink() {
+        return &WindowsCpuProfileSinkInstance;
+    }
+
+    /// Emits collected frame data after all timed Core work has completed.
+    void FlushWindowsCpuProfileSink(::Core* core) {
+        HELENGINE_TRACY_ZONE_N("Profiler.EmitComponentSamples");
+        WindowsCpuProfileSinkInstance.FlushFrame();
+        auto* objects = core->get_ObjectManager();
+        TracyPlot("Core.Entities.Registered", static_cast<std::int64_t>(objects->get_Entities()->get_Count()));
+        TracyPlot("Core.Updateables.Registered", static_cast<std::int64_t>(objects->get_Updateables()->get_Count()));
+        TracyPlot("Render.Drawables2D.Registered", static_cast<std::int64_t>(objects->get_Drawables2D()->get_Count()));
+        TracyPlot("Render.Drawables3D.Registered", static_cast<std::int64_t>(objects->get_Drawables3D()->get_Count()));
+        TracyPlot("Render.Cameras.Registered", static_cast<std::int64_t>(objects->get_Cameras()->get_Count()));
+    }
+}
+#endif
 
 #if defined(TRACY_ENABLE)
 namespace helengine::windows {

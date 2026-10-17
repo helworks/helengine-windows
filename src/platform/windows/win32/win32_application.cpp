@@ -788,6 +788,9 @@ namespace helengine::windows {
     void Win32Application::InitializeEngineCore() {
 #if __has_include("Core.hpp")
         CoreInitializationOptions* options = new CoreInitializationOptions();
+#if defined(TRACY_ENABLE) && __has_include("IRuntimeCpuProfileSink.hpp")
+        options->CpuProfileSink = GetWindowsCpuProfileSink();
+#endif
         options->ContentStreamSource = new HostFileSystemContentStreamSource(ResolveApplicationDirectoryPath().string());
         options->UpdateOrderLayers = 4;
         options->RenderOrderLayers3D = 4;
@@ -1948,6 +1951,9 @@ namespace helengine::windows {
                     EngineCore->Draw();
                 }
                 EmitWindowsTracyProfilerPlots();
+#if defined(TRACY_ENABLE) && __has_include("IRuntimeCpuProfileSink.hpp")
+                FlushWindowsCpuProfileSink(EngineCore);
+#endif
                 if (shouldTraceFirstFrame) {
                     WriteLifecycleLog("First frame completed EngineCore->Draw().");
                     WriteSceneDiagnosticsCheckpoint("first_frame_after_draw");
@@ -1955,10 +1961,10 @@ namespace helengine::windows {
 #endif
             }
 
-            if (BackBufferCapture && CommandLineOptions.HasFrameLimit() && RenderedFrameCount + 1 == CommandLineOptions.GetFrameLimit()) {
+            if (BackBufferCapture && CommandLineOptions.ShouldCaptureFrame(RenderedFrameCount)) {
                 frameStage = "capture";
                 try {
-                    BackBufferCapture->CaptureToBmp(CommandLineOptions.GetCapturePath());
+                    BackBufferCapture->CaptureToBmp(CommandLineOptions.GetCapturePathForFrame(RenderedFrameCount));
                 } catch (const std::exception& error) {
                     throw Win32ExitRequest(3, std::string("Back-buffer capture failed: ") + error.what());
                 }
@@ -3081,7 +3087,9 @@ namespace helengine::windows {
                 ? Win32RenderAlphaMode::Premultiplied : Win32RenderAlphaMode::Straight, WindowModeSettings->GetOverlayBackground());
             EngineCore->Draw();
             coreDrawCompleted = true;
-            if (BackBufferCapture && finalFrame) { BackBufferCapture->CaptureToBmp(CommandLineOptions.GetCapturePath()); }
+            if (BackBufferCapture && CommandLineOptions.ShouldCaptureFrame(RenderedFrameCount)) {
+                BackBufferCapture->CaptureToBmp(CommandLineOptions.GetCapturePathForFrame(RenderedFrameCount));
+            }
             if (OverlayHitTestController) { OverlayHitTestController->SampleFrame(); }
             HRESULT result = pacingView == nullptr ? Presenter->RenderFrame() : Presenter->RenderFrameWithoutWait();
             if (FAILED(result)) { throw std::runtime_error(DirectX11HostFingerprint::DescribePresentFailure(result)); }

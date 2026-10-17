@@ -2,6 +2,17 @@
 
 #include <d3d11.h>
 
+#if defined(TRACY_ENABLE) && __has_include("IRuntimeCpuProfileSink.hpp")
+class IRuntimeCpuProfileSink;
+class Core;
+namespace helengine::windows {
+    /// Returns the process-owned adapter for the shared Core component/entity CPU probes.
+    ::IRuntimeCpuProfileSink* GetWindowsCpuProfileSink();
+    /// Publishes component, entity and Core-stage durations outside the measured update/draw calls.
+    void FlushWindowsCpuProfileSink(::Core* core);
+}
+#endif
+
 namespace helengine::windows {
     /// Initializes the profiler-owned Direct3D 11 timestamp context for the active Windows device.
     /// <param name="device">Direct3D device that owns timestamp-query allocation.</param>

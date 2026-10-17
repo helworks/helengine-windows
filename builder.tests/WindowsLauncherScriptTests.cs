@@ -9,7 +9,7 @@ public sealed class WindowsLauncherScriptTests {
     /// </summary>
     [Fact]
     public void Launcher_RequiresArtifactPath_AndLaunchesWindowsExecutable() {
-        string repositoryRootPath = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", ".."));
+        string repositoryRootPath = WindowsTestRepository.ResolveRootPath();
         string scriptPath = Path.Combine(repositoryRootPath, "scripts", "launch_in_emulator.ps1");
 
         Assert.True(File.Exists(scriptPath), "Expected scripts/launch_in_emulator.ps1 to exist.");
@@ -31,7 +31,7 @@ public sealed class WindowsLauncherScriptTests {
     /// </summary>
     [Fact]
     public void Launcher_KillsTimedOutProcess_AndReportsTimeout() {
-        string repositoryRootPath = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", ".."));
+        string repositoryRootPath = WindowsTestRepository.ResolveRootPath();
         string scriptSource = File.ReadAllText(Path.Combine(repositoryRootPath, "scripts", "launch_in_emulator.ps1"));
 
         Assert.Contains("[int]$TimeoutSeconds = 0", scriptSource, StringComparison.Ordinal);
@@ -46,7 +46,7 @@ public sealed class WindowsLauncherScriptTests {
     /// </summary>
     [Fact]
     public void Readme_DocumentsCanonicalLauncherWorkflow() {
-        string repositoryRootPath = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", ".."));
+        string repositoryRootPath = WindowsTestRepository.ResolveRootPath();
         string readmeSource = File.ReadAllText(Path.Combine(repositoryRootPath, "README.md"));
 
         Assert.Contains("launch_in_emulator.ps1", readmeSource, StringComparison.Ordinal);

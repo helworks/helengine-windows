@@ -189,7 +189,7 @@ public sealed class RegressionScriptSourceTests {
     /// </summary>
     [Fact]
     public void RegressionReadme_DocumentsBuildingAgainstAHelengineWorktree() {
-        string repositoryRootPath = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", ".."));
+        string repositoryRootPath = WindowsTestRepository.ResolveRootPath();
         string readmeSource = File.ReadAllText(Path.Combine(repositoryRootPath, "regression", "README.md"));
 
         Assert.Contains("## Building against a helengine worktree", readmeSource, StringComparison.Ordinal);
@@ -206,7 +206,7 @@ public sealed class RegressionScriptSourceTests {
     /// </summary>
     [Fact]
     public void RegressionReadme_DocumentsProjectPinning() {
-        string repositoryRootPath = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", ".."));
+        string repositoryRootPath = WindowsTestRepository.ResolveRootPath();
         string readmeSource = File.ReadAllText(Path.Combine(repositoryRootPath, "regression", "README.md"));
 
         Assert.Contains("## Project pinning", readmeSource, StringComparison.Ordinal);
@@ -417,7 +417,7 @@ public sealed class RegressionScriptSourceTests {
     /// </summary>
     [Fact]
     public void RegressionReadme_DocumentsTheIdleScenario() {
-        string repositoryRootPath = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", ".."));
+        string repositoryRootPath = WindowsTestRepository.ResolveRootPath();
         string readmeSource = File.ReadAllText(Path.Combine(repositoryRootPath, "regression", "README.md"));
 
         Assert.Contains("check-idle", readmeSource, StringComparison.Ordinal);
@@ -784,7 +784,7 @@ public sealed class RegressionScriptSourceTests {
     /// </summary>
     [Fact]
     public void RegressionReadme_DocumentsTheDpiAwareScenario() {
-        string repositoryRootPath = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", ".."));
+        string repositoryRootPath = WindowsTestRepository.ResolveRootPath();
         string readmeSource = File.ReadAllText(Path.Combine(repositoryRootPath, "regression", "README.md"));
 
         Assert.Contains("## Per-monitor DPI scenario", readmeSource, StringComparison.Ordinal);
@@ -826,7 +826,7 @@ public sealed class RegressionScriptSourceTests {
     /// </summary>
     [Fact]
     public void RegressionReadme_DocumentsPerWindowFingerprintsAndTheOverlayIdleScenario() {
-        string repositoryRootPath = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", ".."));
+        string repositoryRootPath = WindowsTestRepository.ResolveRootPath();
         string readmeSource = File.ReadAllText(Path.Combine(repositoryRootPath, "regression", "README.md"));
 
         Assert.Contains("## Overlay + idle scenario", readmeSource, StringComparison.Ordinal);
@@ -851,7 +851,7 @@ public sealed class RegressionScriptSourceTests {
     /// </summary>
     [Fact]
     public void RegressionReadme_DocumentsTheOverlayScenario() {
-        string repositoryRootPath = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", ".."));
+        string repositoryRootPath = WindowsTestRepository.ResolveRootPath();
         string readmeSource = File.ReadAllText(Path.Combine(repositoryRootPath, "regression", "README.md"));
 
         Assert.Contains("## Overlay scenario", readmeSource, StringComparison.Ordinal);
@@ -931,7 +931,7 @@ public sealed class RegressionScriptSourceTests {
     /// </summary>
     [Fact]
     public void RegressionReadme_DocumentsRunningAndReRecording() {
-        string repositoryRootPath = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", ".."));
+        string repositoryRootPath = WindowsTestRepository.ResolveRootPath();
         string readmePath = Path.Combine(repositoryRootPath, "regression", "README.md");
 
         Assert.True(File.Exists(readmePath), "Expected regression/README.md to exist.");
@@ -959,7 +959,7 @@ public sealed class RegressionScriptSourceTests {
     /// </summary>
     /// <returns>The full text of scripts/run-regression.ps1.</returns>
     static string ReadRegressionScriptSource() {
-        string repositoryRootPath = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", ".."));
+        string repositoryRootPath = WindowsTestRepository.ResolveRootPath();
         string scriptPath = Path.Combine(repositoryRootPath, "scripts", "run-regression.ps1");
 
         Assert.True(File.Exists(scriptPath), "Expected scripts/run-regression.ps1 to exist.");

@@ -66,6 +66,7 @@ set(HELENGINE_WINDOWS_SOURCES
     src/platform/windows/runtime/runtime_player_profile_loader.cpp
     src/platform/windows/runtime/runtime_render_diagnostics.cpp
     src/platform/windows/runtime/windows_tracy_profiler.cpp
+    src/platform/windows/runtime/windows_cpu_profile_sink.cpp
     src/platform/windows/win32/bmp_image_writer.cpp
     src/platform/windows/win32/win32_activity_tracker.cpp
     src/platform/windows/win32/win32_application.cpp

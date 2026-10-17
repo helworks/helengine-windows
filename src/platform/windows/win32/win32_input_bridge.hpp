@@ -15,6 +15,7 @@
 #include "int2.hpp"
 
 #include "platform/windows/win32/win32_window.hpp"
+#include "platform/windows/win32/win32_input_replay.hpp"
 
 namespace helengine::windows {
     /// Captures Windows keyboard and mouse state into the generated portable input frame.
@@ -36,6 +37,8 @@ namespace helengine::windows {
         void SelectWindow(Win32Window& window);
 
     private:
+        /// Optional keyboard recording used only when this capture process supplies HELENGINE_INPUT_REPLAY_FILE.
+        Win32InputReplay Replay;
         /// Reads the current keyboard state from Win32 keyboard APIs.
         KeyboardState CaptureKeyboardState();
 

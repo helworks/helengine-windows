@@ -351,7 +351,20 @@ public static class WindowsPlatformDefinitionFactory {
                     PlatformMediaLayoutKind.InstallTree,
                     allowPhysicalDuplication: false,
                     preferLocalityOverDeduplication: false)
-            ]);
+            ],
+            // Windows has no fixed console refresh: the native host presents with vsync, so Play paces to 60 FPS, the rate
+            // of a standard 60 Hz display. A PC offers keyboard, mouse and gamepad; the native Win32 host exposes no pointer
+            // (touch/pen) input, so Pointer is not declared. The player reports the same PlatformInfo the native host reads
+            // from the generated startup manifest, whose name comes from WindowsRuntimePlatformIdentity via the descriptor.
+            playerCapability: new PlatformPlayerCapability(
+                true,
+                typeof(WindowsPlayerAdapter).FullName,
+                WindowsPlayerContentLayout.ContentRootRelativePath,
+                60d,
+                PlayerInputDevices.Keyboard | PlayerInputDevices.Mouse | PlayerInputDevices.Gamepad,
+                WindowsRuntimePlatformIdentity.Name,
+                WindowsRuntimePlatformIdentity.Version,
+                WindowsPlayerSettings.CreateDefinitions()));
     }
 }
 

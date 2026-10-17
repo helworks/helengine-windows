@@ -164,7 +164,7 @@ public sealed class WindowsPlatformAssetBuilder : IPlatformAssetBuilder {
         return new PlatformBuilderDescriptor(
             "helengine.windows.builder",
             "1.0.0",
-            "windows",
+            WindowsRuntimePlatformIdentity.Name,
             new EngineCompatibilityRange("1.0.0", "999.0.0"),
             new ManifestCompatibilityRange(1, 1),
             ["windows"],

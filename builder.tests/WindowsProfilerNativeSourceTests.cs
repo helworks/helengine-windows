@@ -63,12 +63,12 @@ public sealed class WindowsProfilerNativeSourceTests {
     }
 
     /// <summary>
-    /// Resolves the Windows native-player repository root from the current test assembly location.
+    /// Resolves the real Windows checkout from the calling test source, independently of binary output paths.
     /// </summary>
     /// <returns>Absolute repository root path.</returns>
     static string ResolveWindowsRepositoryRootPath() {
         string assemblyDirectoryPath = AppContext.BaseDirectory;
-        string repositoryRootPath = Path.GetFullPath(Path.Combine(assemblyDirectoryPath, "..", "..", "..", ".."));
+        string repositoryRootPath = WindowsTestRepository.ResolveRootPath();
         if (!Directory.Exists(repositoryRootPath)) {
             throw new InvalidOperationException($"Could not resolve the Windows repository root from '{assemblyDirectoryPath}'.");
         }

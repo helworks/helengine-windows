@@ -46,6 +46,7 @@ class RenderCommandListBuilder2D;
 #include "RuntimeTexture.hpp"
 #include "TextureAsset.hpp"
 #include "float4x4.hpp"
+#include "SpriteQuad2D.hpp"
 #endif
 
 namespace helengine::windows {
@@ -519,14 +520,10 @@ namespace helengine::windows {
             bool rgbFontCoverage = false,
             bool allowClearType = true);
 
-        /// Draws one textured quad in window-space pixel coordinates after applying a clockwise 2D rotation around its center.
-        void DrawTexturedQuadTransformed(
+        /// Projects resolved sprite corners while preserving their source-rectangle association.
+        void DrawSpriteQuad(
             ID3D11ShaderResourceView* textureView,
-            float x,
-            float y,
-            float width,
-            float height,
-            float rotationRadians,
+            SpriteQuad2D quad,
             float4 sourceRect,
             byte4 color);
 

@@ -9,6 +9,7 @@
 #include <cstdlib>
 #include <cwctype>
 #include <cstring>
+#include <filesystem>
 #include <stdexcept>
 
 #include "platform/windows/win32/win32_dpi_awareness_names.hpp"
@@ -25,6 +26,7 @@ namespace helengine::windows {
           FixedDeltaSeconds(0.0),
           CapturePathSupplied(false),
           CapturePath(),
+          CaptureEveryFrames(0),
           IdleThrottleSupplied(false),
           IdleThrottleEnabled(false),
           IdleAfterMillisecondsSupplied(false),
@@ -47,7 +49,7 @@ namespace helengine::windows {
     }
 
     /// Parses the given argument vector, skipping arguments[0] (the executable path). When no argument is a known
-    /// flag (--scene, --frames, --fixed-delta, --capture, --idle-throttle, --idle-after-ms, --idle-fps,
+    /// flag (--scene, --frames, --fixed-delta, --capture, --capture-every, --idle-throttle, --idle-after-ms, --idle-fps,
     /// --window-mode, --overlay-bounds, --overlay-background, --hit-test-probe, --dpi-awareness), nothing is
     /// validated: the arguments are only kept as ignored text (see GetIgnoredArguments) so launches that pass
     /// unrelated arguments, such as a file path split by CommandLineToArgvW, keep working exactly as before. Once
@@ -183,6 +185,12 @@ namespace helengine::windows {
 
                 options.DpiAwareness = ParseDpiAwareness(value);
                 options.DpiAwarenessSupplied = true;
+            } else if (flag == L"--capture-every") {
+                if (options.CaptureEveryFrames != 0) {
+                    throw std::invalid_argument("Command-line flag --capture-every was given more than once.");
+                }
+                options.CaptureEveryFrames = ParseBoundedInteger(value, 1, INT_MAX,
+                    "Command-line flag --capture-every requires a whole number of at least 1, got: ");
             } else {
                 if (options.CapturePathSupplied) {
                     throw std::invalid_argument("Command-line flag --capture was given more than once.");
@@ -201,6 +209,10 @@ namespace helengine::windows {
 
         if (options.CapturePathSupplied && !options.FrameLimitSupplied) {
             throw std::invalid_argument("Command-line flag --capture requires --frames to choose the captured frame.");
+        }
+
+        if (options.CaptureEveryFrames != 0 && !options.CapturePathSupplied) {
+            throw std::invalid_argument("Command-line flag --capture-every requires --capture and --frames.");
         }
 
         return options;
@@ -262,6 +274,21 @@ namespace helengine::windows {
     /// Gets the capture file path requested through --capture; only meaningful when HasCapturePath() is true.
     const std::wstring& Win32CommandLineOptions::GetCapturePath() const {
         return CapturePath;
+    }
+
+    /// Selects frames without retaining an image sequence in player memory.
+    bool Win32CommandLineOptions::ShouldCaptureFrame(int frameIndex) const {
+        if (!CapturePathSupplied || !FrameLimitSupplied || frameIndex < 0 || frameIndex >= FrameLimit) { return false; }
+        return CaptureEveryFrames > 0 ? frameIndex % CaptureEveryFrames == 0 : frameIndex + 1 == FrameLimit;
+    }
+
+    /// Numbers periodic files beside the requested path, leaving ordinary single captures unchanged.
+    std::wstring Win32CommandLineOptions::GetCapturePathForFrame(int frameIndex) const {
+        if (CaptureEveryFrames == 0) { return CapturePath; }
+        std::filesystem::path path(CapturePath);
+        std::wstring number = std::to_wstring(frameIndex / CaptureEveryFrames);
+        if (number.size() < 6) { number.insert(0, 6 - number.size(), L'0'); }
+        return (path.parent_path() / (path.stem().wstring() + L"-" + number + path.extension().wstring())).wstring();
     }
 
     /// Gets whether --idle-throttle was supplied to opt into throttling the frame rate while the player is idle.
@@ -364,11 +391,11 @@ namespace helengine::windows {
         return IgnoredArguments;
     }
 
-    /// Returns whether the argument is one of the regression flags (--scene, --frames, --fixed-delta, --capture,
+    /// Returns whether the argument is one of the regression flags (--scene, --frames, --fixed-delta, --capture, --capture-every,
     /// --idle-throttle, --idle-after-ms, --idle-fps, --window-mode, --overlay-bounds, --overlay-background,
     /// --hit-test-probe, --dpi-awareness).
     bool Win32CommandLineOptions::IsKnownFlag(const std::wstring& argument) {
-        return argument == L"--scene" || argument == L"--frames" || argument == L"--fixed-delta" || argument == L"--capture"
+        return argument == L"--scene" || argument == L"--frames" || argument == L"--fixed-delta" || argument == L"--capture" || argument == L"--capture-every"
             || argument == L"--idle-throttle" || argument == L"--idle-after-ms" || argument == L"--idle-fps"
             || argument == L"--window-mode" || argument == L"--overlay-bounds" || argument == L"--overlay-background"
             || argument == L"--hit-test-probe" || argument == L"--dpi-awareness" || argument == L"--window";

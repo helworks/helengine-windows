@@ -414,7 +414,7 @@ public sealed class Win32DpiAwarenessApplySourceTests {
     /// <param name="relativePathSegments">Path segments below the repository root.</param>
     /// <returns>The file text.</returns>
     static string ReadRepositoryFile(params string[] relativePathSegments) {
-        string repositoryRootPath = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", ".."));
+        string repositoryRootPath = WindowsTestRepository.ResolveRootPath();
         string filePath = Path.Combine(repositoryRootPath, Path.Combine(relativePathSegments));
         if (!File.Exists(filePath)) {
             throw new FileNotFoundException($"Source file was not found under the Windows repository root '{repositoryRootPath}'.", filePath);

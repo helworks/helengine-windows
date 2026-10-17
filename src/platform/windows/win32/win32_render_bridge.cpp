@@ -24,6 +24,7 @@
 #include "platform/windows/runtime/windows_tracy_profiler.hpp"
 
 #if __has_include("CameraRenderSettings.hpp")
+#include "Batch2DGeometry.hpp"
 #include "BuiltInMaterialIds.hpp"
 #if __has_include("BoxCollider3DComponent.hpp")
 #include "BoxCollider3DComponent.hpp"
@@ -39,6 +40,9 @@
 #include "IRenderQueue3D.hpp"
 #include "LightComponent.hpp"
 #include "LightDirectionUtility.hpp"
+#if __has_include("ModelSubmeshResolver.hpp")
+#include "ModelSubmeshResolver.hpp"
+#endif
 #if __has_include("MaterialPropertyBlock.hpp")
 #include "MaterialPropertyBlock.hpp"
 #endif
@@ -1086,6 +1090,12 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
         if (data != nullptr) {
             std::string modelId = data->get_Id();
             runtimeModel->set_Id(modelId);
+#if __has_include("ModelSubmeshResolver.hpp")
+            // Preserve authored draw ranges so each material slot renders its own geometry.
+            auto* submeshes = ModelSubmeshResolver::BuildRuntimeSubmeshes(data);
+            runtimeModel->SetSubmeshes(submeshes);
+            delete submeshes;
+#endif
 
             const int32_t positionCount = data->Positions != nullptr ? data->Positions->Length : 0;
             const int32_t normalCount = data->Normals != nullptr ? data->Normals->Length : 0;
@@ -2254,7 +2264,7 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
         ::float4x4 view;
         float4x4::CreateLookAt__ref0_ref1_ref2_out3(cameraPosition, cameraTarget, cameraUp, view);
         const float aspectRatio = viewport.Height > 0.0f ? viewport.Width / viewport.Height : 1.0f;
-        constexpr float CameraFieldOfViewRadians = 0.78539816339f;
+        const float CameraFieldOfViewRadians = camera->get_FieldOfView();
         float nearPlaneDistance = camera->get_NearPlaneDistance();
         if (nearPlaneDistance <= 0.0f) {
             nearPlaneDistance = 0.1f;
@@ -2291,6 +2301,7 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
                 " up=" + std::to_string(cameraUp.X) + "," + std::to_string(cameraUp.Y) + "," + std::to_string(cameraUp.Z));
             AppendRenderSnapshotLine(
                 "viewport=" + std::to_string(viewport.TopLeftX) + "," + std::to_string(viewport.TopLeftY) + "," + std::to_string(viewport.Width) + "," + std::to_string(viewport.Height));
+            AppendRenderSnapshotLine("camera fieldOfView=" + std::to_string(CameraFieldOfViewRadians));
             AppendRenderSnapshotLine(
                 "viewProjection rows="
                 "[" + std::to_string(CurrentViewProjection.M11) + "," + std::to_string(CurrentViewProjection.M12) + "," + std::to_string(CurrentViewProjection.M13) + "," + std::to_string(CurrentViewProjection.M14) + "]"
@@ -3296,6 +3307,9 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
         , OutputBootstrap(&bootstrap) {
 #if __has_include("RenderCommandListBuilder2D.hpp")
         CommandListBuilder = std::make_unique<RenderCommandListBuilder2D>();
+#if defined(TRACY_ENABLE) && __has_include("IRuntimeCpuProfileSink.hpp")
+        CommandListBuilder->SetCpuProfileSink(GetWindowsCpuProfileSink());
+#endif
 #endif
     }
 
@@ -3826,47 +3840,28 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
         DrawQuadVertices(vertices.data(), static_cast<UINT>(vertices.size()));
     }
 
-    /// Draws one textured quad in window-space pixel coordinates after applying a clockwise 2D rotation around its center.
-    void Win32RenderManager2D::DrawTexturedQuadTransformed(
+    /// Projects resolved sprite corners without decomposing their affine transform.
+    void Win32RenderManager2D::DrawSpriteQuad(
         ID3D11ShaderResourceView* textureView,
-        float x,
-        float y,
-        float width,
-        float height,
-        float rotationRadians,
+        SpriteQuad2D quad,
         float4 sourceRect,
         byte4 color) {
-        if (!HasActiveViewport || textureView == nullptr || width <= 0.0f || height <= 0.0f || CurrentViewport.Width <= 0.0f || CurrentViewport.Height <= 0.0f) {
+        if (!HasActiveViewport || textureView == nullptr || CurrentViewport.Width <= 0.0f || CurrentViewport.Height <= 0.0f) {
             return;
         }
 
         PrepareTexturedQuadDraw(textureView);
 
-        const float halfWidth = width * 0.5f;
-        const float halfHeight = height * 0.5f;
-        const float centerX = x + halfWidth;
-        const float centerYUp = -(y + halfHeight);
-        const float rotationSin = std::sin(rotationRadians);
-        const float rotationCos = std::cos(rotationRadians);
         const DirectX::XMFLOAT4 tint = ConvertColor(color);
 
-        const float bottomLeftX = centerX + ((-halfWidth * rotationCos) - (-halfHeight * rotationSin));
-        const float bottomLeftY = -(centerYUp + ((-halfWidth * rotationSin) + (-halfHeight * rotationCos)));
-        const float topLeftX = centerX + ((-halfWidth * rotationCos) - (halfHeight * rotationSin));
-        const float topLeftY = -(centerYUp + ((-halfWidth * rotationSin) + (halfHeight * rotationCos)));
-        const float bottomRightX = centerX + ((halfWidth * rotationCos) - (-halfHeight * rotationSin));
-        const float bottomRightY = -(centerYUp + ((halfWidth * rotationSin) + (-halfHeight * rotationCos)));
-        const float topRightX = centerX + ((halfWidth * rotationCos) - (halfHeight * rotationSin));
-        const float topRightY = -(centerYUp + ((halfWidth * rotationSin) + (halfHeight * rotationCos)));
-
-        const float bottomLeftNdcX = (((bottomLeftX - CurrentViewport.TopLeftX) / CurrentViewport.Width) * 2.0f) - 1.0f;
-        const float bottomLeftNdcY = 1.0f - (((bottomLeftY - CurrentViewport.TopLeftY) / CurrentViewport.Height) * 2.0f);
-        const float topLeftNdcX = (((topLeftX - CurrentViewport.TopLeftX) / CurrentViewport.Width) * 2.0f) - 1.0f;
-        const float topLeftNdcY = 1.0f - (((topLeftY - CurrentViewport.TopLeftY) / CurrentViewport.Height) * 2.0f);
-        const float bottomRightNdcX = (((bottomRightX - CurrentViewport.TopLeftX) / CurrentViewport.Width) * 2.0f) - 1.0f;
-        const float bottomRightNdcY = 1.0f - (((bottomRightY - CurrentViewport.TopLeftY) / CurrentViewport.Height) * 2.0f);
-        const float topRightNdcX = (((topRightX - CurrentViewport.TopLeftX) / CurrentViewport.Width) * 2.0f) - 1.0f;
-        const float topRightNdcY = 1.0f - (((topRightY - CurrentViewport.TopLeftY) / CurrentViewport.Height) * 2.0f);
+        const float bottomLeftNdcX = (((quad.BottomLeft.X - CurrentViewport.TopLeftX) / CurrentViewport.Width) * 2.0f) - 1.0f;
+        const float bottomLeftNdcY = 1.0f - (((quad.BottomLeft.Y - CurrentViewport.TopLeftY) / CurrentViewport.Height) * 2.0f);
+        const float topLeftNdcX = (((quad.TopLeft.X - CurrentViewport.TopLeftX) / CurrentViewport.Width) * 2.0f) - 1.0f;
+        const float topLeftNdcY = 1.0f - (((quad.TopLeft.Y - CurrentViewport.TopLeftY) / CurrentViewport.Height) * 2.0f);
+        const float bottomRightNdcX = (((quad.BottomRight.X - CurrentViewport.TopLeftX) / CurrentViewport.Width) * 2.0f) - 1.0f;
+        const float bottomRightNdcY = 1.0f - (((quad.BottomRight.Y - CurrentViewport.TopLeftY) / CurrentViewport.Height) * 2.0f);
+        const float topRightNdcX = (((quad.TopRight.X - CurrentViewport.TopLeftX) / CurrentViewport.Width) * 2.0f) - 1.0f;
+        const float topRightNdcY = 1.0f - (((quad.TopRight.Y - CurrentViewport.TopLeftY) / CurrentViewport.Height) * 2.0f);
 
         std::array<Win32QuadVertex, 4> vertices = {
             Win32QuadVertex { DirectX::XMFLOAT3(bottomLeftNdcX, bottomLeftNdcY, 0.0f), DirectX::XMFLOAT2(sourceRect.X, sourceRect.Y + sourceRect.W), tint },
@@ -3973,6 +3968,9 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
 #if __has_include("RenderCommandListBuilder2D.hpp")
         if (!CommandListBuilder) {
             CommandListBuilder = std::make_unique<RenderCommandListBuilder2D>();
+#if defined(TRACY_ENABLE) && __has_include("IRuntimeCpuProfileSink.hpp")
+            CommandListBuilder->SetCpuProfileSink(GetWindowsCpuProfileSink());
+#endif
         }
 
         RenderCommandList2D* commandList = CommandListBuilder->Build(renderQueue);
@@ -4023,26 +4021,13 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
                     continue;
                 }
 
-                const float4 bounds = commandList->GetTexturedQuadBounds(payloadIndex);
+                const SpriteQuad2D quad = commandList->GetTexturedQuadGeometry(payloadIndex);
                 if (!HasWritten2DDraw) {
-                    AppendRenderDiagnosticsLine(
-                        "2d.command textured_quad bounds="
-                        + std::to_string(bounds.X) + ","
-                        + std::to_string(bounds.Y) + ","
-                        + std::to_string(bounds.Z) + ","
-                        + std::to_string(bounds.W)
-                        + " rotation="
-                        + std::to_string(commandList->GetTexturedQuadRotation(payloadIndex)));
+                    AppendRenderDiagnosticsLine("2d.command textured_quad top_left="
+                        + std::to_string(quad.TopLeft.X) + "," + std::to_string(quad.TopLeft.Y));
                     HasWritten2DDraw = true;
                 }
-
-                DrawTexturedQuadTransformed(
-                    textureView,
-                    bounds.X,
-                    bounds.Y,
-                    bounds.Z,
-                    bounds.W,
-                    commandList->GetTexturedQuadRotation(payloadIndex),
+                DrawSpriteQuad(textureView, quad,
                     commandList->GetTexturedQuadSourceRect(payloadIndex),
                     commandList->GetTexturedQuadColor(payloadIndex));
                 continue;
@@ -4553,34 +4538,13 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
             return;
         }
 
-        int2 size = sprite->get_Size();
-        const float baseWidth = size.X > 0 ? static_cast<float>(size.X) : static_cast<float>(texture->get_Width());
-        const float baseHeight = size.Y > 0 ? static_cast<float>(size.Y) : static_cast<float>(texture->get_Height());
-        Entity* parent = sprite->get_Parent();
-        const float3 position = parent->get_Position();
-        const float3 scale = parent->get_Scale();
-        const float4 orientation = parent->get_Orientation();
-        const float width = baseWidth * scale.X;
-        const float height = baseHeight * scale.Y;
-        const float3 rotatedRight = float4::RotateVector(float3(1.0f, 0.0f, 0.0f), orientation);
-        const float rotationRadians = static_cast<float>(std::atan2(rotatedRight.Y, rotatedRight.X));
+        const SpriteQuad2D quad = Batch2DGeometry::ResolveSpriteQuad(sprite);
         if (!HasWritten2DDraw) {
-            AppendRenderDiagnosticsLine(
-                "2d.draw_sprite pos="
-                + std::to_string(position.X) + ","
-                + std::to_string(position.Y)
-                + " size="
-                + std::to_string(width) + ","
-                + std::to_string(height)
-                + " scale="
-                + std::to_string(scale.X) + ","
-                + std::to_string(scale.Y) + ","
-                + std::to_string(scale.Z)
-                + " rotation="
-                + std::to_string(rotationRadians));
+            AppendRenderDiagnosticsLine("2d.draw_sprite top_left="
+                + std::to_string(quad.TopLeft.X) + "," + std::to_string(quad.TopLeft.Y));
             HasWritten2DDraw = true;
         }
-        DrawTexturedQuadTransformed(textureView, position.X, position.Y, width, height, rotationRadians, sprite->get_SourceRect(), sprite->get_Color());
+        DrawSpriteQuad(textureView, quad, sprite->get_SourceRect(), sprite->get_Color());
     }
 
     /// Returns whether runtime font atlases support independent RGB coverage and grayscale fallback.

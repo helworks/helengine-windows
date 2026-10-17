@@ -73,7 +73,7 @@ public sealed class DirectX11BackBufferCaptureSourceTests {
         Assert.True(presentIndex > captureIndex, "Presenter->RenderFrame(); must follow CaptureToBmp.");
 
         Assert.Contains(
-            "if (BackBufferCapture && CommandLineOptions.HasFrameLimit() && RenderedFrameCount + 1 == CommandLineOptions.GetFrameLimit())",
+            "if (BackBufferCapture && CommandLineOptions.ShouldCaptureFrame(RenderedFrameCount))",
             applicationSource,
             StringComparison.Ordinal);
         Assert.Contains("throw Win32ExitRequest(3,", applicationSource, StringComparison.Ordinal);
@@ -96,7 +96,7 @@ public sealed class DirectX11BackBufferCaptureSourceTests {
     /// <param name="relativePathSegments">Path segments below the repository root.</param>
     /// <returns>The file text.</returns>
     static string ReadRepositoryFile(params string[] relativePathSegments) {
-        string repositoryRootPath = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", ".."));
+        string repositoryRootPath = WindowsTestRepository.ResolveRootPath();
         string filePath = Path.Combine(repositoryRootPath, Path.Combine(relativePathSegments));
         if (!File.Exists(filePath)) {
             throw new FileNotFoundException($"Source file was not found under the Windows repository root '{repositoryRootPath}'.", filePath);

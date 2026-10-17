@@ -13,6 +13,9 @@ namespace helengine.windows.builder;
 public static class WindowsBuildWorkspace {
     /// <summary>
     /// Executes one Windows build request by copying staged payloads into the output root and writing a manifest.
+    /// An assets-only request (editor Play) copies the payloads into
+    /// <see cref="WindowsPlayerContentLayout.ContentRootRelativePath"/> under the builder working root instead and stops
+    /// there: the output root, the generated core and the native build are left untouched.
     /// </summary>
     /// <param name="request">Resolved build request to process.</param>
     /// <param name="progressReporter">Progress reporter that receives streaming updates.</param>
@@ -40,8 +43,15 @@ public static class WindowsBuildWorkspace {
         WindowsNativeBuildProfileResolution profileResolution = WindowsNativeBuildProfileResolver.Resolve(request.SelectedBuildProfileId);
         ValidateGeneratedFunctionProfilingConfiguration(profileResolution, request.SelectedCodegenOptionValues);
 
-        ResetDirectoryIfPresent(request.OutputRoot);
-        Directory.CreateDirectory(request.OutputRoot);
+        // An assets-only build (editor Play) stages into the builder working root and never touches the user's output
+        // directory, the generated core or the native build.
+        bool assetsOnly = request.ExecutionScope == PlatformBuildExecutionScope.AssetsOnly;
+        string contentRoot = assetsOnly
+            ? Path.Combine(builderWorkingRoot, WindowsPlayerContentLayout.ContentRootRelativePath)
+            : request.OutputRoot;
+
+        ResetDirectoryIfPresent(contentRoot);
+        Directory.CreateDirectory(contentRoot);
         Directory.CreateDirectory(builderWorkingRoot);
 
         List<PlatformBuildDiagnostic> diagnostics = [];
@@ -51,12 +61,13 @@ public static class WindowsBuildWorkspace {
         List<WindowsBuildManifestEntry> looseAssetEntries = [];
         List<WindowsBuildManifestEntry> profilerArtifactEntries = [];
 
-        int totalItems = request.Manifest.Scenes.Length + request.Manifest.LooseAssets.Length + request.Manifest.PlatformCookWorkItems.Length + 1;
+        int totalItems = request.Manifest.Scenes.Length + request.Manifest.LooseAssets.Length + request.Manifest.PlatformCookWorkItems.Length + (assetsOnly ? 0 : 1);
         int completedItems = 0;
         bool nativeBuildSucceeded = false;
-        string repositoryRoot = ResolveRepositoryRoot();
-        string generatedCoreRoot = ResolveGeneratedCoreRoot(request);
-        WriteRuntimeNativeManifest(generatedCoreRoot, request.Manifest, request.SelectedGraphicsOptionValues);
+        if (!assetsOnly) {
+            WriteRuntimeNativeManifest(ResolveGeneratedCoreRoot(request), request.Manifest, request.SelectedGraphicsOptionValues);
+        }
+
         for (int sceneIndex = 0; sceneIndex < request.Manifest.Scenes.Length; sceneIndex++) {
             cancellationToken.ThrowIfCancellationRequested();
 
@@ -64,7 +75,7 @@ public static class WindowsBuildWorkspace {
             CopyPayload(
                 scene.SceneId,
                 scene.SourceIdentity,
-                BuildCookedOutputRoot(request.OutputRoot),
+                BuildCookedOutputRoot(contentRoot),
                 diagnostics,
                 diagnosticReporter,
                 out bool copied,
@@ -94,7 +105,7 @@ public static class WindowsBuildWorkspace {
             CopyPayload(
                 asset.AssetId,
                 asset.SourceIdentity,
-                BuildCookedOutputRoot(request.OutputRoot),
+                BuildCookedOutputRoot(contentRoot),
                 diagnostics,
                 diagnosticReporter,
                 out bool copied,
@@ -123,7 +134,7 @@ public static class WindowsBuildWorkspace {
             PlatformCookWorkItem workItem = request.Manifest.PlatformCookWorkItems[workItemIndex];
             CopyPlatformCookWorkItem(
                 workItem,
-                request.OutputRoot,
+                contentRoot,
                 diagnostics,
                 diagnosticReporter,
                 out bool copied,
@@ -143,8 +154,21 @@ public static class WindowsBuildWorkspace {
                     : $"Failed to stage builder-owned asset '{workItemLabel}'."));
         }
 
-        CopyStagedPayloadTreeToOutputRoot(request.OutputRoot);
+        CopyStagedPayloadTreeToOutputRoot(contentRoot);
 
+        if (assetsOnly) {
+            WriteBuildManifest(request, builderWorkingRoot, contentRoot, sceneEntries, looseAssetEntries, profilerArtifactEntries);
+            return Task.FromResult(new PlatformBuildReport(
+                diagnostics.Count == 0
+                    && sceneOutcomes.TrueForAll(outcome => outcome.OutcomeKind == PlatformBuildItemOutcomeKind.Succeeded)
+                    && looseAssetOutcomes.TrueForAll(outcome => outcome.OutcomeKind == PlatformBuildItemOutcomeKind.Succeeded),
+                [.. diagnostics],
+                [.. sceneOutcomes],
+                [.. looseAssetOutcomes]));
+        }
+
+        string repositoryRoot = ResolveRepositoryRoot();
+        string generatedCoreRoot = ResolveGeneratedCoreRoot(request);
         cancellationToken.ThrowIfCancellationRequested();
         progressReporter.Report(new PlatformBuildProgressUpdate(
             "Native Build",
@@ -222,7 +246,7 @@ public static class WindowsBuildWorkspace {
                 "Native Windows build failed."));
         }
 
-        WriteBuildManifest(request, builderWorkingRoot, sceneEntries, looseAssetEntries, profilerArtifactEntries);
+        WriteBuildManifest(request, builderWorkingRoot, contentRoot, sceneEntries, looseAssetEntries, profilerArtifactEntries);
 
         bool succeeded = diagnostics.Count == 0
             && sceneOutcomes.TrueForAll(outcome => outcome.OutcomeKind == PlatformBuildItemOutcomeKind.Succeeded)
@@ -411,12 +435,15 @@ public static class WindowsBuildWorkspace {
     /// Writes the build manifest to the working root for traceability.
     /// </summary>
     /// <param name="request">Resolved build request.</param>
+    /// <param name="builderWorkingRoot">Builder working root that receives the manifest.</param>
+    /// <param name="contentRoot">Root the cooked content was staged into: the output root, or the Play staging root for assets-only builds.</param>
     /// <param name="sceneEntries">Resolved scene entries.</param>
     /// <param name="looseAssetEntries">Resolved loose asset entries.</param>
     /// <param name="profilerArtifactEntries">Profiler-only native artifacts included in the packaged player.</param>
     static void WriteBuildManifest(
         PlatformBuildRequest request,
         string builderWorkingRoot,
+        string contentRoot,
         IReadOnlyList<WindowsBuildManifestEntry> sceneEntries,
         IReadOnlyList<WindowsBuildManifestEntry> looseAssetEntries,
         IReadOnlyList<WindowsBuildManifestEntry> profilerArtifactEntries) {
@@ -426,7 +453,7 @@ public static class WindowsBuildWorkspace {
             request.Manifest.ProjectVersion,
             request.Manifest.RequiredEngineVersion,
             request.Manifest.StartupSceneId,
-            request.OutputRoot,
+            OutputRoot = contentRoot,
             Scenes = sceneEntries,
             LooseAssets = looseAssetEntries,
             ProfilerArtifacts = profilerArtifactEntries

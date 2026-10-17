@@ -117,6 +117,18 @@ namespace helengine::windows {
         , HasLoggedInputTraceSample(false)
         , LastLoggedForegroundActive(false)
         , LastLoggedWatchedKeyMask(0) {
+        DWORD length = GetEnvironmentVariableW(L"HELENGINE_INPUT_REPLAY_FILE", nullptr, 0);
+        if (length > 0) {
+            if (length > 32768) { throw std::invalid_argument("Input replay path exceeds the Windows environment path limit."); }
+            std::wstring path(length, L'\0');
+            DWORD copied = GetEnvironmentVariableW(L"HELENGINE_INPUT_REPLAY_FILE", path.data(), length);
+            if (copied == 0 || copied >= length) { throw std::runtime_error("Unable to read the input replay path."); }
+            path.resize(copied);
+            std::ifstream recording { std::filesystem::path(path) };
+            if (!recording) { throw std::runtime_error("Unable to open the explicitly requested input replay."); }
+            Replay.Load(recording);
+            AppendInputTraceLine("replay=enabled");
+        }
     }
 
     /// Selects a live input window without creating another engine input system.
@@ -151,6 +163,11 @@ namespace helengine::windows {
 
     /// Reads the current keyboard state from Win32 keyboard APIs.
     KeyboardState Win32InputBackend::CaptureKeyboardState() {
+        if (Replay.IsEnabled()) {
+            List<Keys> pressedKeys;
+            for (int key : Replay.NextKeys()) { pressedKeys.Add(static_cast<Keys>(key)); }
+            return KeyboardState(&pressedKeys, false, false);
+        }
         HWND windowHandle = Window != nullptr ? Window->GetHandle() : nullptr;
         bool isForegroundActive = windowHandle != nullptr && IsWindowForegroundActive(windowHandle);
         if (!ReceiveInputInBackground && windowHandle != nullptr && !isForegroundActive) {
