@@ -6,9 +6,8 @@
 
 namespace helengine::windows {
     /// Describes how the player's main window is created and shown: the window mode it belongs to, the Win32 style
-    /// and extended style passed to CreateWindowExW, and the ShowWindow command. Only the two factory functions create
-    /// instances, so a window can only be built with today's normal style set or the overlay style set confirmed by the
-    /// overlay spike.
+    /// and extended style passed to CreateWindowExW, and the ShowWindow command. Only the factory functions create
+    /// instances, selecting an ordinary window, a topmost overlay, or a noninteractive desktop child.
     class Win32WindowStyle {
     public:
         /// Returns today's ordinary window: WS_OVERLAPPEDWINDOW, no extended style, shown with SW_SHOWDEFAULT. These
@@ -23,6 +22,9 @@ namespace helengine::windows {
         /// takes the foreground.
         static Win32WindowStyle Overlay();
 
+        /// Returns a disabled layered child for the shell wallpaper layer, without activation or mouse input.
+        static Win32WindowStyle Desktop();
+
         /// Gets the window mode this style set belongs to, which selects Win32Window's creation and show path.
         Win32WindowMode GetWindowMode() const;
 
@@ -36,7 +38,7 @@ namespace helengine::windows {
         int GetShowCommand() const;
 
     private:
-        /// Creates one style set; private so only Normal() and Overlay() can build instances.
+        /// Creates one style set; private so only the named factories can build instances.
         /// <param name="windowMode">Window mode this style set belongs to.</param>
         /// <param name="style">Win32 window style.</param>
         /// <param name="exStyle">Win32 extended window style.</param>

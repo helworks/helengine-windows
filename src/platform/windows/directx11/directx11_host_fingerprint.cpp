@@ -1,4 +1,5 @@
 #include "platform/windows/directx11/directx11_host_fingerprint.hpp"
+#include "platform/windows/win32/win32_desktop_host.hpp"
 
 #include <algorithm>
 #include <cstdint>
@@ -74,6 +75,8 @@ namespace helengine::windows {
             throw std::runtime_error(messageBuilder.str());
         }
 
+        if (windowMode == Win32WindowMode::Desktop) { clientRect = Win32DesktopHost::ReadClientRectangle(WindowHandle); }
+
         UINT windowDpi = GetDpiForWindow(WindowHandle);
         if (windowDpi == 0) {
             throw std::runtime_error("Host fingerprint: GetDpiForWindow returned 0 for the main window.");
@@ -141,6 +144,16 @@ namespace helengine::windows {
                     << " dpiAwareness=" << dpiAwarenessText
                     << " windowRect=" << windowRectBuilder.str()
                     << " elapsedMs=" << elapsedMilliseconds;
+        if (windowMode == Win32WindowMode::Desktop) {
+            HWND parent = GetParent(WindowHandle);
+            char className[64] {};
+            RECT bounds = Win32DesktopHost::ReadPhysicalWindowRectangle(WindowHandle);
+            if (parent == nullptr || !GetClassNameA(parent, className, 64)) {
+                throw std::runtime_error("Desktop fingerprint requires a live shell parent and window bounds.");
+            }
+            lineBuilder << " desktopParent=" << className
+                << " desktopRect=" << bounds.left << "," << bounds.top << "," << bounds.right << "," << bounds.bottom;
+        }
         return lineBuilder.str();
     }
 

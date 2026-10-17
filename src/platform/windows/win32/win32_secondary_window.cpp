@@ -11,7 +11,8 @@ namespace helengine::windows {
         : Settings(settings), RegisteredHandle(nullptr) {
         std::wstring title(settings.GetTag().begin(), settings.GetTag().end());
         Window = std::make_unique<Win32Window>(title.c_str(), settings.GetLeft(), settings.GetTop(), settings.GetWidth(),
-            settings.GetHeight(), settings.GetMode() == Win32WindowMode::Overlay ? Win32WindowStyle::Overlay() : Win32WindowStyle::Normal());
+            settings.GetHeight(), settings.GetMode() == Win32WindowMode::Desktop ? Win32WindowStyle::Desktop()
+                : settings.GetMode() == Win32WindowMode::Overlay ? Win32WindowStyle::Overlay() : Win32WindowStyle::Normal());
         Window->SetSecondaryWindow();
         Window->SetDpiAwareness(awareness);
         Window->SetActivityTracker(activity);
@@ -20,7 +21,7 @@ namespace helengine::windows {
         Window->ShowSecondary();
         Window->RethrowPendingException();
         Bootstrap = std::make_unique<DirectX11Bootstrap>(RegisteredHandle, Window->GetClientWidth(), Window->GetClientHeight(),
-            settings.GetMode() == Win32WindowMode::Overlay, sharedDevice);
+            settings.GetMode() == Win32WindowMode::Overlay, sharedDevice, settings.GetMode() == Win32WindowMode::Desktop);
         Presenter = std::make_unique<DirectX11Presenter>(*Bootstrap);
         if (options.HasFrameLimit()) {
             Fingerprint = std::make_unique<DirectX11HostFingerprint>(*Bootstrap, RegisteredHandle, settings.GetTag());

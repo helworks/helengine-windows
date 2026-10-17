@@ -3,6 +3,8 @@
 #include "platform/windows/win32/win32_activity_tracker.hpp"
 #include "platform/windows/win32/win32_dpi_window_sizing.hpp"
 
+#include "platform/windows/win32/win32_desktop_host.hpp"
+
 #include <sstream>
 #include <stdexcept>
 
@@ -50,7 +52,9 @@ namespace helengine::windows {
         // is kept for the Per-Monitor v2 correction.
         int requestedClientWidth = Width;
         int requestedClientHeight = Height;
-        if (WindowStyle.GetWindowMode() == Win32WindowMode::Overlay) {
+        if (WindowStyle.GetWindowMode() == Win32WindowMode::Desktop) {
+            CreateDesktopWindow();
+        } else if (WindowStyle.GetWindowMode() == Win32WindowMode::Overlay) {
             CreateOverlayWindow();
         } else {
             CreateNormalWindow();
@@ -73,6 +77,10 @@ namespace helengine::windows {
 
     /// Shows the native window through the normal or overlay path chosen by the window style.
     void Win32Window::Show() const {
+        if (DesktopHost) {
+            DesktopHost->ShowChild(Handle);
+            return;
+        }
         if (WindowStyle.GetWindowMode() == Win32WindowMode::Overlay) {
             ShowOverlayWindow();
         } else {
@@ -90,6 +98,10 @@ namespace helengine::windows {
 
     /// Places a secondary window and shows it without changing foreground keyboard focus.
     void Win32Window::ShowSecondary() const {
+        if (DesktopHost) {
+            DesktopHost->ShowChild(Handle);
+            return;
+        }
         if (WindowStyle.GetWindowMode() == Win32WindowMode::Overlay) {
             ShowOverlayWindow();
             return;
@@ -140,6 +152,18 @@ namespace helengine::windows {
             nullptr,
             GetModuleHandleW(nullptr),
             this);
+    }
+
+    /// Initializes the shell connection before creating the player-owned wallpaper child.
+    void Win32Window::CreateDesktopWindow() {
+        DesktopHost = std::make_unique<Win32DesktopHost>(Win32DesktopHost::Resolve());
+        RECT bounds { Left, Top, Left + Width, Top + Height };
+        Handle = DesktopHost->CreateChild(L"HelEngineWindowClass", Title.c_str(), GetModuleHandleW(nullptr), this, bounds);
+    }
+
+    /// Verifies a live desktop child's parent before rendering; destroyed secondary children retain normal close behavior.
+    void Win32Window::ValidateDesktopAttachment() const {
+        if (DesktopHost && Handle != nullptr) { DesktopHost->ValidateAttachment(Handle); }
     }
 
     /// Resizes a freshly created Per-Monitor v2 normal window so its client area is exactly the requested size in
@@ -264,6 +288,11 @@ namespace helengine::windows {
             ActivityTracker->ObserveMessage(message);
         }
 
+        if (WindowStyle.GetWindowMode() == Win32WindowMode::Desktop) {
+            if (message == WM_MOUSEACTIVATE) { return MA_NOACTIVATE; }
+            if (message == WM_NCHITTEST) { return HTTRANSPARENT; }
+        }
+
         switch (message) {
             case WM_SIZE:
                 RefreshClientSize();
@@ -344,6 +373,12 @@ namespace helengine::windows {
 
     /// Updates the cached client size from the current native window state.
     void Win32Window::RefreshClientSize() {
+        if (DesktopHost && Handle != nullptr) {
+            RECT client = Win32DesktopHost::ReadClientRectangle(Handle);
+            Width = client.right - client.left;
+            Height = client.bottom - client.top;
+            return;
+        }
         RECT clientRectangle {};
         if (GetClientRect(Handle, &clientRectangle)) {
             Width = clientRectangle.right - clientRectangle.left;

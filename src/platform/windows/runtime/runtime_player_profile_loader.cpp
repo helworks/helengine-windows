@@ -375,7 +375,7 @@ namespace helengine::windows {
         Win32WindowMode windowMode = Win32WindowMode::Normal;
         if (!Win32WindowModeNames::TryParseWindowMode(profile.WindowMode, windowMode)) {
             throw RuntimePlayerProfileConfigurationError(
-                "Runtime player profile windowMode must be \"normal\" or \"overlay\", got: " + profile.WindowMode);
+                "Runtime player profile windowMode must be \"normal\", \"overlay\" or \"desktop\", got: " + profile.WindowMode);
         }
 
         Win32OverlayBounds overlayBounds = Win32OverlayBounds::Monitor;

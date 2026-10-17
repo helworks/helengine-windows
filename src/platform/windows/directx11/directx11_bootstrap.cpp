@@ -12,11 +12,13 @@ namespace helengine::windows {
     /// <param name="height">Initial back-buffer height in pixels.</param>
     /// <param name="useComposition">True only in overlay mode: create a premultiplied composition swap chain and
     /// the DirectComposition device, target and visual instead of the window swap chain.</param>
-    DirectX11Bootstrap::DirectX11Bootstrap(HWND windowHandle, int width, int height, bool useComposition)
+    DirectX11Bootstrap::DirectX11Bootstrap(HWND windowHandle, int width, int height, bool useComposition, bool useDesktop)
         : WindowHandle(windowHandle)
         , Width(width)
         , Height(height)
-        , UseComposition(useComposition) {
+        , UseComposition(useComposition)
+        , UseDesktop(useDesktop) {
+        if (UseDesktop && UseComposition) { throw std::invalid_argument("Desktop presentation cannot use overlay composition."); }
         CreateDevice();
         CreateSwapChain();
         CreateRenderTargetView();
@@ -24,9 +26,10 @@ namespace helengine::windows {
     }
 
     /// Creates window-owned presentation resources on the existing shared DirectX11 device.
-    DirectX11Bootstrap::DirectX11Bootstrap(HWND windowHandle, int width, int height, bool useComposition, DirectX11Bootstrap& sharedDevice)
-        : WindowHandle(windowHandle), Width(width), Height(height), UseComposition(useComposition),
+    DirectX11Bootstrap::DirectX11Bootstrap(HWND windowHandle, int width, int height, bool useComposition, DirectX11Bootstrap& sharedDevice, bool useDesktop)
+        : WindowHandle(windowHandle), Width(width), Height(height), UseComposition(useComposition), UseDesktop(useDesktop),
           Device(sharedDevice.GetDevice()), DeviceContext(sharedDevice.GetDeviceContext()) {
+        if (UseDesktop && UseComposition) { throw std::invalid_argument("Desktop presentation cannot use overlay composition."); }
         if (windowHandle == nullptr || width <= 0 || height <= 0) {
             throw std::invalid_argument("A secondary swap chain requires a live window and positive client dimensions.");
         }
@@ -152,6 +155,11 @@ namespace helengine::windows {
         swapChainDescription.Scaling = DXGI_SCALING_STRETCH;
         swapChainDescription.SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD;
         swapChainDescription.AlphaMode = DXGI_ALPHA_MODE_IGNORE;
+        if (UseDesktop) {
+            // Explorer's layered child wallpaper path requires blt presentation, including on raised desktops.
+            swapChainDescription.BufferCount = 1;
+            swapChainDescription.SwapEffect = DXGI_SWAP_EFFECT_DISCARD;
+        }
 
         ThrowIfFailed(
             factory->CreateSwapChainForHwnd(

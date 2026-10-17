@@ -118,7 +118,7 @@ public sealed class Win32OverlayWindowSourceTests {
         string bootstrapSource = ReadRepositoryFile("src", "platform", "windows", "directx11", "directx11_bootstrap.cpp");
         string bootstrapHeader = ReadRepositoryFile("src", "platform", "windows", "directx11", "directx11_bootstrap.hpp");
 
-        Assert.Contains("DirectX11Bootstrap(HWND windowHandle, int width, int height, bool useComposition);", bootstrapHeader, StringComparison.Ordinal);
+        Assert.Contains("DirectX11Bootstrap(HWND windowHandle, int width, int height, bool useComposition, bool useDesktop = false);", bootstrapHeader, StringComparison.Ordinal);
         Assert.Contains("#include <dcomp.h>", bootstrapHeader, StringComparison.Ordinal);
 
         string createSwapChainBody = ExtractMethodBody(bootstrapSource, "void DirectX11Bootstrap::CreateSwapChain(");
@@ -199,7 +199,8 @@ public sealed class Win32OverlayWindowSourceTests {
         Assert.Matches(
             new Regex(
                 @"Bootstrap = std::make_unique<DirectX11Bootstrap>\(\s*MainWindow->GetHandle\(\),\s*MainWindow->GetClientWidth\(\),\s*"
-                + @"MainWindow->GetClientHeight\(\),\s*WindowModeSettings->GetWindowMode\(\) == Win32WindowMode::Overlay\);"),
+                + @"MainWindow->GetClientHeight\(\),\s*WindowModeSettings->GetWindowMode\(\) == Win32WindowMode::Overlay,\s*"
+                + @"WindowModeSettings->GetWindowMode\(\) == Win32WindowMode::Desktop\);"),
             bootstrapBody);
     }
 
@@ -259,7 +260,11 @@ public sealed class Win32OverlayWindowSourceTests {
                 @"MainWindow->Show\(\);\s*(?://[^\n]*\s*)*MainWindow->RethrowPendingException\(\);\s*(?://[^\n]*\s*)*if \(windowModeSettings\.GetWindowMode\(\) == Win32WindowMode::Overlay\) \{\s*"
                 + @"std::ostringstream messageBuilder;\s*messageBuilder << ""Main window configured to overlay client size ""\s*"
                 + @"<< MainWindow->GetClientWidth\(\)\s*<< ""x""\s*<< MainWindow->GetClientHeight\(\)\s*<< '\.';\s*"
-                + @"std::string message = messageBuilder\.str\(\);\s*WriteLifecycleLog\(message\.c_str\(\)\);\s*\} else \{\s*"
+                + @"std::string message = messageBuilder\.str\(\);\s*WriteLifecycleLog\(message\.c_str\(\)\);\s*"
+                + @"\} else if \(windowModeSettings\.GetWindowMode\(\) == Win32WindowMode::Desktop\) \{\s*"
+                + @"std::string message = ""Desktop client size: "" \+ std::to_string\(MainWindow->GetClientWidth\(\)\)\s*"
+                + @"\+ ""x"" \+ std::to_string\(MainWindow->GetClientHeight\(\)\) \+ ""\."";\s*"
+                + @"WriteLifecycleLog\(message\.c_str\(\)\);\s*\} else \{\s*"
                 + @"std::ostringstream messageBuilder;\s*messageBuilder << ""Main window configured to default client size ""\s*"
                 + @"<< profile\.ResolutionWidth\s*<< ""x""\s*<< profile\.ResolutionHeight\s*<< '\.';\s*"
                 + @"std::string message = messageBuilder\.str\(\);\s*WriteLifecycleLog\(message\.c_str\(\)\);\s*\}\s*"

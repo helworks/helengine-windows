@@ -29,6 +29,12 @@ namespace helengine::windows {
         return Win32WindowStyle(Win32WindowMode::Overlay, WS_POPUP, WS_EX_NOREDIRECTIONBITMAP | WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_LAYERED | WS_EX_TRANSPARENT, SW_SHOWNOACTIVATE);
     }
 
+    /// Returns an opaque wallpaper child; layered alpha is initialized to 255 before it is shown.
+    Win32WindowStyle Win32WindowStyle::Desktop() {
+        return Win32WindowStyle(Win32WindowMode::Desktop, WS_CHILD | WS_CLIPSIBLINGS | WS_CLIPCHILDREN | WS_DISABLED,
+            WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW, SW_SHOWNOACTIVATE);
+    }
+
     /// Gets the window mode this style set belongs to, which selects Win32Window's creation and show path.
     Win32WindowMode Win32WindowStyle::GetWindowMode() const {
         return WindowMode;

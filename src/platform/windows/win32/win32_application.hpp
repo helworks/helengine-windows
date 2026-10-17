@@ -69,6 +69,9 @@ namespace helengine::windows {
         /// Initializes explicitly configured secondary views before the shared core starts.
         void CreateSecondaryWindows();
 
+        /// Enumerates primary desktop coverage and validates automatic view limits and reserved tags before creation.
+        void ConfigureDesktopMonitors(const Win32WindowModeSettings& windowModeSettings);
+
         /// Updates the shared core once, then draws and presents every live view.
         void RenderMultiWindowFrame();
 
@@ -354,6 +357,9 @@ namespace helengine::windows {
 
         /// Counts primary presentations independently of the finite multi-window host-frame limit.
         int MultiWindowPrimaryFrames = 0;
+
+        /// Stores startup monitor coverage for primary desktop mode, with the primary display first.
+        std::vector<RECT> DesktopMonitorRectangles;
 
         /// Keeps the multi-window lifecycle active after the last secondary view closes.
         bool MultipleWindowsEnabled = false;

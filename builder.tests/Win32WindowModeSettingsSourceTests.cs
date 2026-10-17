@@ -172,6 +172,7 @@ public sealed class Win32WindowModeSettingsSourceTests {
                 + @"ApplyDpiAwareness\(dpiAwarenessSettings\);\s*"
                 + @"Win32IdleThrottleSettings idleThrottleSettings = Win32IdleThrottleSettings::Resolve\(profile, CommandLineOptions\);\s*"
                 + @"WindowModeSettings = std::make_unique<Win32WindowModeSettings>\(windowModeSettings\);\s*"
+                + @"ConfigureDesktopMonitors\(windowModeSettings\);\s*"
                 + @"if \(windowModeSettings\.GetWindowMode\(\) == Win32WindowMode::Overlay\) \{\s*"
                 + @"RECT overlayRectangle = ResolveOverlayRectangle\(windowModeSettings, profile\);",
                 RegexOptions.Singleline),

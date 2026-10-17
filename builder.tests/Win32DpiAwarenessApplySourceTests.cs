@@ -164,7 +164,7 @@ public sealed class Win32DpiAwarenessApplySourceTests {
         Assert.Matches(
             new Regex(
                 @"int requestedClientWidth = Width;\s*int requestedClientHeight = Height;\s*"
-                + @"if \(WindowStyle\.GetWindowMode\(\) == Win32WindowMode::Overlay\) \{\s*CreateOverlayWindow\(\);\s*\} else \{\s*CreateNormalWindow\(\);\s*\}"),
+                + @"if \(WindowStyle\.GetWindowMode\(\) == Win32WindowMode::Desktop\) \{\s*CreateDesktopWindow\(\);\s*\} else if \(WindowStyle\.GetWindowMode\(\) == Win32WindowMode::Overlay\) \{\s*CreateOverlayWindow\(\);\s*\} else \{\s*CreateNormalWindow\(\);\s*\}"),
             createBody);
         Assert.Matches(
             new Regex(
@@ -322,7 +322,7 @@ public sealed class Win32DpiAwarenessApplySourceTests {
     /// <summary>
     /// Verifies every <c>DispatchMessageW</c> in the player is followed straight away by
     /// <c>MainWindow->RethrowPendingException()</c>, so a handler failure reaches <c>Run()</c>'s fatal handler through
-    /// ordinary C++ frames, and that the pump gains no other call.
+    /// ordinary C++ frames; desktop attachments are validated before the next frame.
     /// </summary>
     [Fact]
     public void Win32Application_rethrows_pending_window_exceptions_after_each_dispatch() {
@@ -339,6 +339,8 @@ public sealed class Win32DpiAwarenessApplySourceTests {
                 + @"if \(message\.message == WM_QUIT\) \{\s*ExitCode = static_cast<int>\(message\.wParam\);\s*return false;\s*\}\s*"
                  + @"TranslateMessage\(&message\);\s*DispatchMessageW\(&message\);\s*MainWindow->RethrowPendingException\(\);\s*"
                 + @"for \(const auto& view : SecondaryWindows\) \{ view->GetWindow\(\)\.RethrowPendingException\(\); \}\s*\}\s*"
+                + @"MainWindow->ValidateDesktopAttachment\(\);\s*"
+                + @"for \(const auto& view : SecondaryWindows\) \{ view->GetWindow\(\)\.ValidateDesktopAttachment\(\); \}\s*"
                 + @"return true;\s*$"),
             pumpBody);
     }

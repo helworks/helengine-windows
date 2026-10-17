@@ -2,6 +2,7 @@
 
 #include <array>
 #include <charconv>
+#include <limits>
 #include <stdexcept>
 #include <utility>
 #include "platform/windows/win32/win32_window_mode_names.hpp"
@@ -19,7 +20,7 @@ namespace helengine::windows {
             std::size_t end = value.find(',', start);
             if ((index + 1 < fields.size() && end == std::string::npos)
                 || (index + 1 == fields.size() && end != std::string::npos)) {
-                throw std::invalid_argument("--window requires tag,normal|overlay,left,top,width,height.");
+                throw std::invalid_argument("--window requires tag,normal|overlay|desktop,left,top,width,height.");
             }
             fields[index] = value.substr(start, end == std::string::npos ? end : end - start);
             start = end == std::string::npos ? value.size() : end + 1;
@@ -35,10 +36,17 @@ namespace helengine::windows {
         }
         Win32WindowMode mode;
         if (!Win32WindowModeNames::TryParseWindowMode(fields[1], mode)) {
-            throw std::invalid_argument("--window mode must be normal or overlay.");
+            throw std::invalid_argument("--window mode must be normal, overlay or desktop.");
         }
-        return Win32AdditionalWindowSettings(fields[0], mode, ParseInteger(fields[2], false), ParseInteger(fields[3], false),
-            ParseInteger(fields[4], true), ParseInteger(fields[5], true));
+        int left = ParseInteger(fields[2], false);
+        int top = ParseInteger(fields[3], false);
+        int width = ParseInteger(fields[4], true);
+        int height = ParseInteger(fields[5], true);
+        if (mode == Win32WindowMode::Desktop && (static_cast<long long>(left) + width > std::numeric_limits<int>::max()
+            || static_cast<long long>(top) + height > std::numeric_limits<int>::max())) {
+            throw std::invalid_argument("--window desktop bounds exceed the signed screen-coordinate range.");
+        }
+        return Win32AdditionalWindowSettings(fields[0], mode, left, top, width, height);
     }
 
     /// Parses a complete decimal integer; dimensions are limited to the D3D11 texture limit.

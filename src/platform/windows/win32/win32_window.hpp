@@ -3,6 +3,7 @@
 #include <Windows.h>
 
 #include <exception>
+#include <memory>
 #include <string>
 
 #include "platform/windows/win32/win32_dpi_awareness.hpp"
@@ -10,6 +11,7 @@
 
 namespace helengine::windows {
     class Win32ActivityTracker;
+    class Win32DesktopHost;
 
     /// Owns one native Win32 window and the static-to-instance message bridge.
     class Win32Window {
@@ -17,24 +19,24 @@ namespace helengine::windows {
         /// Creates a window wrapper with a title, a requested position and client size, and the style set that decides
         /// how the window is created and shown.
         /// <param name="title">Native window title.</param>
-        /// <param name="left">Screen x of the window's top-left corner; only the overlay style uses it, a normal window
+        /// <param name="left">Screen x of the window's top-left corner; overlay and desktop styles use it, a normal window
         /// keeps the CW_USEDEFAULT placement.</param>
-        /// <param name="top">Screen y of the window's top-left corner; only the overlay style uses it.</param>
+        /// <param name="top">Screen y of the window's top-left corner; overlay and desktop styles use it.</param>
         /// <param name="width">Requested client width in pixels.</param>
         /// <param name="height">Requested client height in pixels.</param>
-        /// <param name="windowStyle">Normal or overlay style set.</param>
+        /// <param name="windowStyle">Normal, overlay or desktop style set.</param>
         Win32Window(const wchar_t* title, int left, int top, int width, int height, const Win32WindowStyle& windowStyle);
 
         /// Releases the native window if it is still alive.
         ~Win32Window();
 
-        /// Registers the window class and creates the native window through the normal or overlay path chosen by the
+        /// Registers the window class and creates the native window through the normal, overlay or desktop path chosen by the
         /// window style. When the process is Per-Monitor v2 aware and the window is a normal window, the window is
         /// then resized so its client area is the requested size in physical pixels at the window's DPI. Any exception a
         /// message handler raised during creation or that correction is rethrown before this returns.
         void Create();
 
-        /// Shows the native window through the normal or overlay path chosen by the window style.
+        /// Shows the native window through the normal, overlay or desktop path chosen by the window style.
         void Show() const;
 
         /// Configures secondary lifetime before creation: closing this window does not quit the process.
@@ -74,6 +76,9 @@ namespace helengine::windows {
         /// failed.
         void RethrowPendingException();
 
+        /// Rejects a lost Explorer attachment for a live desktop child; ordinary windows require no shell host.
+        void ValidateDesktopAttachment() const;
+
     private:
         /// Handles window messages for this instance, first reporting each one to the attached activity tracker when
         /// there is one; the message handling and return values do not depend on the tracker. WM_DPICHANGED, which
@@ -94,6 +99,9 @@ namespace helengine::windows {
         /// Creates the borderless overlay window at the requested position, sized with AdjustWindowRectEx for the
         /// overlay style set.
         void CreateOverlayWindow();
+
+        /// Creates an opaque child in the resolved Explorer wallpaper layer using the requested physical bounds.
+        void CreateDesktopWindow();
 
         /// Resizes a freshly created Per-Monitor v2 normal window so its client area is exactly the requested size in
         /// physical pixels at the window's own DPI: the creation path sizes the frame with AdjustWindowRect, which does
@@ -130,10 +138,10 @@ namespace helengine::windows {
         /// Records whether destroying this window should end the process message loop.
         bool QuitOnDestroy;
 
-        /// Stores the requested screen x of the window's top-left corner; only used by the overlay style.
+        /// Stores the requested screen x of the window's top-left corner; used by overlay and desktop styles.
         int Left;
 
-        /// Stores the requested screen y of the window's top-left corner; only used by the overlay style.
+        /// Stores the requested screen y of the window's top-left corner; used by overlay and desktop styles.
         int Top;
 
         /// Stores the requested initial client width.
@@ -142,11 +150,14 @@ namespace helengine::windows {
         /// Stores the requested initial client height.
         int Height;
 
-        /// Stores the style set that selects the normal or overlay creation and show path.
+        /// Stores the style set that selects the normal, overlay or desktop creation and show path.
         Win32WindowStyle WindowStyle;
 
         /// Stores the native window handle.
         HWND Handle;
+
+        /// Owns the shell-topology resolver for desktop mode; shell windows themselves remain Explorer-owned.
+        std::unique_ptr<Win32DesktopHost> DesktopHost;
 
         /// Accumulates mouse-wheel delta until the input backend consumes it.
         int MouseWheelDelta;
