@@ -19,7 +19,7 @@ namespace helengine::windows {
         void RecordUpdateable(::IUpdateable* item, std::int32_t index, std::uint32_t typeHash,
             std::uint32_t ownerSceneEntityId, std::uint64_t elapsedMicroseconds) override;
         /// Registers the concrete native type outside the timed update loop.
-        void RegisterType(::IUpdateable* item, std::uint32_t typeHash, std::string typeName) override;
+        void RegisterType(::IUpdateable* item, std::uint32_t typeHash, HeCppString typeName) override;
         /// Counts rejected non-monotonic clock samples rather than recording invalid durations.
         void ClockFault() override;
         /// Publishes measured durations and invocation counts after update/draw, then clears frame totals.

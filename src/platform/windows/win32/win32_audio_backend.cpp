@@ -90,7 +90,7 @@ namespace helengine::windows {
             return -1;
         }
 
-        std::string encodingFamilyId = asset->get_EncodingFamilyId();
+        HeCppString encodingFamilyId = asset->get_EncodingFamilyId();
         if (!encodingFamilyId.empty() && encodingFamilyId.rfind("pcm", 0) != 0) {
             return -1;
         }
@@ -166,7 +166,7 @@ namespace helengine::windows {
     }
 
     /// Applies one linear gain value to a named mixer bus.
-    void Win32AudioBackend::SetBusGain(std::string busId, float gain) {
+    void Win32AudioBackend::SetBusGain(HeCppString busId, float gain) {
         std::scoped_lock<std::mutex> lock(VoicesMutex);
         std::string normalizedBusId = NormalizeBusId(busId);
         BusGainsById[normalizedBusId] = ClampGain(gain);
@@ -180,7 +180,7 @@ namespace helengine::windows {
     }
 
     /// Pauses or resumes one named mixer bus.
-    void Win32AudioBackend::SetBusPaused(std::string busId, bool paused) {
+    void Win32AudioBackend::SetBusPaused(HeCppString busId, bool paused) {
         std::scoped_lock<std::mutex> lock(VoicesMutex);
         std::string normalizedBusId = NormalizeBusId(busId);
         BusPausedById[normalizedBusId] = paused;
@@ -282,8 +282,8 @@ namespace helengine::windows {
     }
 
     /// Normalizes one bus identifier into the backend's case-insensitive map key format.
-    std::string Win32AudioBackend::NormalizeBusId(const std::string& busId) {
-        std::string normalizedBusId = busId.empty() ? "master" : busId;
+    std::string Win32AudioBackend::NormalizeBusId(const HeCppString& busId) {
+        std::string normalizedBusId = busId.empty() ? "master" : busId.raw();
         std::transform(
             normalizedBusId.begin(),
             normalizedBusId.end(),

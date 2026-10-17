@@ -163,7 +163,7 @@ namespace helengine::windows {
         RuntimeModel* BuildModelFromRaw(ModelAsset* data) override;
 
         /// Builds a shader-backed runtime material from one packaged raw material asset path.
-        RuntimeMaterial* BuildMaterialFromRawAsset(ContentManager* assetContentManager, std::string materialAssetPath) override;
+        RuntimeMaterial* BuildMaterialFromRawAsset(ContentManager* assetContentManager, HeCppString materialAssetPath) override;
 
         /// Builds a runtime material placeholder that keeps the packaged material identity.
         RuntimeMaterial* BuildMaterialFromRaw(ShaderMaterialAsset* materialAsset, ShaderAsset* shaderAsset) override;
@@ -172,7 +172,7 @@ namespace helengine::windows {
         ShaderCompileTarget get_ShaderCompileTarget() override;
 
         /// Invalidates cached shader resources that were built from one shader asset.
-        void InvalidateShaderResources(std::string shaderAssetId, ShaderAsset* shaderAsset) override;
+        void InvalidateShaderResources(HeCppString shaderAssetId, ShaderAsset* shaderAsset) override;
 
         /// Releases one runtime model previously created by the Windows renderer.
         void ReleaseModel(RuntimeModel* model) override;
@@ -212,13 +212,13 @@ namespace helengine::windows {
         Win32ShaderResource BuildShaderResource(ShaderMaterialAsset* materialAsset, ShaderAsset* shaderAsset);
 
         /// Builds Direct3D input elements from the vertex signature exposed by a shader program.
-        std::vector<D3D11_INPUT_ELEMENT_DESC> BuildInputElements(ShaderAsset* shaderAsset, std::string vertexProgram, std::string variant, std::vector<std::string>& semanticStorage);
+        std::vector<D3D11_INPUT_ELEMENT_DESC> BuildInputElements(ShaderAsset* shaderAsset, HeCppString vertexProgram, HeCppString variant, std::vector<std::string>& semanticStorage);
 
         /// Resolves one shader binary for the requested shader program, stage, and variant.
-        ShaderBinaryAsset* GetShaderBinary(ShaderAsset* shaderAsset, std::string programName, ShaderStage stage, std::string variant);
+        ShaderBinaryAsset* GetShaderBinary(ShaderAsset* shaderAsset, HeCppString programName, ShaderStage stage, HeCppString variant);
 
         /// Resolves the DirectX input format for one shader vertex element format string.
-        DXGI_FORMAT ResolveVertexElementFormat(std::string format) const;
+        DXGI_FORMAT ResolveVertexElementFormat(HeCppString format) const;
 
         /// Clears and renders one camera directly into the main back buffer.
         void RenderCamera(ICamera* camera, bool clearColorBuffer);
@@ -263,7 +263,7 @@ namespace helengine::windows {
         void BindMaterialTextures(RuntimeMaterial* material);
 
         /// Resolves one runtime texture for the requested material binding name after applying parent-material inheritance.
-        RuntimeTexture* ResolveMaterialTexture(ShaderRuntimeMaterial* material, std::string bindingName);
+        RuntimeTexture* ResolveMaterialTexture(ShaderRuntimeMaterial* material, HeCppString bindingName);
 
         /// Resolves an uploaded shader resource view for one runtime texture.
         ID3D11ShaderResourceView* ResolveTextureResourceView(RuntimeTexture* texture) const;
@@ -272,10 +272,10 @@ namespace helengine::windows {
         ID3D11Buffer* GetOrCreateMaterialConstantBuffer(int32_t slot, int32_t sizeInBytes);
 
         /// Returns whether one constant-buffer binding is owned by the renderer instead of material-authored property data.
-        static bool IsEngineManagedConstantBufferBinding(std::string bindingName);
+        static bool IsEngineManagedConstantBufferBinding(HeCppString bindingName);
 
         /// Returns whether one texture binding is owned by the renderer instead of material-authored property data.
-        static bool IsEngineManagedTextureBinding(std::string bindingName);
+        static bool IsEngineManagedTextureBinding(HeCppString bindingName);
 
         /// Resolves one unified material texture slot back to the native DirectX11 register index.
         static int32_t ResolveDirectX11TextureBindingSlot(int32_t unifiedSlot);

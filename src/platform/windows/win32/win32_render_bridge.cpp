@@ -845,23 +845,23 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
         }
 
         /// Appends one one-line message to the first-frame Windows render snapshot log.
-        void AppendRenderSnapshotLine(const std::string& line) {
+        void AppendRenderSnapshotLine(const HeCppString& line) {
             std::ofstream stream(ResolveRenderSnapshotLogPath(), std::ios::app);
             if (!stream.is_open()) {
                 return;
             }
 
-            stream << line << '\n';
+            stream << line.raw() << '\n';
         }
 
         /// Appends one line to the packaged Windows render diagnostics log.
-        void AppendRenderDiagnosticsLine(const std::string& line) {
+        void AppendRenderDiagnosticsLine(const HeCppString& line) {
             std::ofstream stream(ResolveRenderDiagnosticsLogPath(), std::ios::app);
             if (!stream.is_open()) {
                 return;
             }
 
-            stream << line << '\n';
+            stream << line.raw() << '\n';
         }
 
         /// Returns whether one scalar is within the supplied tolerance of the expected value.
@@ -974,10 +974,10 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
 #if __has_include("RuntimeSceneLoadService.hpp")
             if (Core::get_Instance() != nullptr && Core::get_Instance()->get_SceneLoadService() != nullptr) {
                 RuntimeSceneLoadService* sceneLoadService = Core::get_Instance()->get_SceneLoadService();
-                builder << " scene_load_stage=" << sceneLoadService->get_LastTraceStage();
+                builder << " scene_load_stage=" << sceneLoadService->get_LastTraceStage().raw();
                 builder << " root_entity_index=" << sceneLoadService->get_LastTraceRootEntityIndex();
                 builder << " entity_depth=" << sceneLoadService->get_LastTraceEntityDepth();
-                builder << " component_type=" << sceneLoadService->get_LastTraceComponentTypeId();
+                builder << " component_type=" << sceneLoadService->get_LastTraceComponentTypeId().raw();
             }
 #endif
 
@@ -988,15 +988,15 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
 
             builder << " source=generated";
 #if __has_include("FontAssetBinarySerializer.hpp")
-            const std::string fontDeserializeStage = FontAssetBinarySerializer::get_LastDeserializeStage();
+            const std::string fontDeserializeStage = FontAssetBinarySerializer::get_LastDeserializeStage().raw();
             if (fontDeserializeStage == "BuildRuntimeTexture") {
                 builder << " generated_kind=font_atlas";
                 builder << " font_deserialize_stage=" << fontDeserializeStage;
 #if __has_include("RuntimeSceneAssetReferenceResolver.hpp")
                 if (Core::get_Instance() != nullptr && Core::get_Instance()->get_SceneAssetReferenceResolver() != nullptr) {
                     RuntimeSceneAssetReferenceResolver* referenceResolver = Core::get_Instance()->get_SceneAssetReferenceResolver();
-                    builder << " text_font_relative_path=" << referenceResolver->get_LastTextFontRelativePath();
-                    builder << " text_font_load_stage=" << referenceResolver->get_LastTextLoadStage();
+                    builder << " text_font_relative_path=" << referenceResolver->get_LastTextFontRelativePath().raw();
+                    builder << " text_font_load_stage=" << referenceResolver->get_LastTextLoadStage().raw();
                 }
 #endif
                 return builder.str();
@@ -1088,7 +1088,7 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
     RuntimeModel* Win32RenderManager3D::BuildModelFromRaw(ModelAsset* data) {
         Win32RuntimeModel* runtimeModel = new Win32RuntimeModel();
         if (data != nullptr) {
-            std::string modelId = data->get_Id();
+            HeCppString modelId = data->get_Id();
             runtimeModel->set_Id(modelId);
 #if __has_include("ModelSubmeshResolver.hpp")
             // Preserve authored draw ranges so each material slot renders its own geometry.
@@ -1180,7 +1180,7 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
 
             RuntimeRenderDiagnostics::RecordAssetBuild(
                 "model",
-                modelId,
+                modelId.raw(),
                 "positions=" + std::to_string(positionCount)
                     + " normals=" + std::to_string(normalCount)
                     + " texcoords=" + std::to_string(texCoordCount)
@@ -1232,7 +1232,7 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
         return runtimeModel;
     }
 
-    RuntimeMaterial* Win32RenderManager3D::BuildMaterialFromRawAsset(ContentManager* assetContentManager, std::string materialAssetPath) {
+    RuntimeMaterial* Win32RenderManager3D::BuildMaterialFromRawAsset(ContentManager* assetContentManager, HeCppString materialAssetPath) {
         return ShaderRuntimeMaterialLoader::BuildMaterialFromRawAsset(this, assetContentManager, materialAssetPath);
     }
 
@@ -1254,7 +1254,7 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
             throw new InvalidOperationException("Material asset shader id does not match the provided shader asset.");
         }
 
-        std::string materialId = materialAsset->get_Id();
+        HeCppString materialId = materialAsset->get_Id();
         if (materialId.empty()) {
             materialId = shaderAsset->get_Id();
         }
@@ -1288,15 +1288,15 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
             }
         }
 
-        MaterialShaderResources[materialId] = std::make_unique<Win32ShaderResource>(BuildShaderResource(materialAsset, shaderAsset));
+        MaterialShaderResources[materialId.raw()] = std::make_unique<Win32ShaderResource>(BuildShaderResource(materialAsset, shaderAsset));
         if (!HasWrittenRenderSnapshot) {
             AppendRenderDiagnosticsLine(
                 "3d.material_shader_asset_id=" + materialId + " shader_asset_id=" + shaderAsset->get_Id());
         }
         RuntimeRenderDiagnostics::RecordAssetBuild(
             "material",
-            materialId,
-            "shader_asset_id=" + shaderAsset->get_Id()
+            materialId.raw(),
+            "shader_asset_id=" + shaderAsset->get_Id().raw()
                 + " authored_constant_buffer_count=" + std::to_string(authoredConstantBufferCount)
                 + " authored_constant_buffer_bytes=" + std::to_string(authoredConstantBufferBytes)
                 + " live_material_shader_resources=" + std::to_string(MaterialShaderResources.size())
@@ -1312,7 +1312,7 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
     }
 
     /// Invalidates cached shader resources that were built from one shader asset.
-    void Win32RenderManager3D::InvalidateShaderResources(std::string shaderAssetId, ShaderAsset* shaderAsset) {
+    void Win32RenderManager3D::InvalidateShaderResources(HeCppString shaderAssetId, ShaderAsset* shaderAsset) {
         if (String::IsNullOrWhiteSpace(shaderAssetId)) {
             throw new ArgumentException("Shader asset id must be provided.", "shaderAssetId");
         }
@@ -1339,7 +1339,7 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
             throw std::invalid_argument("Runtime model must be provided for release.");
         }
 
-        const std::string modelId = model->get_Id();
+        const std::string modelId = model->get_Id().raw();
         Win32RuntimeModel* win32Model = static_cast<Win32RuntimeModel*>(model);
         RuntimeRenderDiagnostics::RecordAssetReleaseRequested(
             "model",
@@ -1387,7 +1387,7 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
             throw std::invalid_argument("Runtime material must be provided for release.");
         }
 
-        const std::string materialId = material->get_Id();
+        const std::string materialId = material->get_Id().raw();
         RuntimeRenderDiagnostics::RecordAssetReleaseRequested("material", materialId, "renderer=windows");
         if (!materialId.empty()) {
             MaterialShaderResources.erase(materialId);
@@ -1656,7 +1656,7 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
             ProbeCubeDebugSlots[static_cast<std::size_t>(probeCubeSlotIndex)].FrameCount++;
             AppendRenderDiagnosticsLine(
                 "ProbeCube[" + std::to_string(probeCubeSlotIndex) + "] frame=" + std::to_string(ProbeCubeDebugSlots[static_cast<std::size_t>(probeCubeSlotIndex)].FrameCount)
-                + " material=" + (snapshotRootMaterial != nullptr ? snapshotRootMaterial->get_Id() : std::string("<null>"))
+                + " material=" + (snapshotRootMaterial != nullptr ? snapshotRootMaterial->get_Id().raw() : std::string("<null>"))
                 + " world position="
                 + std::to_string(position.X) + "," + std::to_string(position.Y) + "," + std::to_string(position.Z)
                 + " scale="
@@ -1720,7 +1720,7 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
             }
 #endif
 
-            std::string snapshotMaterialId = snapshotRootMaterial != nullptr ? snapshotRootMaterial->get_Id() : std::string("<null>");
+            std::string snapshotMaterialId = snapshotRootMaterial != nullptr ? snapshotRootMaterial->get_Id().raw() : std::string("<null>");
             AppendRenderSnapshotLine(
                 "drawable[" + std::to_string(Logged3DVisitCount) + "] position=" + std::to_string(position.X) + "," + std::to_string(position.Y) + "," + std::to_string(position.Z) +
                 " scale=" + std::to_string(scale.X) + "," + std::to_string(scale.Y) + "," + std::to_string(scale.Z) +
@@ -1761,7 +1761,7 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
                 RuntimeMaterial* rootMaterial = runtimeMaterial != nullptr ? runtimeMaterial->ResolveRootMaterial() : nullptr;
                 Win32ShaderResource* shaderResource = nullptr;
                 if (rootMaterial != nullptr) {
-                    std::string materialId = rootMaterial->get_Id();
+                    std::string materialId = rootMaterial->get_Id().raw();
                     if (!materialId.empty()) {
                         auto materialResource = MaterialShaderResources.find(materialId);
                         if (materialResource != MaterialShaderResources.end()) {
@@ -1833,8 +1833,8 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
                 }
             }
         } catch (const std::bad_alloc&) {
-            std::string materialId = snapshotRootMaterial != nullptr ? snapshotRootMaterial->get_Id() : std::string("<null>");
-            std::string modelId = modelBase != nullptr ? modelBase->get_Id() : std::string("<null>");
+            std::string materialId = snapshotRootMaterial != nullptr ? snapshotRootMaterial->get_Id().raw() : std::string("<null>");
+            std::string modelId = modelBase != nullptr ? modelBase->get_Id().raw() : std::string("<null>");
             RuntimeRenderDiagnostics::WriteHostEvent(
                 "render-bad-alloc",
                 "stage=" + std::string(visitStage)
@@ -2786,8 +2786,8 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
     /// Builds Direct3D input elements from the vertex signature exposed by a shader program.
     std::vector<D3D11_INPUT_ELEMENT_DESC> Win32RenderManager3D::BuildInputElements(
         ShaderAsset* shaderAsset,
-        std::string vertexProgram,
-        std::string variant,
+        HeCppString vertexProgram,
+        HeCppString variant,
         std::vector<std::string>& semanticStorage) {
         if (shaderAsset == nullptr) {
             throw new ArgumentNullException("shaderAsset");
@@ -2839,7 +2839,7 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
                 throw new InvalidOperationException("Shader program input elements contain a null entry.");
             }
 
-            semanticStorage.push_back(element->Semantic);
+            semanticStorage.push_back(element->Semantic.raw());
             D3D11_INPUT_ELEMENT_DESC inputElement {};
             inputElement.SemanticName = semanticStorage.back().c_str();
             inputElement.SemanticIndex = static_cast<UINT>(element->Index);
@@ -2875,7 +2875,7 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
     }
 
     /// Resolves one shader binary for the requested shader program, stage, and variant.
-    ShaderBinaryAsset* Win32RenderManager3D::GetShaderBinary(ShaderAsset* shaderAsset, std::string programName, ShaderStage stage, std::string variant) {
+    ShaderBinaryAsset* Win32RenderManager3D::GetShaderBinary(ShaderAsset* shaderAsset, HeCppString programName, ShaderStage stage, HeCppString variant) {
         if (shaderAsset == nullptr) {
             throw new ArgumentNullException("shaderAsset");
         }
@@ -2917,7 +2917,7 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
     }
 
     /// Resolves the DirectX input format for one shader vertex element format string.
-    DXGI_FORMAT Win32RenderManager3D::ResolveVertexElementFormat(std::string format) const {
+    DXGI_FORMAT Win32RenderManager3D::ResolveVertexElementFormat(HeCppString format) const {
         if (String::Equals(format, "float", StringComparison::OrdinalIgnoreCase) ||
             String::Equals(format, "float1", StringComparison::OrdinalIgnoreCase)) {
             return DXGI_FORMAT_R32_FLOAT;
@@ -2957,7 +2957,7 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
             throw new InvalidOperationException("Runtime materials must resolve to a root material.");
         }
 
-        std::string materialId = rootMaterial->get_Id();
+        std::string materialId = rootMaterial->get_Id().raw();
         if (materialId.empty()) {
             throw new InvalidOperationException("Runtime materials must have an identifier before rendering.");
         }
@@ -3039,7 +3039,7 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
                 continue;
             }
 
-            std::string bindingName = binding->get_Name();
+            HeCppString bindingName = binding->get_Name();
             if (IsEngineManagedConstantBufferBinding(bindingName)) {
                 if (!HasWrittenRenderSnapshot) {
                     AppendRenderDiagnosticsLine(
@@ -3078,7 +3078,7 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
     }
 
     /// Resolves one runtime texture for the requested material binding name after applying parent-material inheritance.
-    RuntimeTexture* Win32RenderManager3D::ResolveMaterialTexture(ShaderRuntimeMaterial* material, std::string bindingName) {
+    RuntimeTexture* Win32RenderManager3D::ResolveMaterialTexture(ShaderRuntimeMaterial* material, HeCppString bindingName) {
         if (material == nullptr) {
             throw new ArgumentNullException("material");
         }
@@ -3136,7 +3136,7 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
                 continue;
             }
 
-            std::string bindingName = binding->get_Name();
+            HeCppString bindingName = binding->get_Name();
             if (IsEngineManagedTextureBinding(bindingName)) {
                 continue;
             }
@@ -3181,7 +3181,7 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
             return nullptr;
         }
 
-        const std::string& textureId = texture->get_Id();
+        const std::string& textureId = texture->get_Id().raw();
         if (textureId.empty()) {
             return nullptr;
         }
@@ -3233,14 +3233,14 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
     }
 
     /// Returns whether one constant-buffer binding is owned by the renderer instead of material-authored property data.
-    bool Win32RenderManager3D::IsEngineManagedConstantBufferBinding(std::string bindingName) {
+    bool Win32RenderManager3D::IsEngineManagedConstantBufferBinding(HeCppString bindingName) {
         return bindingName == "TransformBuffer"
             || bindingName == "ForwardLightBuffer"
             || bindingName == "ShadowBuffer";
     }
 
     /// Returns whether one texture binding is owned by the renderer instead of material-authored property data.
-    bool Win32RenderManager3D::IsEngineManagedTextureBinding(std::string bindingName) {
+    bool Win32RenderManager3D::IsEngineManagedTextureBinding(HeCppString bindingName) {
         return bindingName == ShadowAtlasTextureBindingName
             || bindingName == PointShadowTextureBindingName0
             || bindingName == PointShadowTextureBindingName1
@@ -4181,7 +4181,7 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
             throw new ArgumentNullException("data");
         }
 
-        std::string textureId = data->get_Id();
+        std::string textureId = data->get_Id().raw();
         if (textureId.empty()) {
             textureId = BuildGeneratedTextureResourceId();
         }
@@ -4354,7 +4354,7 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
         }
 
         Win32TextureResource* ownedResource = owner->second;
-        const std::string textureId = texture->get_Id();
+        const std::string textureId = texture->get_Id().raw();
         const bool isEngineOwned = texture->get_IsEngineOwned();
         RuntimeRenderDiagnostics::RecordAssetReleaseRequested("texture", textureId, "renderer=windows");
         RuntimeTextureResourceOwners.erase(owner);
@@ -4462,7 +4462,7 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
             auto owner = RuntimeTextureResourceOwners.begin();
             RuntimeTexture* runtimeTexture = owner->first;
             Win32TextureResource* ownedResource = owner->second;
-            const std::string textureId = runtimeTexture->get_Id();
+            const std::string textureId = runtimeTexture->get_Id().raw();
             const bool isEngineOwned = runtimeTexture->get_IsEngineOwned();
             RuntimeTextureResourceOwners.erase(owner);
 
@@ -4578,7 +4578,7 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
             return;
         }
 
-        std::string value = text->get_Text();
+        HeCppString value = text->get_Text();
         if (value.empty()) {
             if (!HasWritten2DSummary) {
                 Logged2DTextEarlyReturnCount++;

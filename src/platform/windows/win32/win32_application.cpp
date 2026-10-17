@@ -264,7 +264,7 @@ namespace helengine::windows {
                 snapshot->set_DetailMetrics(nullptr);
             }
 
-            List<std::string>* trackedSceneIds = snapshot->get_TrackedSceneIds();
+            List<HeCppString>* trackedSceneIds = snapshot->get_TrackedSceneIds();
             if (trackedSceneIds != nullptr) {
                 delete trackedSceneIds;
                 snapshot->set_TrackedSceneIds(nullptr);
@@ -1340,7 +1340,7 @@ namespace helengine::windows {
 
         {
             std::ostringstream messageBuilder;
-            messageBuilder << "Loading startup scene from runtime scene catalog entry '" << startupEntry->get_SceneId() << "'.";
+            messageBuilder << "Loading startup scene from runtime scene catalog entry '" << startupEntry->get_SceneId().raw() << "'.";
             std::string message = messageBuilder.str();
             WriteLifecycleLog(message.c_str());
         }
@@ -1570,7 +1570,7 @@ namespace helengine::windows {
                             continue;
                         }
 
-                        const std::string& metricName = detailMetric->get_Name();
+                        const std::string& metricName = detailMetric->get_Name().raw();
                         std::uint64_t metricValue = detailMetric->get_Value();
                         if (metricName == "pagefile_usage_bytes") {
                             nativeSnapshot.PagefileUsageBytes = metricValue;
@@ -1612,7 +1612,7 @@ namespace helengine::windows {
             return std::string();
         }
 
-        List<std::string>* sceneIds = EngineCore->get_SceneManager()->GetLoadedSceneIds();
+        List<HeCppString>* sceneIds = EngineCore->get_SceneManager()->GetLoadedSceneIds();
         if (sceneIds == nullptr || sceneIds->get_Count() == 0) {
             delete sceneIds;
             return std::string();
@@ -1624,7 +1624,7 @@ namespace helengine::windows {
                 builder << ",";
             }
 
-            builder << (*sceneIds)[index];
+            builder << (*sceneIds)[index].raw();
         }
 
         std::string trackedSceneIds = builder.str();
@@ -1682,34 +1682,34 @@ namespace helengine::windows {
         std::string fontDeserializeStage;
 
         if (EngineCore != nullptr) {
-            coreStage = EngineCore->get_LastSceneTransitionStage();
+            coreStage = EngineCore->get_LastSceneTransitionStage().raw();
             SceneManager* sceneManager = EngineCore->get_SceneManager();
             if (sceneManager != nullptr) {
-                sceneManagerStage = sceneManager->get_LastTraceStage();
-                sceneManagerSceneId = sceneManager->get_LastTraceSceneId();
+                sceneManagerStage = sceneManager->get_LastTraceStage().raw();
+                sceneManagerSceneId = sceneManager->get_LastTraceSceneId().raw();
                 loadedSceneCount = sceneManager->get_LastTraceLoadedSceneCount();
                 pendingOperationCount = sceneManager->get_LastTracePendingOperationCount();
             }
 
             RuntimeSceneLoadService* sceneLoadService = EngineCore->get_SceneLoadService();
             if (sceneLoadService != nullptr) {
-                sceneLoadStage = sceneLoadService->get_LastTraceStage();
+                sceneLoadStage = sceneLoadService->get_LastTraceStage().raw();
                 rootEntityIndex = sceneLoadService->get_LastTraceRootEntityIndex();
                 entityDepth = sceneLoadService->get_LastTraceEntityDepth();
-                componentTypeId = sceneLoadService->get_LastTraceComponentTypeId();
+                componentTypeId = sceneLoadService->get_LastTraceComponentTypeId().raw();
             }
 
 #if __has_include("RuntimeSceneAssetReferenceResolver.hpp")
             RuntimeSceneAssetReferenceResolver* referenceResolver = EngineCore->get_SceneAssetReferenceResolver();
             if (referenceResolver != nullptr) {
-                textureRelativePath = referenceResolver->get_LastTextureRelativePath();
-                textureLoadStage = referenceResolver->get_LastTextureLoadStage();
-                textFontRelativePath = referenceResolver->get_LastTextFontRelativePath();
-                textFontLoadStage = referenceResolver->get_LastTextLoadStage();
+                textureRelativePath = referenceResolver->get_LastTextureRelativePath().raw();
+                textureLoadStage = referenceResolver->get_LastTextureLoadStage().raw();
+                textFontRelativePath = referenceResolver->get_LastTextFontRelativePath().raw();
+                textFontLoadStage = referenceResolver->get_LastTextLoadStage().raw();
             }
 #endif
 #if __has_include("FontAssetBinarySerializer.hpp")
-            fontDeserializeStage = FontAssetBinarySerializer::get_LastDeserializeStage();
+            fontDeserializeStage = FontAssetBinarySerializer::get_LastDeserializeStage().raw();
 #endif
         }
 
@@ -1749,7 +1749,7 @@ namespace helengine::windows {
             return;
         }
 
-        std::string coreStage = EngineCore->get_LastSceneTransitionStage();
+        std::string coreStage = EngineCore->get_LastSceneTransitionStage().raw();
         std::string sceneManagerStage;
         std::string sceneManagerSceneId;
         int loadedSceneCount = -1;
@@ -1761,16 +1761,16 @@ namespace helengine::windows {
 
         SceneManager* sceneManager = EngineCore->get_SceneManager();
         if (sceneManager != nullptr) {
-            sceneManagerStage = sceneManager->get_LastTraceStage();
-            sceneManagerSceneId = sceneManager->get_LastTraceSceneId();
+            sceneManagerStage = sceneManager->get_LastTraceStage().raw();
+            sceneManagerSceneId = sceneManager->get_LastTraceSceneId().raw();
             loadedSceneCount = sceneManager->get_LastTraceLoadedSceneCount();
             pendingOperationCount = sceneManager->get_LastTracePendingOperationCount();
         }
 
         RuntimeSceneLoadService* sceneLoadService = EngineCore->get_SceneLoadService();
         if (sceneLoadService != nullptr) {
-            sceneLoadStage = sceneLoadService->get_LastTraceStage();
-            componentTypeId = sceneLoadService->get_LastTraceComponentTypeId();
+            sceneLoadStage = sceneLoadService->get_LastTraceStage().raw();
+            componentTypeId = sceneLoadService->get_LastTraceComponentTypeId().raw();
             rootEntityIndex = sceneLoadService->get_LastTraceRootEntityIndex();
             entityDepth = sceneLoadService->get_LastTraceEntityDepth();
         }

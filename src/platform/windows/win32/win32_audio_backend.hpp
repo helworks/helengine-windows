@@ -35,10 +35,10 @@ namespace helengine::windows {
         int32_t Play(::AudioAsset* asset, ::AudioPlaybackRequest* request) override;
 
         /// Applies one linear gain value to a named mixer bus.
-        void SetBusGain(std::string busId, float gain) override;
+        void SetBusGain(HeCppString busId, float gain) override;
 
         /// Pauses or resumes one named mixer bus.
-        void SetBusPaused(std::string busId, bool paused) override;
+        void SetBusPaused(HeCppString busId, bool paused) override;
 
         /// Stops one active backend voice.
         void Stop(int32_t voiceId) override;
@@ -74,7 +74,7 @@ namespace helengine::windows {
         void MarkVoiceCompleted(int32_t voiceId);
 
         /// Normalizes one bus identifier into the backend's case-insensitive map key format.
-        static std::string NormalizeBusId(const std::string& busId);
+        static std::string NormalizeBusId(const HeCppString& busId);
 
         /// Clamps one runtime gain value into the backend-supported linear gain range.
         static float ClampGain(float gain);

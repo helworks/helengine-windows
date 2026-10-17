@@ -58,7 +58,7 @@ namespace helengine::windows {
     }
 
     /// Uses RTTI for the actual derived type because the generated managed type name can be interface-erased.
-    void WindowsCpuProfileSink::RegisterType(::IUpdateable* item, std::uint32_t typeHash, std::string typeName) {
+    void WindowsCpuProfileSink::RegisterType(::IUpdateable* item, std::uint32_t typeHash, HeCppString typeName) {
         (void)typeHash;
         if (item == nullptr) {
             throw std::invalid_argument("CPU profiling registration requires an updateable.");
@@ -72,8 +72,8 @@ namespace helengine::windows {
         const char* nativeName = typeid(*item).name();
         if (nativeName != nullptr && nativeName[0] != '\0') {
             typeName = nativeName;
-            if (typeName.starts_with("class ")) typeName.erase(0, 6);
-            else if (typeName.starts_with("struct ")) typeName.erase(0, 7);
+            if (typeName.rfind("class ", 0) == 0) typeName.erase(0, 6);
+            else if (typeName.rfind("struct ", 0) == 0) typeName.erase(0, 7);
         }
         auto& row = Components[ComponentCount];
         if (typeName.size() >= sizeof(row.TypeName)) {
