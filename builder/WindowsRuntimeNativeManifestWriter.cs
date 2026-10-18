@@ -523,7 +523,7 @@ public sealed class WindowsRuntimeNativeManifestWriter {
     /// <param name="selectedGraphicsOptionValues">Resolved graphics-profile option values selected for the build.</param>
     /// <param name="optionId">Stable option identifier to resolve.</param>
     /// <returns>Parsed positive integer value.</returns>
-    static int ResolveRequiredPositiveIntegerOption(IReadOnlyDictionary<string, string> selectedGraphicsOptionValues, string optionId) {
+    internal static int ResolveRequiredPositiveIntegerOption(IReadOnlyDictionary<string, string> selectedGraphicsOptionValues, string optionId) {
         if (!TryGetOptionValue(selectedGraphicsOptionValues, optionId, out string value) || string.IsNullOrWhiteSpace(value)) {
             throw new InvalidOperationException($"Required Windows graphics option '{optionId}' was not provided to the native manifest writer.");
         }

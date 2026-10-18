@@ -12,7 +12,7 @@ namespace helengine.windows.builder;
 /// <summary>
 /// Implements the Windows platform asset builder contract.
 /// </summary>
-public sealed class WindowsPlatformAssetBuilder : IPlatformAssetBuilder {
+public sealed class WindowsPlatformAssetBuilder : IPlatformAssetBuilder, IPlatformLayoutTargetProvider {
     /// <summary>
     /// Stable material field identifier used for the authored base color.
     /// </summary>
@@ -295,6 +295,17 @@ public sealed class WindowsPlatformAssetBuilder : IPlatformAssetBuilder {
         writer.WriteSingle(value.W);
         return stream.ToArray();
     }
+    /// <summary>Uses exactly the framebuffer options consumed by the native startup manifest.</summary>
+    /// <param name="request">Captured selected profiles and effective graphics values.</param>
+    /// <returns>Known initial framebuffer geometry without guessing the monitor DPI.</returns>
+    public PlatformLayoutTarget ResolveLayoutTarget(PlatformLayoutTargetRequest request) {
+        ArgumentNullException.ThrowIfNull(request);
+        return new PlatformLayoutTarget(
+            WindowsRuntimeNativeManifestWriter.ResolveRequiredPositiveIntegerOption(request.GraphicsOptionValues, "default-width"),
+            WindowsRuntimeNativeManifestWriter.ResolveRequiredPositiveIntegerOption(request.GraphicsOptionValues, "default-height"),
+            1d, false, 0d, 1d);
+    }
+
 }
 
 
