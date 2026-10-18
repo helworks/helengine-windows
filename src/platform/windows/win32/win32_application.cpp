@@ -2164,6 +2164,7 @@ namespace helengine::windows {
         if (snapshot->get_HasPhysicsConstraintCount()) {
             HELENGINE_TRACY_PLOT("Physics.Constraints", snapshot->get_PhysicsConstraintCount());
         }
+#if __has_include("BepuPhysicsWorld3D.hpp")
         if (snapshot->get_FixedUpdateCount() > 0) {
             BepuPhysicsWorld3D* bepuWorld = dynamic_cast<BepuPhysicsWorld3D*>(EngineCore->get_PhysicsRuntime());
             if (bepuWorld != nullptr) {
@@ -2173,6 +2174,7 @@ namespace helengine::windows {
                 HELENGINE_TRACY_PLOT("Physics.Bepu.AwakeDynamicBodies", bepuWorld->get_AwakeDynamicBodyCount());
             }
         }
+#endif
         if (snapshot->get_HasDrawCallCount()) {
             HELENGINE_TRACY_PLOT("Render.DrawCalls", snapshot->get_DrawCallCount());
         }
