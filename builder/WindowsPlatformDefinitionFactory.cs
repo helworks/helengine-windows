@@ -334,7 +334,8 @@ public static class WindowsPlatformDefinitionFactory {
                             "true",
                             true,
                             [])
-                    ])
+                    ], new PlatformNumericCapabilities(helengine.NumericPrecisionPolicy.Default,
+                        [new(32, 32), new(64, 64)]))
             ],
             [
                 new PlatformStorageProfileDefinition(

@@ -50,7 +50,7 @@ namespace helengine::windows {
 
     /// Parses the given argument vector, skipping arguments[0] (the executable path). When no argument is a known
     /// flag (--scene, --frames, --fixed-delta, --capture, --capture-every, --idle-throttle, --idle-after-ms, --idle-fps,
-    /// --window-mode, --overlay-bounds, --overlay-background, --hit-test-probe, --dpi-awareness), nothing is
+    /// --window-visibility, --window-mode, --overlay-bounds, --overlay-background, --hit-test-probe, --dpi-awareness), nothing is
     /// validated: the arguments are only kept as ignored text (see GetIgnoredArguments) so launches that pass
     /// unrelated arguments, such as a file path split by CommandLineToArgvW, keep working exactly as before. Once
     /// any known flag is present, validation is strict: each flag takes exactly one value, and unknown, repeated or
@@ -93,7 +93,16 @@ namespace helengine::windows {
             }
 
             std::wstring value = arguments[index + 1];
-            if (flag == L"--scene") {
+            if (flag == L"--window-visibility") {
+                if (options.WindowVisibilitySupplied) {
+                    throw std::invalid_argument("Command-line flag --window-visibility was given more than once.");
+                }
+                if (value != L"hidden" && value != L"visible") {
+                    throw std::invalid_argument("Command-line flag --window-visibility requires hidden or visible.");
+                }
+                options.WindowVisible = value == L"visible";
+                options.WindowVisibilitySupplied = true;
+            } else if (flag == L"--scene") {
                 if (options.SceneSupplied) {
                     throw std::invalid_argument("Command-line flag --scene was given more than once.");
                 }
@@ -234,6 +243,11 @@ namespace helengine::windows {
             LocalFree(arguments);
             throw;
         }
+    }
+
+    /// Preserves normal presentation unless the launch explicitly requested a hidden validation window.
+    bool Win32CommandLineOptions::ShouldShowWindow() const {
+        return WindowVisible;
     }
 
     /// Gets whether --scene was supplied to override the packaged startup scene.
@@ -392,10 +406,10 @@ namespace helengine::windows {
     }
 
     /// Returns whether the argument is one of the regression flags (--scene, --frames, --fixed-delta, --capture, --capture-every,
-    /// --idle-throttle, --idle-after-ms, --idle-fps, --window-mode, --overlay-bounds, --overlay-background,
+    /// --idle-throttle, --idle-after-ms, --idle-fps, --window-visibility, --window-mode, --overlay-bounds, --overlay-background,
     /// --hit-test-probe, --dpi-awareness).
     bool Win32CommandLineOptions::IsKnownFlag(const std::wstring& argument) {
-        return argument == L"--scene" || argument == L"--frames" || argument == L"--fixed-delta" || argument == L"--capture" || argument == L"--capture-every"
+        return argument == L"--window-visibility" || argument == L"--scene" || argument == L"--frames" || argument == L"--fixed-delta" || argument == L"--capture" || argument == L"--capture-every"
             || argument == L"--idle-throttle" || argument == L"--idle-after-ms" || argument == L"--idle-fps"
             || argument == L"--window-mode" || argument == L"--overlay-bounds" || argument == L"--overlay-background"
             || argument == L"--hit-test-probe" || argument == L"--dpi-awareness" || argument == L"--window";

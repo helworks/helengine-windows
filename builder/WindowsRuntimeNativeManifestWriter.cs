@@ -170,6 +170,11 @@ public sealed class WindowsRuntimeNativeManifestWriter {
         builder.AppendLine("#include \"runtime/runtime_startup_manifest.hpp\"");
         builder.AppendLine("#include \"PlatformSettingsSerializer.hpp\"");
         builder.AppendLine("#include <cstdint>");
+        builder.AppendLine("#include \"helcpp_config.hpp\"");
+        builder.AppendLine("static_assert(HE_CPP_REAL_STORAGE_BITS == " + manifest.NumericPolicy.StorageBits + ", \"Cook/Core numeric storage mismatch\");");
+        builder.AppendLine("static_assert(HE_CPP_REAL_ARITHMETIC_BITS == " + manifest.NumericPolicy.ArithmeticBits + ", \"Cook/Core numeric arithmetic mismatch\");");
+        builder.AppendLine("static_assert(HE_CPP_REAL_REPRESENTATION_VERSION == " + manifest.NumericPolicy.RepresentationVersion + ", \"Cook/Core numeric version mismatch\");");
+
         builder.AppendLine();
         builder.AppendLine("static const char kRuntimeStartupSceneRelativePath[] = \"" + EscapeCppStringLiteral(startupSceneRelativePath) + "\";");
         builder.AppendLine("static const char kRuntimePlatformName[] = \"" + EscapeCppStringLiteral(manifest.PlatformName) + "\";");

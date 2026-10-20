@@ -322,6 +322,15 @@ namespace helengine::windows {
             DirectX::XMFLOAT4X4 WorldViewProjection;
         };
 
+        // The GPU contract remains IEEE32 even when the engine's Real policy is binary64.
+        static_assert(sizeof(Win32VertexPositionNormalUV) == 32);
+        static_assert(sizeof(Win32TransformConstants) == 304);
+        static_assert(sizeof(Win32ForwardLightSlotConstants) == 64);
+        static_assert(sizeof(Win32ForwardLightConstants) == 288);
+        static_assert(sizeof(Win32ShadowLightSlotConstants) == 96);
+        static_assert(sizeof(Win32ShadowConstants) == 400);
+        static_assert(sizeof(Win32ShadowTransformConstants) == 64);
+
         /// Stores the fixed resolution used by the first native directional shadow map.
         constexpr UINT DirectionalShadowMapResolution = 1024;
 
@@ -632,6 +641,7 @@ float4 PSMain() : SV_TARGET {
             DirectX::XMFLOAT2 UV;
             DirectX::XMFLOAT4 Color;
         };
+        static_assert(sizeof(Win32QuadVertex) == 36);
 
         /// Stores the constants consumed by the native rounded-rect SDF shader path.
         struct alignas(16) Win32RoundedRectShaderConstants {
@@ -807,10 +817,10 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
         /// Copies one HelEngine matrix into the native shader constant-buffer layout.
         DirectX::XMFLOAT4X4 StoreMatrix(const ::float4x4& value) {
             return DirectX::XMFLOAT4X4(
-                value.M11, value.M12, value.M13, value.M14,
-                value.M21, value.M22, value.M23, value.M24,
-                value.M31, value.M32, value.M33, value.M34,
-                value.M41, value.M42, value.M43, value.M44);
+                value.M11.ToSingle(), value.M12.ToSingle(), value.M13.ToSingle(), value.M14.ToSingle(),
+                value.M21.ToSingle(), value.M22.ToSingle(), value.M23.ToSingle(), value.M24.ToSingle(),
+                value.M31.ToSingle(), value.M32.ToSingle(), value.M33.ToSingle(), value.M34.ToSingle(),
+                value.M41.ToSingle(), value.M42.ToSingle(), value.M43.ToSingle(), value.M44.ToSingle());
         }
 
         /// Converts one packed HelEngine color into normalized DirectX shader color channels.
@@ -865,8 +875,8 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
         }
 
         /// Returns whether one scalar is within the supplied tolerance of the expected value.
-        bool IsApproximately(float value, float expectedValue, float tolerance) {
-            return std::abs(value - expectedValue) <= tolerance;
+        bool IsApproximately(Real value, RealEvaluation expectedValue, RealEvaluation tolerance) {
+            return RealMath::Abs(value - expectedValue) <= tolerance;
         }
 
         /// Returns whether one entity transform matches the authored central directional-shadow plaza tower.
@@ -1119,9 +1129,9 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
                     const float2& texCoord = (*data->TexCoords)[index];
 
                     vertices[static_cast<std::size_t>(index)] = Win32VertexPositionNormalUV {
-                        DirectX::XMFLOAT3(position.X, position.Y, position.Z),
-                        DirectX::XMFLOAT3(normal.X, normal.Y, normal.Z),
-                        DirectX::XMFLOAT2(texCoord.X, texCoord.Y)
+                        DirectX::XMFLOAT3(position.X.ToSingle(), position.Y.ToSingle(), position.Z.ToSingle()),
+                        DirectX::XMFLOAT3(normal.X.ToSingle(), normal.Y.ToSingle(), normal.Z.ToSingle()),
+                        DirectX::XMFLOAT2(texCoord.X.ToSingle(), texCoord.Y.ToSingle())
                     };
                 }
 
@@ -1212,14 +1222,14 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
                 const float3& topNormal3 = (*data->Normals)[19];
                 RuntimeRenderDiagnostics::WriteHostEvent(
                     "generated-cube-top-face",
-                    "v16=" + std::to_string(topVertex0.X) + "," + std::to_string(topVertex0.Y) + "," + std::to_string(topVertex0.Z)
-                        + " v17=" + std::to_string(topVertex1.X) + "," + std::to_string(topVertex1.Y) + "," + std::to_string(topVertex1.Z)
-                        + " v18=" + std::to_string(topVertex2.X) + "," + std::to_string(topVertex2.Y) + "," + std::to_string(topVertex2.Z)
-                        + " v19=" + std::to_string(topVertex3.X) + "," + std::to_string(topVertex3.Y) + "," + std::to_string(topVertex3.Z)
-                        + " n16=" + std::to_string(topNormal0.X) + "," + std::to_string(topNormal0.Y) + "," + std::to_string(topNormal0.Z)
-                        + " n17=" + std::to_string(topNormal1.X) + "," + std::to_string(topNormal1.Y) + "," + std::to_string(topNormal1.Z)
-                        + " n18=" + std::to_string(topNormal2.X) + "," + std::to_string(topNormal2.Y) + "," + std::to_string(topNormal2.Z)
-                        + " n19=" + std::to_string(topNormal3.X) + "," + std::to_string(topNormal3.Y) + "," + std::to_string(topNormal3.Z)
+                    "v16=" + std::to_string(topVertex0.X.ToDouble()) + "," + std::to_string(topVertex0.Y.ToDouble()) + "," + std::to_string(topVertex0.Z.ToDouble())
+                        + " v17=" + std::to_string(topVertex1.X.ToDouble()) + "," + std::to_string(topVertex1.Y.ToDouble()) + "," + std::to_string(topVertex1.Z.ToDouble())
+                        + " v18=" + std::to_string(topVertex2.X.ToDouble()) + "," + std::to_string(topVertex2.Y.ToDouble()) + "," + std::to_string(topVertex2.Z.ToDouble())
+                        + " v19=" + std::to_string(topVertex3.X.ToDouble()) + "," + std::to_string(topVertex3.Y.ToDouble()) + "," + std::to_string(topVertex3.Z.ToDouble())
+                        + " n16=" + std::to_string(topNormal0.X.ToDouble()) + "," + std::to_string(topNormal0.Y.ToDouble()) + "," + std::to_string(topNormal0.Z.ToDouble())
+                        + " n17=" + std::to_string(topNormal1.X.ToDouble()) + "," + std::to_string(topNormal1.Y.ToDouble()) + "," + std::to_string(topNormal1.Z.ToDouble())
+                        + " n18=" + std::to_string(topNormal2.X.ToDouble()) + "," + std::to_string(topNormal2.Y.ToDouble()) + "," + std::to_string(topNormal2.Z.ToDouble())
+                        + " n19=" + std::to_string(topNormal3.X.ToDouble()) + "," + std::to_string(topNormal3.Y.ToDouble()) + "," + std::to_string(topNormal3.Z.ToDouble())
                         + " i24=" + std::to_string((*data->Indices16)[24])
                         + " i25=" + std::to_string((*data->Indices16)[25])
                         + " i26=" + std::to_string((*data->Indices16)[26])
@@ -1579,21 +1589,21 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
             const float3 negativeZ = float4::RotateVector(float3(0.0f, 0.0f, -1.0f), entityOrientation);
             AppendRenderDiagnosticsLine(
                 "PlazaTowerViewDebug position="
-                + std::to_string(entityPosition.X) + ","
-                + std::to_string(entityPosition.Y) + ","
-                + std::to_string(entityPosition.Z)
+                + std::to_string(entityPosition.X.ToDouble()) + ","
+                + std::to_string(entityPosition.Y.ToDouble()) + ","
+                + std::to_string(entityPosition.Z.ToDouble())
                 + " scale="
-                + std::to_string(entityScale.X) + ","
-                + std::to_string(entityScale.Y) + ","
-                + std::to_string(entityScale.Z)
+                + std::to_string(entityScale.X.ToDouble()) + ","
+                + std::to_string(entityScale.Y.ToDouble()) + ","
+                + std::to_string(entityScale.Z.ToDouble())
                 + " cameraToTower="
-                + std::to_string(cameraToTower.X) + ","
-                + std::to_string(cameraToTower.Y) + ","
-                + std::to_string(cameraToTower.Z)
-                + " pxView=" + std::to_string(float3::Dot(positiveX, cameraToTower))
-                + " nxView=" + std::to_string(float3::Dot(negativeX, cameraToTower))
-                + " pzView=" + std::to_string(float3::Dot(positiveZ, cameraToTower))
-                + " nzView=" + std::to_string(float3::Dot(negativeZ, cameraToTower)));
+                + std::to_string(cameraToTower.X.ToDouble()) + ","
+                + std::to_string(cameraToTower.Y.ToDouble()) + ","
+                + std::to_string(cameraToTower.Z.ToDouble())
+                + " pxView=" + std::to_string(float3::Dot(positiveX, cameraToTower).ToDouble())
+                + " nxView=" + std::to_string(float3::Dot(negativeX, cameraToTower).ToDouble())
+                + " pzView=" + std::to_string(float3::Dot(positiveZ, cameraToTower).ToDouble())
+                + " nzView=" + std::to_string(float3::Dot(negativeZ, cameraToTower).ToDouble()));
         }
         float4 orientation = parent->get_Orientation();
         float3 scale = parent->get_Scale();
@@ -1607,16 +1617,16 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
             AppendRenderDiagnosticsLine(
                 "ProbeGround frame=" + std::to_string(GroundCubeProbeGroundDebugCount)
                 + " world position="
-                + std::to_string(position.X) + "," + std::to_string(position.Y) + "," + std::to_string(position.Z)
+                + std::to_string(position.X.ToDouble()) + "," + std::to_string(position.Y.ToDouble()) + "," + std::to_string(position.Z.ToDouble())
                 + " scale="
-                + std::to_string(scale.X) + "," + std::to_string(scale.Y) + "," + std::to_string(scale.Z)
+                + std::to_string(scale.X.ToDouble()) + "," + std::to_string(scale.Y.ToDouble()) + "," + std::to_string(scale.Z.ToDouble())
                 + " orientation="
-                + std::to_string(orientation.X) + "," + std::to_string(orientation.Y) + "," + std::to_string(orientation.Z) + "," + std::to_string(orientation.W)
+                + std::to_string(orientation.X.ToDouble()) + "," + std::to_string(orientation.Y.ToDouble()) + "," + std::to_string(orientation.Z.ToDouble()) + "," + std::to_string(orientation.W.ToDouble())
                 + " rows="
-                + "[" + std::to_string(world.M11) + "," + std::to_string(world.M12) + "," + std::to_string(world.M13) + "," + std::to_string(world.M14) + "]"
-                + "[" + std::to_string(world.M21) + "," + std::to_string(world.M22) + "," + std::to_string(world.M23) + "," + std::to_string(world.M24) + "]"
-                + "[" + std::to_string(world.M31) + "," + std::to_string(world.M32) + "," + std::to_string(world.M33) + "," + std::to_string(world.M34) + "]"
-                + "[" + std::to_string(world.M41) + "," + std::to_string(world.M42) + "," + std::to_string(world.M43) + "," + std::to_string(world.M44) + "]");
+                + "[" + std::to_string(world.M11.ToDouble()) + "," + std::to_string(world.M12.ToDouble()) + "," + std::to_string(world.M13.ToDouble()) + "," + std::to_string(world.M14.ToDouble()) + "]"
+                + "[" + std::to_string(world.M21.ToDouble()) + "," + std::to_string(world.M22.ToDouble()) + "," + std::to_string(world.M23.ToDouble()) + "," + std::to_string(world.M24.ToDouble()) + "]"
+                + "[" + std::to_string(world.M31.ToDouble()) + "," + std::to_string(world.M32.ToDouble()) + "," + std::to_string(world.M33.ToDouble()) + "," + std::to_string(world.M34.ToDouble()) + "]"
+                + "[" + std::to_string(world.M41.ToDouble()) + "," + std::to_string(world.M42.ToDouble()) + "," + std::to_string(world.M43.ToDouble()) + "," + std::to_string(world.M44.ToDouble()) + "]");
             List<Component*>* components = parent->get_Components();
 #if HE_WINDOWS_HAS_RUNTIME_PHYSICS_DEBUG_TYPES
             for (int componentIndex = 0; componentIndex < components->Count(); componentIndex++) {
@@ -1658,16 +1668,16 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
                 "ProbeCube[" + std::to_string(probeCubeSlotIndex) + "] frame=" + std::to_string(ProbeCubeDebugSlots[static_cast<std::size_t>(probeCubeSlotIndex)].FrameCount)
                 + " material=" + (snapshotRootMaterial != nullptr ? snapshotRootMaterial->get_Id().raw() : std::string("<null>"))
                 + " world position="
-                + std::to_string(position.X) + "," + std::to_string(position.Y) + "," + std::to_string(position.Z)
+                + std::to_string(position.X.ToDouble()) + "," + std::to_string(position.Y.ToDouble()) + "," + std::to_string(position.Z.ToDouble())
                 + " scale="
-                + std::to_string(scale.X) + "," + std::to_string(scale.Y) + "," + std::to_string(scale.Z)
+                + std::to_string(scale.X.ToDouble()) + "," + std::to_string(scale.Y.ToDouble()) + "," + std::to_string(scale.Z.ToDouble())
                 + " orientation="
-                + std::to_string(orientation.X) + "," + std::to_string(orientation.Y) + "," + std::to_string(orientation.Z) + "," + std::to_string(orientation.W)
+                + std::to_string(orientation.X.ToDouble()) + "," + std::to_string(orientation.Y.ToDouble()) + "," + std::to_string(orientation.Z.ToDouble()) + "," + std::to_string(orientation.W.ToDouble())
                 + " rows="
-                + "[" + std::to_string(world.M11) + "," + std::to_string(world.M12) + "," + std::to_string(world.M13) + "," + std::to_string(world.M14) + "]"
-                + "[" + std::to_string(world.M21) + "," + std::to_string(world.M22) + "," + std::to_string(world.M23) + "," + std::to_string(world.M24) + "]"
-                + "[" + std::to_string(world.M31) + "," + std::to_string(world.M32) + "," + std::to_string(world.M33) + "," + std::to_string(world.M34) + "]"
-                + "[" + std::to_string(world.M41) + "," + std::to_string(world.M42) + "," + std::to_string(world.M43) + "," + std::to_string(world.M44) + "]");
+                + "[" + std::to_string(world.M11.ToDouble()) + "," + std::to_string(world.M12.ToDouble()) + "," + std::to_string(world.M13.ToDouble()) + "," + std::to_string(world.M14.ToDouble()) + "]"
+                + "[" + std::to_string(world.M21.ToDouble()) + "," + std::to_string(world.M22.ToDouble()) + "," + std::to_string(world.M23.ToDouble()) + "," + std::to_string(world.M24.ToDouble()) + "]"
+                + "[" + std::to_string(world.M31.ToDouble()) + "," + std::to_string(world.M32.ToDouble()) + "," + std::to_string(world.M33.ToDouble()) + "," + std::to_string(world.M34.ToDouble()) + "]"
+                + "[" + std::to_string(world.M41.ToDouble()) + "," + std::to_string(world.M42.ToDouble()) + "," + std::to_string(world.M43.ToDouble()) + "," + std::to_string(world.M44.ToDouble()) + "]");
             List<Component*>* components = parent->get_Components();
 #if HE_WINDOWS_HAS_RUNTIME_PHYSICS_DEBUG_TYPES
             for (int componentIndex = 0; componentIndex < components->Count(); componentIndex++) {
@@ -1722,31 +1732,31 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
 
             std::string snapshotMaterialId = snapshotRootMaterial != nullptr ? snapshotRootMaterial->get_Id().raw() : std::string("<null>");
             AppendRenderSnapshotLine(
-                "drawable[" + std::to_string(Logged3DVisitCount) + "] position=" + std::to_string(position.X) + "," + std::to_string(position.Y) + "," + std::to_string(position.Z) +
-                " scale=" + std::to_string(scale.X) + "," + std::to_string(scale.Y) + "," + std::to_string(scale.Z) +
-                " orientation=" + std::to_string(orientation.X) + "," + std::to_string(orientation.Y) + "," + std::to_string(orientation.Z) + "," + std::to_string(orientation.W) +
+                "drawable[" + std::to_string(Logged3DVisitCount) + "] position=" + std::to_string(position.X.ToDouble()) + "," + std::to_string(position.Y.ToDouble()) + "," + std::to_string(position.Z.ToDouble()) +
+                " scale=" + std::to_string(scale.X.ToDouble()) + "," + std::to_string(scale.Y.ToDouble()) + "," + std::to_string(scale.Z.ToDouble()) +
+                " orientation=" + std::to_string(orientation.X.ToDouble()) + "," + std::to_string(orientation.Y.ToDouble()) + "," + std::to_string(orientation.Z.ToDouble()) + "," + std::to_string(orientation.W.ToDouble()) +
                 " material=" + snapshotMaterialId +
                 " rigidbody_kind=" + std::to_string(rigidBodyKind) +
                 " vertices=" + std::to_string(model->VertexCount) +
                 " indices=" + std::to_string(model->IndexCount));
             AppendRenderSnapshotLine(
                 "drawable[" + std::to_string(Logged3DVisitCount) + "] world rows="
-                "[" + std::to_string(world.M11) + "," + std::to_string(world.M12) + "," + std::to_string(world.M13) + "," + std::to_string(world.M14) + "]"
-                "[" + std::to_string(world.M21) + "," + std::to_string(world.M22) + "," + std::to_string(world.M23) + "," + std::to_string(world.M24) + "]"
-                "[" + std::to_string(world.M31) + "," + std::to_string(world.M32) + "," + std::to_string(world.M33) + "," + std::to_string(world.M34) + "]"
-                "[" + std::to_string(world.M41) + "," + std::to_string(world.M42) + "," + std::to_string(world.M43) + "," + std::to_string(world.M44) + "]");
+                "[" + std::to_string(world.M11.ToDouble()) + "," + std::to_string(world.M12.ToDouble()) + "," + std::to_string(world.M13.ToDouble()) + "," + std::to_string(world.M14.ToDouble()) + "]"
+                "[" + std::to_string(world.M21.ToDouble()) + "," + std::to_string(world.M22.ToDouble()) + "," + std::to_string(world.M23.ToDouble()) + "," + std::to_string(world.M24.ToDouble()) + "]"
+                "[" + std::to_string(world.M31.ToDouble()) + "," + std::to_string(world.M32.ToDouble()) + "," + std::to_string(world.M33.ToDouble()) + "," + std::to_string(world.M34.ToDouble()) + "]"
+                "[" + std::to_string(world.M41.ToDouble()) + "," + std::to_string(world.M42.ToDouble()) + "," + std::to_string(world.M43.ToDouble()) + "," + std::to_string(world.M44.ToDouble()) + "]");
             AppendRenderSnapshotLine(
                 "drawable[" + std::to_string(Logged3DVisitCount) + "] uploaded world rows="
-                "[" + std::to_string(transposedWorld.M11) + "," + std::to_string(transposedWorld.M12) + "," + std::to_string(transposedWorld.M13) + "," + std::to_string(transposedWorld.M14) + "]"
-                "[" + std::to_string(transposedWorld.M21) + "," + std::to_string(transposedWorld.M22) + "," + std::to_string(transposedWorld.M23) + "," + std::to_string(transposedWorld.M24) + "]"
-                "[" + std::to_string(transposedWorld.M31) + "," + std::to_string(transposedWorld.M32) + "," + std::to_string(transposedWorld.M33) + "," + std::to_string(transposedWorld.M34) + "]"
-                "[" + std::to_string(transposedWorld.M41) + "," + std::to_string(transposedWorld.M42) + "," + std::to_string(transposedWorld.M43) + "," + std::to_string(transposedWorld.M44) + "]");
+                "[" + std::to_string(transposedWorld.M11.ToDouble()) + "," + std::to_string(transposedWorld.M12.ToDouble()) + "," + std::to_string(transposedWorld.M13.ToDouble()) + "," + std::to_string(transposedWorld.M14.ToDouble()) + "]"
+                "[" + std::to_string(transposedWorld.M21.ToDouble()) + "," + std::to_string(transposedWorld.M22.ToDouble()) + "," + std::to_string(transposedWorld.M23.ToDouble()) + "," + std::to_string(transposedWorld.M24.ToDouble()) + "]"
+                "[" + std::to_string(transposedWorld.M31.ToDouble()) + "," + std::to_string(transposedWorld.M32.ToDouble()) + "," + std::to_string(transposedWorld.M33.ToDouble()) + "," + std::to_string(transposedWorld.M34.ToDouble()) + "]"
+                "[" + std::to_string(transposedWorld.M41.ToDouble()) + "," + std::to_string(transposedWorld.M42.ToDouble()) + "," + std::to_string(transposedWorld.M43.ToDouble()) + "," + std::to_string(transposedWorld.M44.ToDouble()) + "]");
             AppendRenderSnapshotLine(
                 "drawable[" + std::to_string(Logged3DVisitCount) + "] wvp rows="
-                "[" + std::to_string(worldViewProjection.M11) + "," + std::to_string(worldViewProjection.M12) + "," + std::to_string(worldViewProjection.M13) + "," + std::to_string(worldViewProjection.M14) + "]"
-                "[" + std::to_string(worldViewProjection.M21) + "," + std::to_string(worldViewProjection.M22) + "," + std::to_string(worldViewProjection.M23) + "," + std::to_string(worldViewProjection.M24) + "]"
-                "[" + std::to_string(worldViewProjection.M31) + "," + std::to_string(worldViewProjection.M32) + "," + std::to_string(worldViewProjection.M33) + "," + std::to_string(worldViewProjection.M34) + "]"
-                "[" + std::to_string(worldViewProjection.M41) + "," + std::to_string(worldViewProjection.M42) + "," + std::to_string(worldViewProjection.M43) + "," + std::to_string(worldViewProjection.M44) + "]");
+                "[" + std::to_string(worldViewProjection.M11.ToDouble()) + "," + std::to_string(worldViewProjection.M12.ToDouble()) + "," + std::to_string(worldViewProjection.M13.ToDouble()) + "," + std::to_string(worldViewProjection.M14.ToDouble()) + "]"
+                "[" + std::to_string(worldViewProjection.M21.ToDouble()) + "," + std::to_string(worldViewProjection.M22.ToDouble()) + "," + std::to_string(worldViewProjection.M23.ToDouble()) + "," + std::to_string(worldViewProjection.M24.ToDouble()) + "]"
+                "[" + std::to_string(worldViewProjection.M31.ToDouble()) + "," + std::to_string(worldViewProjection.M32.ToDouble()) + "," + std::to_string(worldViewProjection.M33.ToDouble()) + "," + std::to_string(worldViewProjection.M34.ToDouble()) + "]"
+                "[" + std::to_string(worldViewProjection.M41.ToDouble()) + "," + std::to_string(worldViewProjection.M42.ToDouble()) + "," + std::to_string(worldViewProjection.M43.ToDouble()) + "," + std::to_string(worldViewProjection.M44.ToDouble()) + "]");
             Logged3DVisitCount++;
             if (Logged3DVisitCount >= MaxLogged3DVisitCount) {
                 HasWrittenRenderSnapshot = true;
@@ -1774,7 +1784,7 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
                 constants.World = StoreMatrix(transposedWorld);
                 constants.WorldViewProjection = StoreMatrix(transposedWorldViewProjection);
                 constants.WorldNormal = StoreMatrix(uploadedNormalMatrix);
-                constants.CameraPosition = DirectX::XMFLOAT4(CurrentCameraPosition.X, CurrentCameraPosition.Y, CurrentCameraPosition.Z, 0.0f);
+                constants.CameraPosition = DirectX::XMFLOAT4(CurrentCameraPosition.X.ToSingle(), CurrentCameraPosition.Y.ToSingle(), CurrentCameraPosition.Z.ToSingle(), 0.0f);
                 constants.MaterialFlags = DirectX::XMFLOAT4(
                     runtimeMaterial != nullptr && runtimeMaterial->get_ReceivesShadows() ? 1.0f : 0.0f,
                     runtimeMaterial != nullptr && runtimeMaterial->get_SupportsEmissive() ? 1.0f : 0.0f,
@@ -1838,7 +1848,7 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
             RuntimeRenderDiagnostics::WriteHostEvent(
                 "render-bad-alloc",
                 "stage=" + std::string(visitStage)
-                    + " entity_position=" + std::to_string(position.X) + "," + std::to_string(position.Y) + "," + std::to_string(position.Z)
+                    + " entity_position=" + std::to_string(position.X.ToDouble()) + "," + std::to_string(position.Y.ToDouble()) + "," + std::to_string(position.Z.ToDouble())
                     + " material=" + materialId
                     + " model=" + modelId
                     + " shadow_pass=" + std::to_string(IsShadowPassActive ? 1 : 0));
@@ -2221,10 +2231,10 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
         CameraClearSettings clearSettings = camera->get_ClearSettings();
         if (clearColorBuffer) {
             float4 clearColor = clearSettings.get_ClearColorEnabled() ? clearSettings.get_ClearColor() : float4(0.0f, 0.0f, 0.0f, 1.0f);
-            const float clearColorValues[] = { clearColor.X, clearColor.Y, clearColor.Z, clearColor.W };
+            const float clearColorValues[] = { clearColor.X.ToSingle(), clearColor.Y.ToSingle(), clearColor.Z.ToSingle(), clearColor.W.ToSingle() };
             if (AlphaMode == Win32RenderAlphaMode::Premultiplied) {
                 float4 premultipliedClearColor = ResolvePremultipliedClearColor(clearColor);
-                const float premultipliedClearColorValues[] = { premultipliedClearColor.X, premultipliedClearColor.Y, premultipliedClearColor.Z, premultipliedClearColor.W };
+                const float premultipliedClearColorValues[] = { premultipliedClearColor.X.ToSingle(), premultipliedClearColor.Y.ToSingle(), premultipliedClearColor.Z.ToSingle(), premultipliedClearColor.W.ToSingle() };
                 context->ClearRenderTargetView(renderTargetView, premultipliedClearColorValues);
             } else {
                 context->ClearRenderTargetView(renderTargetView, clearColorValues);
@@ -2264,13 +2274,13 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
         ::float4x4 view;
         float4x4::CreateLookAt__ref0_ref1_ref2_out3(cameraPosition, cameraTarget, cameraUp, view);
         const float aspectRatio = viewport.Height > 0.0f ? viewport.Width / viewport.Height : 1.0f;
-        const float CameraFieldOfViewRadians = camera->get_FieldOfView();
-        float nearPlaneDistance = camera->get_NearPlaneDistance();
+        const RealEvaluation CameraFieldOfViewRadians = camera->get_FieldOfView();
+        RealEvaluation nearPlaneDistance = camera->get_NearPlaneDistance();
         if (nearPlaneDistance <= 0.0f) {
             nearPlaneDistance = 0.1f;
         }
 
-        float farPlaneDistance = camera->get_FarPlaneDistance();
+        RealEvaluation farPlaneDistance = camera->get_FarPlaneDistance();
         if (farPlaneDistance <= nearPlaneDistance) {
             farPlaneDistance = nearPlaneDistance + 0.1f;
         }
@@ -2296,18 +2306,18 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
 
         if (!HasWrittenRenderSnapshot) {
             AppendRenderSnapshotLine(
-                "camera position=" + std::to_string(cameraPosition.X) + "," + std::to_string(cameraPosition.Y) + "," + std::to_string(cameraPosition.Z) +
-                " forward=" + std::to_string(cameraForward.X) + "," + std::to_string(cameraForward.Y) + "," + std::to_string(cameraForward.Z) +
-                " up=" + std::to_string(cameraUp.X) + "," + std::to_string(cameraUp.Y) + "," + std::to_string(cameraUp.Z));
+                "camera position=" + std::to_string(cameraPosition.X.ToDouble()) + "," + std::to_string(cameraPosition.Y.ToDouble()) + "," + std::to_string(cameraPosition.Z.ToDouble()) +
+                " forward=" + std::to_string(cameraForward.X.ToDouble()) + "," + std::to_string(cameraForward.Y.ToDouble()) + "," + std::to_string(cameraForward.Z.ToDouble()) +
+                " up=" + std::to_string(cameraUp.X.ToDouble()) + "," + std::to_string(cameraUp.Y.ToDouble()) + "," + std::to_string(cameraUp.Z.ToDouble()));
             AppendRenderSnapshotLine(
                 "viewport=" + std::to_string(viewport.TopLeftX) + "," + std::to_string(viewport.TopLeftY) + "," + std::to_string(viewport.Width) + "," + std::to_string(viewport.Height));
-            AppendRenderSnapshotLine("camera fieldOfView=" + std::to_string(CameraFieldOfViewRadians));
+            AppendRenderSnapshotLine("camera fieldOfView=" + std::to_string(CameraFieldOfViewRadians.ToDouble()));
             AppendRenderSnapshotLine(
                 "viewProjection rows="
-                "[" + std::to_string(CurrentViewProjection.M11) + "," + std::to_string(CurrentViewProjection.M12) + "," + std::to_string(CurrentViewProjection.M13) + "," + std::to_string(CurrentViewProjection.M14) + "]"
-                "[" + std::to_string(CurrentViewProjection.M21) + "," + std::to_string(CurrentViewProjection.M22) + "," + std::to_string(CurrentViewProjection.M23) + "," + std::to_string(CurrentViewProjection.M24) + "]"
-                "[" + std::to_string(CurrentViewProjection.M31) + "," + std::to_string(CurrentViewProjection.M32) + "," + std::to_string(CurrentViewProjection.M33) + "," + std::to_string(CurrentViewProjection.M34) + "]"
-                "[" + std::to_string(CurrentViewProjection.M41) + "," + std::to_string(CurrentViewProjection.M42) + "," + std::to_string(CurrentViewProjection.M43) + "," + std::to_string(CurrentViewProjection.M44) + "]");
+                "[" + std::to_string(CurrentViewProjection.M11.ToDouble()) + "," + std::to_string(CurrentViewProjection.M12.ToDouble()) + "," + std::to_string(CurrentViewProjection.M13.ToDouble()) + "," + std::to_string(CurrentViewProjection.M14.ToDouble()) + "]"
+                "[" + std::to_string(CurrentViewProjection.M21.ToDouble()) + "," + std::to_string(CurrentViewProjection.M22.ToDouble()) + "," + std::to_string(CurrentViewProjection.M23.ToDouble()) + "," + std::to_string(CurrentViewProjection.M24.ToDouble()) + "]"
+                "[" + std::to_string(CurrentViewProjection.M31.ToDouble()) + "," + std::to_string(CurrentViewProjection.M32.ToDouble()) + "," + std::to_string(CurrentViewProjection.M33.ToDouble()) + "," + std::to_string(CurrentViewProjection.M34.ToDouble()) + "]"
+                "[" + std::to_string(CurrentViewProjection.M41.ToDouble()) + "," + std::to_string(CurrentViewProjection.M42.ToDouble()) + "," + std::to_string(CurrentViewProjection.M43.ToDouble()) + "," + std::to_string(CurrentViewProjection.M44.ToDouble()) + "]");
         }
 
         IRenderQueue3D* renderQueue = camera->get_RenderQueue3D();
@@ -2367,7 +2377,7 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
         constexpr int32_t AmbientLightTypeValue = 3;
 
         Win32ForwardLightConstants constants {};
-        DirectX::XMFLOAT3 ambientLightColor(0.0f, 0.0f, 0.0f);
+        ::float3 ambientLightColor(0.0f, 0.0f, 0.0f);
         int32_t packedLightCount = 0;
         const int32_t lightBudget = std::clamp(get_MaximumVisibleLights(), 0, 4);
         for (std::size_t lightIndex = 0; lightIndex < lights.size() && packedLightCount < lightBudget; lightIndex++) {
@@ -2379,39 +2389,39 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
             float4 color = light->get_Color();
             float intensity = light->get_Intensity();
             if (static_cast<int32_t>(light->get_LightType()) == AmbientLightTypeValue) {
-                ambientLightColor.x += color.X * intensity;
-                ambientLightColor.y += color.Y * intensity;
-                ambientLightColor.z += color.Z * intensity;
+                ambientLightColor.X += color.X * intensity;
+                ambientLightColor.Y += color.Y * intensity;
+                ambientLightColor.Z += color.Z * intensity;
                 continue;
             }
 
             Win32ForwardLightSlotConstants slot {};
             slot.ColorAndType = DirectX::XMFLOAT4(
-                color.X * intensity,
-                color.Y * intensity,
-                color.Z * intensity,
+                static_cast<float>(color.X * intensity),
+                static_cast<float>(color.Y * intensity),
+                static_cast<float>(color.Z * intensity),
                 static_cast<float>(light->get_LightType()));
 
             float3 lightDirection = LightDirectionUtility::GetEntityForwardDirection(light->get_Parent());
             slot.DirectionAndShadow = DirectX::XMFLOAT4(
-                lightDirection.X,
-                lightDirection.Y,
-                lightDirection.Z,
+                lightDirection.X.ToSingle(),
+                lightDirection.Y.ToSingle(),
+                lightDirection.Z.ToSingle(),
                 light->get_ShadowStrength());
 
             if (PointLightComponent* pointLight = dynamic_cast<PointLightComponent*>(light)) {
                 float3 lightPosition = pointLight->get_Parent()->get_Position();
                 slot.PositionAndRange = DirectX::XMFLOAT4(
-                    lightPosition.X,
-                    lightPosition.Y,
-                    lightPosition.Z,
+                    lightPosition.X.ToSingle(),
+                    lightPosition.Y.ToSingle(),
+                    lightPosition.Z.ToSingle(),
                     pointLight->get_Range());
             } else if (SpotLightComponent* spotLight = dynamic_cast<SpotLightComponent*>(light)) {
                 float3 lightPosition = spotLight->get_Parent()->get_Position();
                 slot.PositionAndRange = DirectX::XMFLOAT4(
-                    lightPosition.X,
-                    lightPosition.Y,
-                    lightPosition.Z,
+                    lightPosition.X.ToSingle(),
+                    lightPosition.Y.ToSingle(),
+                    lightPosition.Z.ToSingle(),
                     spotLight->get_Range());
 
                 double innerRadians = static_cast<double>(spotLight->get_InnerConeAngleDegrees()) * (std::numbers::pi / 180.0);
@@ -2437,9 +2447,9 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
         }
 
         constants.AmbientLightColor = DirectX::XMFLOAT4(
-            ambientLightColor.x,
-            ambientLightColor.y,
-            ambientLightColor.z,
+            ambientLightColor.X.ToSingle(),
+            ambientLightColor.Y.ToSingle(),
+            ambientLightColor.Z.ToSingle(),
             0.0f);
         constants.LightMetadata = DirectX::XMFLOAT4(static_cast<float>(packedLightCount), 0.0f, 0.0f, 0.0f);
         if (!HasWrittenRenderSnapshot) {
@@ -2695,7 +2705,7 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
         float3 lightPosition = target + (lightDirection * shadowDistance);
         float3 defaultUp(0.0f, 1.0f, 0.0f);
         float3 fallbackUp(0.0f, 0.0f, 1.0f);
-        float3 up = std::abs(float3::Dot(lightDirection, defaultUp)) > 0.99f ? fallbackUp : defaultUp;
+        float3 up = RealMath::Abs(float3::Dot(lightDirection, defaultUp)) > 0.99f ? fallbackUp : defaultUp;
 
         ::float4x4 view;
         float4x4::CreateLookAt__ref0_ref1_ref2_out3(lightPosition, target, up, view);
@@ -3267,7 +3277,7 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
         context->OMSetRenderTargets(1, &renderTargetView, depthStencilView);
         if (AlphaMode == Win32RenderAlphaMode::Premultiplied) {
             float4 premultipliedClearColor = ResolvePremultipliedClearColor(float4(red, green, blue, alpha));
-            const float premultipliedClearColorValues[] = { premultipliedClearColor.X, premultipliedClearColor.Y, premultipliedClearColor.Z, premultipliedClearColor.W };
+            const float premultipliedClearColorValues[] = { premultipliedClearColor.X.ToSingle(), premultipliedClearColor.Y.ToSingle(), premultipliedClearColor.Z.ToSingle(), premultipliedClearColor.W.ToSingle() };
             context->ClearRenderTargetView(renderTargetView, premultipliedClearColorValues);
         } else {
             context->ClearRenderTargetView(renderTargetView, clearColor);
@@ -3619,10 +3629,10 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
         }
 
         const float4 rawViewport = camera->get_Viewport();
-        float offsetX = rawViewport.X;
-        float offsetY = rawViewport.Y;
-        float width = rawViewport.Z;
-        float height = rawViewport.W;
+        float offsetX = rawViewport.X.ToSingle();
+        float offsetY = rawViewport.Y.ToSingle();
+        float width = rawViewport.Z.ToSingle();
+        float height = rawViewport.W.ToSingle();
 
         if (width <= 1.0f && height <= 1.0f && width > 0.0f && height > 0.0f) {
             offsetX *= static_cast<float>(OutputBootstrap->GetWidth());
@@ -3794,10 +3804,10 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
         const LONG viewportRight = static_cast<LONG>(std::ceil(CurrentViewport.TopLeftX + CurrentViewport.Width));
         const LONG viewportBottom = static_cast<LONG>(std::ceil(CurrentViewport.TopLeftY + CurrentViewport.Height));
 
-        const LONG clipLeft = static_cast<LONG>(std::floor(clipRect.X));
-        const LONG clipTop = static_cast<LONG>(std::floor(clipRect.Y));
-        const LONG clipRight = static_cast<LONG>(std::ceil(clipRect.X + clipRect.Z));
-        const LONG clipBottom = static_cast<LONG>(std::ceil(clipRect.Y + clipRect.W));
+        const LONG clipLeft = static_cast<LONG>(std::floor(clipRect.X.ToDouble()));
+        const LONG clipTop = static_cast<LONG>(std::floor(clipRect.Y.ToDouble()));
+        const LONG clipRight = static_cast<LONG>(std::ceil((clipRect.X + clipRect.Z).ToDouble()));
+        const LONG clipBottom = static_cast<LONG>(std::ceil((clipRect.Y + clipRect.W).ToDouble()));
 
         return D3D11_RECT {
             std::max(viewportLeft, clipLeft),
@@ -3831,10 +3841,10 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
         const DirectX::XMFLOAT4 tint = ConvertColor(color);
 
         std::array<Win32QuadVertex, 4> vertices = {
-            Win32QuadVertex { DirectX::XMFLOAT3(leftNdc, bottomNdc, 0.0f), DirectX::XMFLOAT2(sourceRect.X, sourceRect.Y + sourceRect.W), tint },
-            Win32QuadVertex { DirectX::XMFLOAT3(leftNdc, topNdc, 0.0f), DirectX::XMFLOAT2(sourceRect.X, sourceRect.Y), tint },
-            Win32QuadVertex { DirectX::XMFLOAT3(rightNdc, bottomNdc, 0.0f), DirectX::XMFLOAT2(sourceRect.X + sourceRect.Z, sourceRect.Y + sourceRect.W), tint },
-            Win32QuadVertex { DirectX::XMFLOAT3(rightNdc, topNdc, 0.0f), DirectX::XMFLOAT2(sourceRect.X + sourceRect.Z, sourceRect.Y), tint }
+            Win32QuadVertex { DirectX::XMFLOAT3(leftNdc, bottomNdc, 0.0f), DirectX::XMFLOAT2(sourceRect.X.ToSingle(), static_cast<float>(sourceRect.Y + sourceRect.W)), tint },
+            Win32QuadVertex { DirectX::XMFLOAT3(leftNdc, topNdc, 0.0f), DirectX::XMFLOAT2(sourceRect.X.ToSingle(), sourceRect.Y.ToSingle()), tint },
+            Win32QuadVertex { DirectX::XMFLOAT3(rightNdc, bottomNdc, 0.0f), DirectX::XMFLOAT2(static_cast<float>(sourceRect.X + sourceRect.Z), static_cast<float>(sourceRect.Y + sourceRect.W)), tint },
+            Win32QuadVertex { DirectX::XMFLOAT3(rightNdc, topNdc, 0.0f), DirectX::XMFLOAT2(static_cast<float>(sourceRect.X + sourceRect.Z), sourceRect.Y.ToSingle()), tint }
         };
 
         DrawQuadVertices(vertices.data(), static_cast<UINT>(vertices.size()));
@@ -3854,20 +3864,20 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
 
         const DirectX::XMFLOAT4 tint = ConvertColor(color);
 
-        const float bottomLeftNdcX = (((quad.BottomLeft.X - CurrentViewport.TopLeftX) / CurrentViewport.Width) * 2.0f) - 1.0f;
-        const float bottomLeftNdcY = 1.0f - (((quad.BottomLeft.Y - CurrentViewport.TopLeftY) / CurrentViewport.Height) * 2.0f);
-        const float topLeftNdcX = (((quad.TopLeft.X - CurrentViewport.TopLeftX) / CurrentViewport.Width) * 2.0f) - 1.0f;
-        const float topLeftNdcY = 1.0f - (((quad.TopLeft.Y - CurrentViewport.TopLeftY) / CurrentViewport.Height) * 2.0f);
-        const float bottomRightNdcX = (((quad.BottomRight.X - CurrentViewport.TopLeftX) / CurrentViewport.Width) * 2.0f) - 1.0f;
-        const float bottomRightNdcY = 1.0f - (((quad.BottomRight.Y - CurrentViewport.TopLeftY) / CurrentViewport.Height) * 2.0f);
-        const float topRightNdcX = (((quad.TopRight.X - CurrentViewport.TopLeftX) / CurrentViewport.Width) * 2.0f) - 1.0f;
-        const float topRightNdcY = 1.0f - (((quad.TopRight.Y - CurrentViewport.TopLeftY) / CurrentViewport.Height) * 2.0f);
+        const float bottomLeftNdcX = static_cast<float>((((quad.BottomLeft.X - CurrentViewport.TopLeftX) / CurrentViewport.Width) * 2.0f) - 1.0f);
+        const float bottomLeftNdcY = static_cast<float>(1.0f - (((quad.BottomLeft.Y - CurrentViewport.TopLeftY) / CurrentViewport.Height) * 2.0f));
+        const float topLeftNdcX = static_cast<float>((((quad.TopLeft.X - CurrentViewport.TopLeftX) / CurrentViewport.Width) * 2.0f) - 1.0f);
+        const float topLeftNdcY = static_cast<float>(1.0f - (((quad.TopLeft.Y - CurrentViewport.TopLeftY) / CurrentViewport.Height) * 2.0f));
+        const float bottomRightNdcX = static_cast<float>((((quad.BottomRight.X - CurrentViewport.TopLeftX) / CurrentViewport.Width) * 2.0f) - 1.0f);
+        const float bottomRightNdcY = static_cast<float>(1.0f - (((quad.BottomRight.Y - CurrentViewport.TopLeftY) / CurrentViewport.Height) * 2.0f));
+        const float topRightNdcX = static_cast<float>((((quad.TopRight.X - CurrentViewport.TopLeftX) / CurrentViewport.Width) * 2.0f) - 1.0f);
+        const float topRightNdcY = static_cast<float>(1.0f - (((quad.TopRight.Y - CurrentViewport.TopLeftY) / CurrentViewport.Height) * 2.0f));
 
         std::array<Win32QuadVertex, 4> vertices = {
-            Win32QuadVertex { DirectX::XMFLOAT3(bottomLeftNdcX, bottomLeftNdcY, 0.0f), DirectX::XMFLOAT2(sourceRect.X, sourceRect.Y + sourceRect.W), tint },
-            Win32QuadVertex { DirectX::XMFLOAT3(topLeftNdcX, topLeftNdcY, 0.0f), DirectX::XMFLOAT2(sourceRect.X, sourceRect.Y), tint },
-            Win32QuadVertex { DirectX::XMFLOAT3(bottomRightNdcX, bottomRightNdcY, 0.0f), DirectX::XMFLOAT2(sourceRect.X + sourceRect.Z, sourceRect.Y + sourceRect.W), tint },
-            Win32QuadVertex { DirectX::XMFLOAT3(topRightNdcX, topRightNdcY, 0.0f), DirectX::XMFLOAT2(sourceRect.X + sourceRect.Z, sourceRect.Y), tint }
+            Win32QuadVertex { DirectX::XMFLOAT3(bottomLeftNdcX, bottomLeftNdcY, 0.0f), DirectX::XMFLOAT2(sourceRect.X.ToSingle(), static_cast<float>(sourceRect.Y + sourceRect.W)), tint },
+            Win32QuadVertex { DirectX::XMFLOAT3(topLeftNdcX, topLeftNdcY, 0.0f), DirectX::XMFLOAT2(sourceRect.X.ToSingle(), sourceRect.Y.ToSingle()), tint },
+            Win32QuadVertex { DirectX::XMFLOAT3(bottomRightNdcX, bottomRightNdcY, 0.0f), DirectX::XMFLOAT2(static_cast<float>(sourceRect.X + sourceRect.Z), static_cast<float>(sourceRect.Y + sourceRect.W)), tint },
+            Win32QuadVertex { DirectX::XMFLOAT3(topRightNdcX, topRightNdcY, 0.0f), DirectX::XMFLOAT2(static_cast<float>(sourceRect.X + sourceRect.Z), sourceRect.Y.ToSingle()), tint }
         };
 
         DrawQuadVertices(vertices.data(), static_cast<UINT>(vertices.size()));
@@ -3921,10 +3931,10 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
 
         PrepareRoundedRectDraw();
 
-        const float leftNdc = (((bounds.X - CurrentViewport.TopLeftX) / CurrentViewport.Width) * 2.0f) - 1.0f;
-        const float rightNdc = ((((bounds.X + bounds.Z) - CurrentViewport.TopLeftX) / CurrentViewport.Width) * 2.0f) - 1.0f;
-        const float topNdc = 1.0f - (((bounds.Y - CurrentViewport.TopLeftY) / CurrentViewport.Height) * 2.0f);
-        const float bottomNdc = 1.0f - ((((bounds.Y + bounds.W) - CurrentViewport.TopLeftY) / CurrentViewport.Height) * 2.0f);
+        const float leftNdc = static_cast<float>((((bounds.X - CurrentViewport.TopLeftX) / CurrentViewport.Width) * 2.0f) - 1.0f);
+        const float rightNdc = static_cast<float>(((((bounds.X + bounds.Z) - CurrentViewport.TopLeftX) / CurrentViewport.Width) * 2.0f) - 1.0f);
+        const float topNdc = static_cast<float>(1.0f - (((bounds.Y - CurrentViewport.TopLeftY) / CurrentViewport.Height) * 2.0f));
+        const float bottomNdc = static_cast<float>(1.0f - ((((bounds.Y + bounds.W) - CurrentViewport.TopLeftY) / CurrentViewport.Height) * 2.0f));
 
         std::array<Win32QuadVertex, 4> vertices = {
             Win32QuadVertex { DirectX::XMFLOAT3(leftNdc, bottomNdc, 0.0f), DirectX::XMFLOAT2(0.0f, 1.0f), DirectX::XMFLOAT4(1.0f, 1.0f, 1.0f, 1.0f) },
@@ -3934,7 +3944,7 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
         };
 
         Win32RoundedRectShaderConstants constants {};
-        constants.DestRect = DirectX::XMFLOAT4(bounds.X, bounds.Y, bounds.Z, bounds.W);
+        constants.DestRect = DirectX::XMFLOAT4(bounds.X.ToSingle(), bounds.Y.ToSingle(), bounds.Z.ToSingle(), bounds.W.ToSingle());
         constants.Params1 = DirectX::XMFLOAT4(radius, borderThickness, 1.0f, static_cast<float>(corners));
         constants.FillColor = ConvertColor(fillColor);
         constants.BorderColor = ConvertColor(borderColor);
@@ -4024,7 +4034,7 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
                 const SpriteQuad2D quad = commandList->GetTexturedQuadGeometry(payloadIndex);
                 if (!HasWritten2DDraw) {
                     AppendRenderDiagnosticsLine("2d.command textured_quad top_left="
-                        + std::to_string(quad.TopLeft.X) + "," + std::to_string(quad.TopLeft.Y));
+                        + std::to_string(quad.TopLeft.X.ToDouble()) + "," + std::to_string(quad.TopLeft.Y.ToDouble()));
                     HasWritten2DDraw = true;
                 }
                 DrawSpriteQuad(textureView, quad,
@@ -4046,19 +4056,19 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
                 if (!HasWritten2DDraw) {
                     AppendRenderDiagnosticsLine(
                         "2d.command glyph_quad bounds="
-                        + std::to_string(bounds.X) + ","
-                        + std::to_string(bounds.Y) + ","
-                        + std::to_string(bounds.Z) + ","
-                        + std::to_string(bounds.W));
+                        + std::to_string(bounds.X.ToDouble()) + ","
+                        + std::to_string(bounds.Y.ToDouble()) + ","
+                        + std::to_string(bounds.Z.ToDouble()) + ","
+                        + std::to_string(bounds.W.ToDouble()));
                     HasWritten2DDraw = true;
                 }
 
                 DrawTexturedQuad(
                     textureView,
-                    bounds.X,
-                    bounds.Y,
-                    bounds.Z,
-                    bounds.W,
+                    bounds.X.ToSingle(),
+                    bounds.Y.ToSingle(),
+                    bounds.Z.ToSingle(),
+                    bounds.W.ToSingle(),
                     commandList->GetGlyphQuadSourceRect(payloadIndex),
                     commandList->GetGlyphQuadColor(payloadIndex));
                 continue;
@@ -4072,18 +4082,18 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
                 if (!HasWritten2DDraw) {
                     AppendRenderDiagnosticsLine(
                         "2d.command rounded_rect bounds="
-                        + std::to_string(bounds.X) + ","
-                        + std::to_string(bounds.Y) + ","
-                        + std::to_string(bounds.Z) + ","
-                        + std::to_string(bounds.W)
+                        + std::to_string(bounds.X.ToDouble()) + ","
+                        + std::to_string(bounds.Y.ToDouble()) + ","
+                        + std::to_string(bounds.Z.ToDouble()) + ","
+                        + std::to_string(bounds.W.ToDouble())
                         );
                     HasWritten2DDraw = true;
                 }
 
                 DrawRoundedRectSdf(
                     bounds,
-                    commandList->GetRoundedRectRadius(payloadIndex),
-                    commandList->GetRoundedRectBorderThickness(payloadIndex),
+                    static_cast<float>(commandList->GetRoundedRectRadius(payloadIndex)),
+                    static_cast<float>(commandList->GetRoundedRectBorderThickness(payloadIndex)),
                     commandList->GetRoundedRectFillColor(payloadIndex),
                     commandList->GetRoundedRectBorderColor(payloadIndex),
                     static_cast<int32_t>(commandList->GetRoundedRectCorners(payloadIndex)));
@@ -4136,10 +4146,10 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
     /// Resolves a camera viewport against the current swap-chain size.
     D3D11_VIEWPORT Win32RenderManager3D::ResolveViewport(ICamera* camera) const {
         const float4 rawViewport = camera->get_Viewport();
-        float offsetX = rawViewport.X;
-        float offsetY = rawViewport.Y;
-        float width = rawViewport.Z;
-        float height = rawViewport.W;
+        float offsetX = rawViewport.X.ToSingle();
+        float offsetY = rawViewport.Y.ToSingle();
+        float width = rawViewport.Z.ToSingle();
+        float height = rawViewport.W.ToSingle();
 
         if (width <= 1.0f && height <= 1.0f && width > 0.0f && height > 0.0f) {
             offsetX *= static_cast<float>(OutputBootstrap->GetWidth());
@@ -4541,7 +4551,7 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
         const SpriteQuad2D quad = Batch2DGeometry::ResolveSpriteQuad(sprite);
         if (!HasWritten2DDraw) {
             AppendRenderDiagnosticsLine("2d.draw_sprite top_left="
-                + std::to_string(quad.TopLeft.X) + "," + std::to_string(quad.TopLeft.Y));
+                + std::to_string(quad.TopLeft.X.ToDouble()) + "," + std::to_string(quad.TopLeft.Y.ToDouble()));
             HasWritten2DDraw = true;
         }
         DrawSpriteQuad(textureView, quad, sprite->get_SourceRect(), sprite->get_Color());
@@ -4587,11 +4597,11 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
         }
 
         const float3 position = text->get_Parent()->get_Position();
-        const double baseX = std::round(position.X);
+        const double baseX = std::round(position.X.ToDouble());
         const bool rgbFontCoverage = font->get_Texture()->get_UsesRgbFontCoverage();
         const double fontScale = std::max(static_cast<double>(text->get_FontScale()), 0.0001);
         const bool allowClearType = std::abs(fontScale - 1.0) < 0.00001;
-        const double baseY = std::round(position.Y);
+        const double baseY = std::round(position.Y.ToDouble());
         const double lineHeight = std::max(static_cast<double>(font->get_LineHeight()) * fontScale, 1.0);
         const float atlasWidth = static_cast<float>(std::max(font->get_AtlasWidth(), 1));
         const float atlasHeight = static_cast<float>(std::max(font->get_AtlasHeight(), 1));
@@ -4660,8 +4670,8 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
         if (!HasWritten2DDraw) {
             AppendRenderDiagnosticsLine(
                 "2d.draw_rect pos="
-                + std::to_string(position.X) + ","
-                + std::to_string(position.Y)
+                + std::to_string(position.X.ToDouble()) + ","
+                + std::to_string(position.Y.ToDouble())
                 + " size="
                 + std::to_string(width) + ","
                 + std::to_string(height));
@@ -4669,8 +4679,8 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
         }
         DrawRoundedRectSdf(
             float4(position.X, position.Y, width, height),
-            shape->get_Radius(),
-            shape->get_BorderThickness(),
+            shape->get_Radius().ToSingle(),
+            shape->get_BorderThickness().ToSingle(),
             shape->get_FillColor(),
             shape->get_BorderColor(),
             static_cast<int32_t>(shape->get_Corners()));

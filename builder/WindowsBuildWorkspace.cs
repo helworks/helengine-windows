@@ -38,6 +38,11 @@ public static class WindowsBuildWorkspace {
             throw new ArgumentNullException(nameof(nativeBuildExecutor));
         }
 
+        WindowsPlatformDefinitionFactory.Create().CodegenProfiles.Single().NumericCapabilities.RequireSupported(request.NumericPolicy);
+        if (request.NumericPolicy.Identity != request.Manifest.NumericPolicy.Identity) {
+            throw new InvalidOperationException("Windows build request and content manifest have different numeric policies.");
+        }
+        foreach (PlatformBuildCodeModule module in request.Manifest.CodeModules) { module.RequireNumericPolicy(request.NumericPolicy); }
         string stagingRoot = Directory.GetCurrentDirectory();
         string builderWorkingRoot = ResolveBuilderWorkingRoot(request.WorkingRoot, stagingRoot);
         WindowsNativeBuildProfileResolution profileResolution = WindowsNativeBuildProfileResolver.Resolve(request.SelectedBuildProfileId);
@@ -449,6 +454,7 @@ public static class WindowsBuildWorkspace {
         IReadOnlyList<WindowsBuildManifestEntry> profilerArtifactEntries) {
         string workingManifestPath = Path.Combine(builderWorkingRoot, "windows-build-manifest.json");
         object manifest = new {
+            NumericPolicy = request.NumericPolicy.Identity,
             request.Manifest.ProjectId,
             request.Manifest.ProjectVersion,
             request.Manifest.RequiredEngineVersion,

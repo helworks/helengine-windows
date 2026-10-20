@@ -731,7 +731,9 @@ namespace helengine::windows {
         }
         MainWindow->SetDpiAwareness(dpiAwarenessSettings.GetDpiAwareness());
         MainWindow->Create();
-        MainWindow->Show();
+        if (CommandLineOptions.ShouldShowWindow()) {
+            MainWindow->Show();
+        }
         // ShowWindow and SetWindowPos send messages synchronously; a handler failure there surfaces now, before the
         // graphics device and the engine start.
         MainWindow->RethrowPendingException();
@@ -760,7 +762,7 @@ namespace helengine::windows {
             std::string message = messageBuilder.str();
             WriteLifecycleLog(message.c_str());
         }
-        WriteLifecycleLog("Main window loaded and shown.");
+        WriteLifecycleLog(CommandLineOptions.ShouldShowWindow() ? "Main window loaded and shown." : "Main window initialized hidden.");
     }
 
     /// Creates the DirectX11 device and presentation resources for the main window.
@@ -1638,7 +1640,7 @@ namespace helengine::windows {
     /// Writes one named scene diagnostics checkpoint into the Windows diagnostics log.
     void Win32Application::WriteSceneDiagnosticsCheckpoint(const char* label) {
 #if __has_include("Core.hpp")
-        if (!EnableSceneDiagnosticsCheckpointLogging) {
+        if (!EnableSceneDiagnosticsCheckpointLogging && !CommandLineOptions.HasFrameLimit()) {
             return;
         }
 
@@ -2000,6 +2002,7 @@ namespace helengine::windows {
                 if (RenderedFrameCount >= CommandLineOptions.GetFrameLimit()) {
                     std::string fingerprintLine = HostFingerprint->Describe(RenderedFrameCount, IdleFramePacer != nullptr, IdleFrameCount, ActiveFrameCount, WindowModeSettings->GetWindowMode());
                     WriteLifecycleLog(fingerprintLine.c_str());
+                    WriteSceneDiagnosticsCheckpoint("frame_limit");
                     WriteHitTestProbeResult();
                     PostQuitMessage(0);
                 }

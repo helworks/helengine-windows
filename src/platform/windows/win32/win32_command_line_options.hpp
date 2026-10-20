@@ -21,7 +21,7 @@ namespace helengine::windows {
 
         /// Parses the given argument vector, skipping arguments[0] (the executable path). When no argument is a known
         /// flag (--scene, --frames, --fixed-delta, --capture, --capture-every, --idle-throttle, --idle-after-ms, --idle-fps,
-        /// --window-mode, --overlay-bounds, --overlay-background, --hit-test-probe, --dpi-awareness), nothing is
+        /// --window-visibility, --window-mode, --overlay-bounds, --overlay-background, --hit-test-probe, --dpi-awareness), nothing is
         /// validated: the arguments are only kept as ignored text (see GetIgnoredArguments) so launches that pass
         /// unrelated arguments, such as a file path split by CommandLineToArgvW, keep working exactly as before. Once
         /// any known flag is present, validation is strict: each flag takes exactly one value, and unknown, repeated
@@ -30,6 +30,9 @@ namespace helengine::windows {
 
         /// Reads the real process command line through CommandLineToArgvW and parses it with Parse.
         static Win32CommandLineOptions ParseProcessCommandLine();
+
+        /// Returns whether the main window should be shown; --window-visibility hidden keeps validation runs from activating it.
+        bool ShouldShowWindow() const;
 
         /// Gets whether --scene was supplied to override the packaged startup scene.
         bool HasScene() const;
@@ -132,7 +135,7 @@ namespace helengine::windows {
         std::vector<Win32AdditionalWindowSettings> AdditionalWindows;
 
         /// Returns whether the argument is one of the regression flags (--scene, --frames, --fixed-delta, --capture, --capture-every,
-        /// --idle-throttle, --idle-after-ms, --idle-fps, --window-mode, --overlay-bounds, --overlay-background,
+        /// --idle-throttle, --idle-after-ms, --idle-fps, --window-visibility, --window-mode, --overlay-bounds, --overlay-background,
         /// --hit-test-probe, --dpi-awareness).
         static bool IsKnownFlag(const std::wstring& argument);
 
@@ -178,6 +181,12 @@ namespace helengine::windows {
         /// Parses a --dpi-awareness value that must be exactly "unaware" or "permonitorv2", throwing
         /// std::invalid_argument otherwise.
         static Win32DpiAwareness ParseDpiAwareness(const std::wstring& value);
+
+        /// Records an explicit visibility override so repeated switches fail instead of silently winning.
+        bool WindowVisibilitySupplied = false;
+
+        /// Preserves ordinary visible startup unless the current launch explicitly requests a hidden window.
+        bool WindowVisible = true;
 
         /// Stores whether --scene was supplied.
         bool SceneSupplied;
