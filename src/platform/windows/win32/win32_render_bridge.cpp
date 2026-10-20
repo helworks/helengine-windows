@@ -3153,7 +3153,7 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
 
             RuntimeTexture* texture = ResolveMaterialTexture(shaderRuntimeMaterial, bindingName);
 #if __has_include("StandardMaterialTextureBindingDefaults.hpp")
-            if (texture == nullptr && String::Equals(bindingName, StandardMaterialTextureBindingDefaults::DiffuseTextureBindingName, StringComparison::Ordinal)) {
+            if (texture == nullptr && String::Equals(bindingName, StandardMaterialTextureBindingDefaults::DiffuseTextureBindingName(), StringComparison::Ordinal)) {
                 texture = pixelTexture;
             }
 #endif
