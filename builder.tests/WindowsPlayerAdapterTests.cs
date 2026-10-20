@@ -50,7 +50,7 @@ public sealed class WindowsPlayerAdapterTests : IDisposable {
                 ["shader-asset-id"] = "ForwardStandardShader", ["vertex-program"] = "VSMain",
                 ["pixel-program"] = "PSMain", ["variant"] = "Standard", ["base-color"] = "#33669980",
                 ["texture-id"] = "checker"
-            })).CookedMaterialBytes;
+            }, numericPolicy: global::helengine.NumericPrecisionPolicy.Default)).CookedMaterialBytes;
         WindowsPlayerAdapter adapter = CreateAdapter();
 
         PlayerMaterialDescription result = adapter.DecodeMaterial(new MemoryStream(bytes), "cooked/materials/test.hasset");

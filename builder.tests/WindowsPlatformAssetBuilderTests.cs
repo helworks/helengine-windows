@@ -165,7 +165,7 @@ public class WindowsPlatformAssetBuilderTests {
                 ["texture-id"] = "Textures/Checker",
                 ["casts-shadow"] = "false",
                 ["receives-shadow"] = "true"
-            }));
+            }, numericPolicy: global::helengine.NumericPrecisionPolicy.Default));
 
         ShaderMaterialAsset materialAsset = Assert.IsType<ShaderMaterialAsset>(global::helengine.files.AssetSerializer.DeserializeFromBytes(result.CookedMaterialBytes));
         Assert.Equal("ForwardStandardShader", materialAsset.ShaderAssetId);
@@ -199,7 +199,7 @@ public class WindowsPlatformAssetBuilderTests {
                 ["variant"] = "Mesh",
                 ["roughness"] = "0.35",
                 ["roughness-texture-id"] = "Textures/MarbleRoughness"
-            }));
+            }, numericPolicy: global::helengine.NumericPrecisionPolicy.Default));
 
         ShaderMaterialAsset materialAsset = Assert.IsType<ShaderMaterialAsset>(global::helengine.files.AssetSerializer.DeserializeFromBytes(result.CookedMaterialBytes));
         MaterialConstantBufferAsset roughnessBuffer = Assert.Single(materialAsset.ConstantBuffers, constantBuffer => constantBuffer.Name == "RoughnessBuffer");
@@ -247,7 +247,7 @@ public class WindowsPlatformAssetBuilderTests {
                 ["variant"] = "Mesh",
                 ["metallic"] = "0.25",
                 ["specular"] = "0.75"
-            }));
+            }, numericPolicy: global::helengine.NumericPrecisionPolicy.Default));
 
         ShaderMaterialAsset materialAsset = Assert.IsType<ShaderMaterialAsset>(global::helengine.files.AssetSerializer.DeserializeFromBytes(result.CookedMaterialBytes));
         MaterialConstantBufferAsset metallicBuffer = Assert.Single(
@@ -282,7 +282,7 @@ public class WindowsPlatformAssetBuilderTests {
                 ["pixel-program"] = "ForwardStandardShader.ps",
                 ["variant"] = "Mesh",
                 ["base-color"] = "#FF4040FF"
-            }));
+            }, numericPolicy: global::helengine.NumericPrecisionPolicy.Default));
 
         ShaderMaterialAsset materialAsset = Assert.IsType<ShaderMaterialAsset>(global::helengine.files.AssetSerializer.DeserializeFromBytes(result.CookedMaterialBytes));
         MaterialConstantBufferAsset baseColorBuffer = Assert.Single(materialAsset.ConstantBuffers, constantBuffer => constantBuffer.Name == "BaseColorBuffer");
