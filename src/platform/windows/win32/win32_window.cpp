@@ -133,8 +133,8 @@ namespace helengine::windows {
             this);
     }
 
-    /// Creates the borderless overlay window at the requested position, sized with AdjustWindowRectEx for the
-    /// overlay style set.
+    /// Creates the borderless composition overlay and initializes its layered input surface before it is shown.
+    /// Uniform opacity stays at 255; DirectComposition retains responsibility for the displayed per-pixel alpha.
     void Win32Window::CreateOverlayWindow() {
         RECT windowRectangle { 0, 0, Width, Height };
         AdjustWindowRectEx(&windowRectangle, WindowStyle.GetStyle(), FALSE, WindowStyle.GetExStyle());
@@ -152,6 +152,9 @@ namespace helengine::windows {
             nullptr,
             GetModuleHandleW(nullptr),
             this);
+        if (Handle != nullptr && !SetLayeredWindowAttributes(Handle, 0, 255, LWA_ALPHA)) {
+            throw std::runtime_error("Cannot initialize overlay layered opacity with Win32 error " + std::to_string(GetLastError()) + ".");
+        }
     }
 
     /// Initializes the shell connection before creating the player-owned wallpaper child.

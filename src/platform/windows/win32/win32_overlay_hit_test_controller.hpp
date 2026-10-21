@@ -59,6 +59,22 @@ namespace helengine::windows {
         std::string DescribeProbeResult() const;
 
     private:
+        /// Records changed cursor availability, native hit ownership and click-through decisions for passive overlays.
+        void TracePointerSample(bool available, POINT screenPoint, POINT clientPoint, bool alphaAvailable, int alpha, DWORD cursorError);
+
+        /// Remembers whether this overlay has emitted its initial native pointer diagnostic.
+        bool HasLoggedPointerSample = false;
+        /// Ensures the first completed GPU alpha sample is recorded even when click-through remains enabled.
+        bool HasLoggedCompletedSample = false;
+        /// Remembers whether the preceding diagnostic could read the interactive desktop cursor.
+        bool LastLoggedSampleAvailable = false;
+        /// Remembers whether the preceding cursor position was inside this native client area.
+        bool LastLoggedPointerInside = false;
+        /// Remembers the click-through decision paired with the preceding diagnostic.
+        bool LastLoggedClickThrough = true;
+        /// Remembers the native hit target without retaining or owning the underlying window.
+        HWND LastLoggedHitWindow = nullptr;
+
         /// Alpha, out of 255, below which a sampled pixel counts as transparent, so the mouse passes through to the
         /// window behind.
         static constexpr int ClickThroughAlphaThreshold = 8;

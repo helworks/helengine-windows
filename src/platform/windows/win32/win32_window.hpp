@@ -96,8 +96,8 @@ namespace helengine::windows {
         /// player has always made.
         void CreateNormalWindow();
 
-        /// Creates the borderless overlay window at the requested position, sized with AdjustWindowRectEx for the
-        /// overlay style set.
+        /// Creates the borderless composition overlay with initialized native layered opacity for mouse hit testing.
+        /// DirectComposition keeps its per-pixel alpha while the native layer remains uniformly opaque for input.
         void CreateOverlayWindow();
 
         /// Creates an opaque child in the resolved Explorer wallpaper layer using the requested physical bounds.

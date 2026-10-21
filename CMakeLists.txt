@@ -196,3 +196,20 @@ target_include_directories(helengine_windows_desktop_tests PRIVATE src)
 target_compile_features(helengine_windows_desktop_tests PRIVATE cxx_std_20)
 target_compile_definitions(helengine_windows_desktop_tests PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
 target_link_libraries(helengine_windows_desktop_tests PRIVATE user32 gdi32 d3d11 dcomp dxgi)
+
+# Pointer tests default to headless; --native-windows explicitly enables owned overlay windows and graphics.
+add_executable(helengine_windows_pointer_tests EXCLUDE_FROM_ALL
+    tests/pointer_window_routing_tests.cpp
+    src/platform/windows/win32/win32_window.cpp
+    src/platform/windows/win32/win32_window_style.cpp
+    src/platform/windows/win32/win32_window_mode_names.cpp
+    src/platform/windows/win32/win32_activity_tracker.cpp
+    src/platform/windows/win32/win32_dpi_window_sizing.cpp
+    src/platform/windows/win32/win32_desktop_host.cpp
+    src/platform/windows/win32/win32_click_through_controller.cpp
+    src/platform/windows/directx11/directx11_bootstrap.cpp
+    src/platform/windows/directx11/directx11_hresult_formatter.cpp)
+target_include_directories(helengine_windows_pointer_tests PRIVATE src)
+target_compile_features(helengine_windows_pointer_tests PRIVATE cxx_std_20)
+target_compile_definitions(helengine_windows_pointer_tests PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
+target_link_libraries(helengine_windows_pointer_tests PRIVATE user32 gdi32 d3d11 dcomp dxgi)

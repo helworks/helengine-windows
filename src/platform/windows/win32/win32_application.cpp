@@ -47,6 +47,7 @@
 #include "platform/windows/win32/win32_idle_frame_pacer.hpp"
 #include "platform/windows/win32/win32_idle_throttle_settings.hpp"
 #include "platform/windows/win32/win32_input_bridge.hpp"
+#include "platform/windows/win32/win32_pointer_window_routing.hpp"
 #include "platform/windows/win32/win32_overlay_hit_test_controller.hpp"
 #include "platform/windows/win32/win32_render_bridge.hpp"
 #include "platform/windows/win32/win32_window.hpp"
@@ -3026,7 +3027,7 @@ namespace helengine::windows {
         return false;
     }
 
-    /// Chooses the focused view as the shared input coordinate space; no focus retains the primary policy.
+    /// Retains focused keyboard input while routing the pointer into the actual opaque overlay under the cursor.
     void Win32Application::SelectMultiWindowInput() {
 #if __has_include("Core.hpp")
         Win32Window* selected = MainWindow.get();
@@ -3035,7 +3036,25 @@ namespace helengine::windows {
             if (view->GetWindow().GetHandle() == foreground) { selected = &view->GetWindow(); break; }
         }
         EngineInputBackend->SelectWindow(*selected);
+        HWND keyboardWindow = selected->GetHandle();
+        POINT cursor {};
+        HWND hitWindow = GetCursorPos(&cursor) ? WindowFromPoint(cursor) : nullptr;
+        for (const auto& view : SecondaryWindows) {
+            if (view->GetMode() == Win32WindowMode::Overlay
+                && Win32PointerWindowRouting::IsPointerTarget(view->GetWindow().GetHandle(), hitWindow)) {
+                selected = &view->GetWindow();
+                EngineInputBackend->SelectPointerWindow(*selected);
+                break;
+            }
+        }
         EngineRenderManager3D->SelectInputWindow(reinterpret_cast<intptr_t>(selected->GetHandle()));
+        if (LastLoggedPointerWindow != selected->GetHandle()) {
+            std::ostringstream message;
+            message << "time_ms=" << GetTickCount64() << " keyboard_window=" << keyboardWindow
+                << " pointer_window=" << selected->GetHandle() << " native_hit=" << hitWindow;
+            RuntimeRenderDiagnostics::WriteHostEvent("input.pointer-window", message.str());
+            LastLoggedPointerWindow = selected->GetHandle();
+        }
 #endif
     }
 

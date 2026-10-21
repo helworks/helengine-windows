@@ -16,6 +16,7 @@
 
 #include "platform/windows/win32/win32_window.hpp"
 #include "platform/windows/win32/win32_input_replay.hpp"
+#include "platform/windows/win32/win32_pointer_button_filter.hpp"
 
 namespace helengine::windows {
     /// Captures Windows keyboard and mouse state into the generated portable input frame.
@@ -33,8 +34,11 @@ namespace helengine::windows {
         /// Captures one input frame from the current Windows host state.
         InputFrameState CaptureFrame() override;
 
-        /// Changes the registered focused window whose client coordinates and wheel input are captured.
+        /// Selects the keyboard-focused view and restores its pointer coordinate space.
         void SelectWindow(Win32Window& window);
+
+        /// Routes the pointer through a passive view without changing the keyboard-focused view.
+        void SelectPointerWindow(Win32Window& window);
 
     private:
         /// Optional keyboard recording used only when this capture process supplies HELENGINE_INPUT_REPLAY_FILE.
@@ -48,9 +52,6 @@ namespace helengine::windows {
         /// Sets the cursor position using host client coordinates.
         void SetPosition(int32_t x, int32_t y);
 
-        /// Releases all button states when the host window is not foreground-active.
-        void ReleaseAllButtons();
-
         /// Wraps the cursor across the host client area when edge wrapping is enabled.
         void ApplyPointerWrap(HWND windowHandle);
 
@@ -59,6 +60,12 @@ namespace helengine::windows {
 
         /// Stores the host window used for cursor coordinate translation.
         Win32Window* Window;
+
+        /// Retains the focused view used to enforce foreground-only keyboard capture.
+        Win32Window* KeyboardWindow;
+
+        /// Tracks physical gestures across inactive and passive views without generating false presses.
+        Win32PointerButtonFilter PointerButtons;
 
         /// Accumulates wheel delta reported through the host message pump.
         int ScrollWheelAccumulator;

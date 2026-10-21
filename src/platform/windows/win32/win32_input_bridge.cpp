@@ -7,12 +7,13 @@
 
 #include "runtime/native_list.hpp"
 #include "platform/windows/runtime/windows_tracy_profiler.hpp"
+#include "platform/windows/win32/win32_pointer_window_routing.hpp"
 
 namespace helengine::windows {
     namespace {
         /// Converts one Win32 button-state snapshot into the generated button-state enum.
-        ButtonState ToButtonState(SHORT keyState) {
-            return (keyState & 0x8000) != 0
+        ButtonState ToButtonState(std::uint32_t pressedButtons, std::uint32_t buttonMask) {
+            return (pressedButtons & buttonMask) != 0
                 ? ButtonState::Pressed
                 : ButtonState::Released;
         }
@@ -109,6 +110,7 @@ namespace helengine::windows {
     /// Creates an input backend bound to the host window.
     Win32InputBackend::Win32InputBackend(Win32Window* window)
         : Window(window)
+        , KeyboardWindow(window)
         , ScrollWheelAccumulator(0)
         , State()
         , PointerWrapEnabled(false)
@@ -131,8 +133,14 @@ namespace helengine::windows {
         }
     }
 
-    /// Selects a live input window without creating another engine input system.
+    /// Selects the focused keyboard view while restoring its pointer routing for this frame.
     void Win32InputBackend::SelectWindow(Win32Window& window) {
+        SelectPointerWindow(window);
+        KeyboardWindow = &window;
+    }
+
+    /// Changes pointer coordinates independently of keyboard focus for passive overlay interaction.
+    void Win32InputBackend::SelectPointerWindow(Win32Window& window) {
         if (window.GetHandle() == nullptr) {
             throw std::invalid_argument("Cannot select a closed input window.");
         }
@@ -168,7 +176,7 @@ namespace helengine::windows {
             for (int key : Replay.NextKeys()) { pressedKeys.Add(static_cast<Keys>(key)); }
             return KeyboardState(&pressedKeys, false, false);
         }
-        HWND windowHandle = Window != nullptr ? Window->GetHandle() : nullptr;
+        HWND windowHandle = KeyboardWindow != nullptr ? KeyboardWindow->GetHandle() : nullptr;
         bool isForegroundActive = windowHandle != nullptr && IsWindowForegroundActive(windowHandle);
         if (!ReceiveInputInBackground && windowHandle != nullptr && !isForegroundActive) {
             if (!HasLoggedInputTraceSample || !LastLoggedForegroundActive || LastLoggedWatchedKeyMask != 0) {
@@ -239,21 +247,25 @@ namespace helengine::windows {
             return State;
         }
 
+        bool passivePointerTarget = Window != KeyboardWindow
+            && Win32PointerWindowRouting::IsPointerTarget(windowHandle, ::WindowFromPoint(cursorPoint));
         ::ScreenToClient(windowHandle, &cursorPoint);
         State.set_X(cursorPoint.x);
         State.set_Y(cursorPoint.y);
         ApplyPointerWrap(windowHandle);
 
-        if (!ReceiveInputInBackground && !IsWindowForegroundActive(windowHandle)) {
-            ReleaseAllButtons();
-            return State;
+        const int virtualKeys[] = { VK_LBUTTON, VK_MBUTTON, VK_RBUTTON, VK_XBUTTON1, VK_XBUTTON2 };
+        std::uint32_t physicalButtons = 0;
+        for (std::uint32_t index = 0; index < 5; index++) {
+            if ((::GetAsyncKeyState(virtualKeys[index]) & 0x8000) != 0) { physicalButtons |= 1u << index; }
         }
-
-        State.set_LeftButton(ToButtonState(::GetAsyncKeyState(VK_LBUTTON)));
-        State.set_MiddleButton(ToButtonState(::GetAsyncKeyState(VK_MBUTTON)));
-        State.set_RightButton(ToButtonState(::GetAsyncKeyState(VK_RBUTTON)));
-        State.set_XButton1(ToButtonState(::GetAsyncKeyState(VK_XBUTTON1)));
-        State.set_XButton2(ToButtonState(::GetAsyncKeyState(VK_XBUTTON2)));
+        bool eligible = ReceiveInputInBackground || IsWindowForegroundActive(windowHandle) || passivePointerTarget;
+        std::uint32_t pressedButtons = PointerButtons.Capture(physicalButtons, eligible, windowHandle);
+        State.set_LeftButton(ToButtonState(pressedButtons, 1u << 0));
+        State.set_MiddleButton(ToButtonState(pressedButtons, 1u << 1));
+        State.set_RightButton(ToButtonState(pressedButtons, 1u << 2));
+        State.set_XButton1(ToButtonState(pressedButtons, 1u << 3));
+        State.set_XButton2(ToButtonState(pressedButtons, 1u << 4));
         return State;
     }
 
@@ -266,15 +278,6 @@ namespace helengine::windows {
         POINT clientPoint { x, y };
         ::ClientToScreen(Window->GetHandle(), &clientPoint);
         ::SetCursorPos(clientPoint.x, clientPoint.y);
-    }
-
-    /// Releases all button states when the host window is not foreground-active.
-    void Win32InputBackend::ReleaseAllButtons() {
-        State.set_LeftButton(ButtonState::Released);
-        State.set_MiddleButton(ButtonState::Released);
-        State.set_RightButton(ButtonState::Released);
-        State.set_XButton1(ButtonState::Released);
-        State.set_XButton2(ButtonState::Released);
     }
 
     /// Wraps the cursor across the host client area when edge wrapping is enabled.

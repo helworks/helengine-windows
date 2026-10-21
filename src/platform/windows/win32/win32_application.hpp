@@ -83,7 +83,10 @@ namespace helengine::windows {
         /// Returns whether any live view has a nonzero client area.
         bool HasRenderableWindow() const;
 
-        /// Selects the focused live view's input coordinates before the shared update.
+        /// Remembers the native pointer view already recorded in the passive routing diagnostics.
+        HWND LastLoggedPointerWindow = nullptr;
+
+        /// Selects passive pointer coordinates independently of the keyboard-focused view before the shared update.
         void SelectMultiWindowInput();
 
         /// Attaches to the parent console or creates one so host and engine logs have a stable output target.

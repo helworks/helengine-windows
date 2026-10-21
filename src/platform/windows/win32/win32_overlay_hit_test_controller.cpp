@@ -3,6 +3,7 @@
 #include <iomanip>
 #include <sstream>
 #include <stdexcept>
+#include "platform/windows/runtime/runtime_render_diagnostics.hpp"
 
 namespace helengine::windows {
     /// Creates the sampler on the bootstrap's device and the click-through controller for the overlay window. Throws
@@ -27,23 +28,29 @@ namespace helengine::windows {
     /// ScreenToClient, the capture, the readback, the style toggle or the extended-style read fails.
     void Win32OverlayHitTestController::SampleFrame() {
         POINT samplePoint {};
+        POINT screenPoint {};
+        DWORD cursorError = 0;
         bool hasSamplePoint = false;
         if (CommandLineOptions.HasHitTestProbe()) {
             samplePoint.x = CommandLineOptions.GetHitTestProbeX();
             samplePoint.y = CommandLineOptions.GetHitTestProbeY();
             hasSamplePoint = true;
         } else if (GetCursorPos(&samplePoint)) {
+            screenPoint = samplePoint;
             if (!ScreenToClient(WindowHandle, &samplePoint)) {
                 throw std::runtime_error("ScreenToClient failed for the overlay hit test with error " + std::to_string(GetLastError()) + ".");
             }
             hasSamplePoint = true;
+        } else {
+            cursorError = GetLastError();
         }
         if (hasSamplePoint) {
             HitTestSampler.Capture(samplePoint.x, samplePoint.y);
         }
 
         int sampledAlpha = 0;
-        if (HitTestSampler.TryReadLatestAlpha(sampledAlpha)) {
+        bool alphaAvailable = HitTestSampler.TryReadLatestAlpha(sampledAlpha);
+        if (alphaAvailable) {
             if (CommandLineOptions.HasHitTestProbe()) {
                 ClickThroughController.Apply(sampledAlpha < ClickThroughAlphaThreshold);
                 // GetWindowLongPtrW reports a failure as 0 with a non-zero last error, so the last error is cleared
@@ -60,6 +67,45 @@ namespace helengine::windows {
                 ClickThroughController.Apply(sampledAlpha < ClickThroughAlphaThreshold);
             }
         }
+        if (!CommandLineOptions.HasHitTestProbe()) {
+            TracePointerSample(hasSamplePoint, screenPoint, samplePoint, alphaAvailable, sampledAlpha, cursorError);
+        }
+    }
+
+    /// Correlates actual window styles and cursor hit ownership without reading window contents or recording every frame.
+    void Win32OverlayHitTestController::TracePointerSample(bool available, POINT screenPoint, POINT clientPoint,
+        bool alphaAvailable, int alpha, DWORD cursorError) {
+        HWND hitWindow = available ? WindowFromPoint(screenPoint) : nullptr;
+        RECT client {};
+        if (!GetClientRect(WindowHandle, &client)) {
+            throw std::runtime_error("Cannot read overlay client bounds for pointer diagnostics.");
+        }
+        bool inside = available && PtInRect(&client, clientPoint);
+        bool clickThrough = ClickThroughController.IsClickThrough();
+        if (HasLoggedPointerSample && available == LastLoggedSampleAvailable && inside == LastLoggedPointerInside
+            && clickThrough == LastLoggedClickThrough && hitWindow == LastLoggedHitWindow
+            && (!alphaAvailable || HasLoggedCompletedSample)) { return; }
+        std::ostringstream message;
+        message << "time_ms=" << GetTickCount64() << " window=" << WindowHandle
+            << " cursor_available=" << available << " cursor_error=" << cursorError;
+        if (available) {
+            message << " screen=" << screenPoint.x << ',' << screenPoint.y
+                << " client=" << clientPoint.x << ',' << clientPoint.y;
+        }
+        message << " client_size=" << client.right << ',' << client.bottom << " inside=" << inside
+            << " latest_alpha=";
+        if (alphaAvailable) { message << alpha; } else { message << "pending"; }
+        message << " click_through=" << clickThrough << " ex_style=0x" << std::hex
+            << GetWindowLongPtrW(WindowHandle, GWL_EXSTYLE) << std::dec
+            << " hit=" << hitWindow << " hit_root=" << (hitWindow != nullptr ? GetAncestor(hitWindow, GA_ROOT) : nullptr)
+            << " foreground=" << GetForegroundWindow();
+        RuntimeRenderDiagnostics::WriteHostEvent("overlay.pointer", message.str());
+        HasLoggedPointerSample = true;
+        HasLoggedCompletedSample = HasLoggedCompletedSample || alphaAvailable;
+        LastLoggedSampleAvailable = available;
+        LastLoggedPointerInside = inside;
+        LastLoggedClickThrough = clickThrough;
+        LastLoggedHitWindow = hitWindow;
     }
 
     /// Samples the cursor for the idle-throttled loop: while click-through is on the window receives no mouse
