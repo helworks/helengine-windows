@@ -4609,7 +4609,7 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
         double offsetX = 0.0;
         double offsetY = 0.0;
 
-        for (char character : value) {
+        for (char16_t character : he_cpp_string_chars(value)) {
             if (character == '\n') {
                 offsetY += lineHeight;
                 offsetX = 0.0;
