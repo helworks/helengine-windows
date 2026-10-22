@@ -3090,12 +3090,13 @@ namespace helengine::windows {
         PollSceneTransitionDiagnostics();
         bool finalFrame = CommandLineOptions.HasFrameLimit() && RenderedFrameCount + 1 == CommandLineOptions.GetFrameLimit();
         bool coreDrawCompleted = false;
-        // The last visible secondary output owns VSync so a passive overlay follows its monitor's refresh rate.
+        // A visible overlay owns VSync ahead of desktop views so interaction follows its monitor's refresh rate.
         // Hidden outputs keep observing scene updates but consume no draw, hit-test or presentation work.
         Win32SecondaryWindow* pacingView = nullptr;
         for (const auto& view : SecondaryWindows) {
             if (IsWindowVisible(view->GetWindow().GetHandle()) && view->GetWindow().GetClientWidth() > 0
-                && view->GetWindow().GetClientHeight() > 0) { pacingView = view.get(); }
+                && view->GetWindow().GetClientHeight() > 0 && (pacingView == nullptr || view->GetMode() == Win32WindowMode::Overlay
+                    || pacingView->GetMode() != Win32WindowMode::Overlay)) { pacingView = view.get(); }
         }
         int primaryWidth = MainWindow->GetClientWidth();
         int primaryHeight = MainWindow->GetClientHeight();

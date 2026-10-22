@@ -179,7 +179,7 @@ namespace helengine::windows {
         HWND windowHandle = KeyboardWindow != nullptr ? KeyboardWindow->GetHandle() : nullptr;
         bool isForegroundActive = windowHandle != nullptr && IsWindowForegroundActive(windowHandle);
         if (!ReceiveInputInBackground && windowHandle != nullptr && !isForegroundActive) {
-            if (!HasLoggedInputTraceSample || !LastLoggedForegroundActive || LastLoggedWatchedKeyMask != 0) {
+            if (!HasLoggedInputTraceSample || LastLoggedForegroundActive || LastLoggedWatchedKeyMask != 0) {
                 std::ostringstream messageBuilder;
                 messageBuilder
                     << "foreground=0 receive_background=" << (ReceiveInputInBackground ? 1 : 0)
