@@ -89,6 +89,8 @@ set(HELENGINE_WINDOWS_SOURCES
     src/platform/windows/directx11/directx11_back_buffer_capture.cpp
     src/platform/windows/directx11/directx11_bootstrap.cpp
     src/platform/windows/directx11/directx11_output_attachments.cpp
+    src/platform/windows/directx11/directx11_texture_preview.cpp
+    src/platform/windows/directx11/directx11_preview_processor.cpp
     src/platform/windows/directx11/directx11_hit_test_sampler.cpp
     src/platform/windows/directx11/directx11_host_fingerprint.cpp
     src/platform/windows/directx11/directx11_hresult_formatter.cpp
@@ -226,3 +228,13 @@ target_include_directories(helengine_windows_output_tests PRIVATE src)
 target_compile_features(helengine_windows_output_tests PRIVATE cxx_std_20)
 target_compile_definitions(helengine_windows_output_tests PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
 target_link_libraries(helengine_windows_output_tests PRIVATE d3d11 d3dcompiler dxgi)
+# External-surface preview tests use synthetic GPU textures only, never native windows or capture sessions.
+add_executable(helengine_windows_preview_tests EXCLUDE_FROM_ALL
+    tests/texture_preview_tests.cpp
+    src/platform/windows/directx11/directx11_texture_preview.cpp
+    src/platform/windows/directx11/directx11_preview_processor.cpp
+    src/platform/windows/directx11/directx11_hresult_formatter.cpp)
+target_include_directories(helengine_windows_preview_tests PRIVATE src)
+target_compile_features(helengine_windows_preview_tests PRIVATE cxx_std_20)
+target_compile_definitions(helengine_windows_preview_tests PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
+target_link_libraries(helengine_windows_preview_tests PRIVATE d3d11 d3dcompiler dxgi)
