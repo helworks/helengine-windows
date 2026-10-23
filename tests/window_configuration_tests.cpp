@@ -11,6 +11,7 @@ namespace helengine::windows {
     public:
         /// Runs positive, malformed, duplicate and range-validation cases against the production parsers.
         static void Run() {
+            TestMultisampling();
             TestInputReplay();
             TestPeriodicCapture();
             Win32AdditionalWindowSettings normal = Win32AdditionalWindowSettings::Parse("preview,normal,-640,25,640,360");
@@ -71,6 +72,36 @@ namespace helengine::windows {
             }
         }
     private:
+        /// Requests explicit engine MSAA without changing old configurations or silently accepting invalid sample counts.
+        static void TestMultisampling() {
+            Win32AdditionalWindowSettings glass = Win32AdditionalWindowSettings::Parse("glass,overlay,0,0,800,600,4");
+            if (glass.GetSampleCount() != 4 || glass.GetMode() != Win32WindowMode::Overlay) { throw std::runtime_error("MSAA changed the output mode."); }
+            wchar_t executable[] = L"player.exe";
+            wchar_t flag[] = L"--msaa";
+            wchar_t four[] = L"4";
+            wchar_t* arguments[] = { executable, flag, four };
+            if (Win32CommandLineOptions::Parse(3, arguments).HasIgnoredArguments() || Win32CommandLineOptions::Parse(3, arguments).GetSampleCount() != 4) { throw std::runtime_error("Primary MSAA configuration was ignored."); }
+            if (Win32AdditionalWindowSettings::Parse("plain,normal,0,0,800,600").GetSampleCount() != 1
+                || Win32AdditionalWindowSettings::Parse("plain,normal,0,0,800,600,1").GetSampleCount() != 1
+                || Win32CommandLineOptions::Parse(1, arguments).GetSampleCount() != 1) { throw std::runtime_error("Existing single-sample defaults changed."); }
+            const wchar_t* invalidSamples[] = { L"0", L"2", L"3", L"8", L"4x", L"", L"-1" };
+            for (const wchar_t* value : invalidSamples) {
+                wchar_t* bad[] = { executable, flag, const_cast<wchar_t*>(value) };
+                bool rejected = false;
+                try { Win32CommandLineOptions::Parse(3, bad); } catch (const std::invalid_argument&) { rejected = true; }
+                if (!rejected) { throw std::runtime_error("Invalid primary sample count accepted."); }
+            }
+            wchar_t* duplicate[] = { executable, flag, four, flag, four };
+            bool rejected = false;
+            try { Win32CommandLineOptions::Parse(5, duplicate); } catch (const std::invalid_argument&) { rejected = true; }
+            if (!rejected) { throw std::runtime_error("Duplicate --msaa accepted."); }
+            rejected = false;
+            try { Win32CommandLineOptions::Parse(2, arguments); } catch (const std::invalid_argument&) { rejected = true; }
+            if (!rejected) { throw std::runtime_error("Missing --msaa argument accepted."); }
+            const char* invalid[] = { "glass,overlay,0,0,800,600,0", "glass,overlay,0,0,800,600,2",
+                "glass,overlay,0,0,800,600,8", "glass,overlay,0,0,800,600,", "glass,overlay,0,0,800,600,4,1" };
+            for (const char* value : invalid) { ExpectInvalid(value); }
+        }
         /// Checks exact press/hold/release timing and rejects malformed or ambiguous capture recordings.
         static void TestInputReplay() {
             Win32InputReplay replay;

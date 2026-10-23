@@ -127,6 +127,9 @@ namespace helengine::windows {
         /// Gets the ignored arguments as UTF-8, joined by single spaces; only meaningful when HasIgnoredArguments() is true.
         const std::string& GetIgnoredArguments() const;
 
+        /// Gets the primary output sample count; only explicit --msaa 4 enables multisampling.
+        int GetSampleCount() const;
+
         /// Gets all explicitly configured secondary views, in command-line order.
         const std::vector<Win32AdditionalWindowSettings>& GetAdditionalWindows() const;
 
@@ -134,9 +137,14 @@ namespace helengine::windows {
         /// Stores validated secondary views; an empty list keeps the original single-window path.
         std::vector<Win32AdditionalWindowSettings> AdditionalWindows;
 
+        /// Records explicit primary MSAA so duplicate flags fail rather than changing policy silently.
+        bool SampleCountSupplied = false;
+        /// Stores the backwards-compatible primary output sample count.
+        int SampleCount = 1;
+
         /// Returns whether the argument is one of the regression flags (--scene, --frames, --fixed-delta, --capture, --capture-every,
         /// --idle-throttle, --idle-after-ms, --idle-fps, --window-visibility, --window-mode, --overlay-bounds, --overlay-background,
-        /// --hit-test-probe, --dpi-awareness).
+        /// --hit-test-probe, --dpi-awareness, --window, --msaa).
         static bool IsKnownFlag(const std::wstring& argument);
 
         /// Converts a UTF-16 command-line value to UTF-8 so it can be compared with engine scene ids and logged.

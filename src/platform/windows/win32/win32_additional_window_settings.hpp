@@ -19,11 +19,13 @@ namespace helengine::windows {
         int GetTop() const;
         /// Gets the requested positive client width in pixels.
         int GetWidth() const;
+        /// Gets the validated MSAA sample count, defaulting to one for six-field configurations.
+        int GetSampleCount() const;
         /// Gets the requested positive client height in pixels.
         int GetHeight() const;
     private:
         /// Constructs a fully validated configuration; callers use Parse.
-        Win32AdditionalWindowSettings(std::string tag, Win32WindowMode mode, int left, int top, int width, int height);
+        Win32AdditionalWindowSettings(std::string tag, Win32WindowMode mode, int left, int top, int width, int height, int sampleCount);
         /// Parses an exact signed decimal integer and enforces positive dimensions when requested.
         static int ParseInteger(const std::string& value, bool dimension);
         /// Stores the stable diagnostic tag.
@@ -38,5 +40,7 @@ namespace helengine::windows {
         int Width;
         /// Stores the requested client height.
         int Height;
+        /// Stores the requested color/depth sample count for this output.
+        int SampleCount;
     };
 }

@@ -9,22 +9,24 @@
 
 namespace helengine::windows {
     /// Stores one validated secondary-view configuration.
-    Win32AdditionalWindowSettings::Win32AdditionalWindowSettings(std::string tag, Win32WindowMode mode, int left, int top, int width, int height)
-        : Tag(std::move(tag)), Mode(mode), Left(left), Top(top), Width(width), Height(height) { }
+    Win32AdditionalWindowSettings::Win32AdditionalWindowSettings(std::string tag, Win32WindowMode mode, int left, int top, int width, int height, int sampleCount)
+        : Tag(std::move(tag)), Mode(mode), Left(left), Top(top), Width(width), Height(height), SampleCount(sampleCount) { }
 
-    /// Parses six exact comma-separated fields without repairing invalid input.
+    /// Parses six required fields and optional MSAA without repairing invalid input.
     Win32AdditionalWindowSettings Win32AdditionalWindowSettings::Parse(const std::string& value) {
-        std::array<std::string, 6> fields;
+        std::array<std::string, 7> fields;
         std::size_t start = 0;
-        for (std::size_t index = 0; index < fields.size(); index++) {
+        std::size_t fieldCount = 0;
+        while (true) {
+            if (fieldCount == fields.size()) { throw std::invalid_argument("--window accepts six fields and an optional sample count of 1 or 4."); }
             std::size_t end = value.find(',', start);
-            if ((index + 1 < fields.size() && end == std::string::npos)
-                || (index + 1 == fields.size() && end != std::string::npos)) {
-                throw std::invalid_argument("--window requires tag,normal|overlay|desktop,left,top,width,height.");
-            }
-            fields[index] = value.substr(start, end == std::string::npos ? end : end - start);
-            start = end == std::string::npos ? value.size() : end + 1;
+            fields[fieldCount++] = value.substr(start, end == std::string::npos ? end : end - start);
+            if (end == std::string::npos) { break; }
+            start = end + 1;
         }
+        if (fieldCount != 6 && fieldCount != 7) { throw std::invalid_argument("--window requires tag,mode,left,top,width,height[,samples]."); }
+        int sampleCount = fieldCount == 7 ? ParseInteger(fields[6], false) : 1;
+        if (sampleCount != 1 && sampleCount != 4) { throw std::invalid_argument("--window sample count must be 1 or 4."); }
         if (fields[0].empty() || fields[0].size() > 64 || fields[0] == "main") {
             throw std::invalid_argument("--window requires a unique tag of 1..64 characters other than main.");
         }
@@ -46,7 +48,7 @@ namespace helengine::windows {
             || static_cast<long long>(top) + height > std::numeric_limits<int>::max())) {
             throw std::invalid_argument("--window desktop bounds exceed the signed screen-coordinate range.");
         }
-        return Win32AdditionalWindowSettings(fields[0], mode, left, top, width, height);
+        return Win32AdditionalWindowSettings(fields[0], mode, left, top, width, height, sampleCount);
     }
 
     /// Parses a complete decimal integer; dimensions are limited to the D3D11 texture limit.
@@ -69,6 +71,8 @@ namespace helengine::windows {
     int Win32AdditionalWindowSettings::GetTop() const { return Top; }
     /// Gets the positive client width.
     int Win32AdditionalWindowSettings::GetWidth() const { return Width; }
+    /// Gets the validated sample count for this output only.
+    int Win32AdditionalWindowSettings::GetSampleCount() const { return SampleCount; }
     /// Gets the positive client height.
     int Win32AdditionalWindowSettings::GetHeight() const { return Height; }
 }

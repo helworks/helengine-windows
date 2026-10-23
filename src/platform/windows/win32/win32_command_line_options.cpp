@@ -176,6 +176,11 @@ namespace helengine::windows {
 
                 ParseHitTestProbe(value, options.HitTestProbeX, options.HitTestProbeY);
                 options.HitTestProbeSupplied = true;
+            } else if (flag == L"--msaa") {
+                if (options.SampleCountSupplied) { throw std::invalid_argument("Command-line flag --msaa was given more than once."); }
+                options.SampleCount = ParseBoundedInteger(value, 1, 4, "--msaa requires 1 or 4, got: ");
+                if (options.SampleCount != 1 && options.SampleCount != 4) { throw std::invalid_argument("--msaa requires 1 or 4."); }
+                options.SampleCountSupplied = true;
             } else if (flag == L"--window") {
                 if (options.AdditionalWindows.size() >= 15) {
                     throw std::invalid_argument("The player supports at most 15 additional windows.");
@@ -412,8 +417,11 @@ namespace helengine::windows {
         return argument == L"--window-visibility" || argument == L"--scene" || argument == L"--frames" || argument == L"--fixed-delta" || argument == L"--capture" || argument == L"--capture-every"
             || argument == L"--idle-throttle" || argument == L"--idle-after-ms" || argument == L"--idle-fps"
             || argument == L"--window-mode" || argument == L"--overlay-bounds" || argument == L"--overlay-background"
-            || argument == L"--hit-test-probe" || argument == L"--dpi-awareness" || argument == L"--window";
+            || argument == L"--hit-test-probe" || argument == L"--dpi-awareness" || argument == L"--window" || argument == L"--msaa";
     }
+
+    /// Gets the validated primary output MSAA sample count.
+    int Win32CommandLineOptions::GetSampleCount() const { return SampleCount; }
 
     /// Converts a UTF-16 command-line value to UTF-8 so it can be compared with engine scene ids and logged.
     std::string Win32CommandLineOptions::ConvertToUtf8(const std::wstring& value) {
