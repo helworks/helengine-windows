@@ -88,6 +88,7 @@ set(HELENGINE_WINDOWS_SOURCES
     src/platform/windows/win32/win32_window_style.cpp
     src/platform/windows/directx11/directx11_back_buffer_capture.cpp
     src/platform/windows/directx11/directx11_bootstrap.cpp
+    src/platform/windows/directx11/directx11_output_attachments.cpp
     src/platform/windows/directx11/directx11_hit_test_sampler.cpp
     src/platform/windows/directx11/directx11_host_fingerprint.cpp
     src/platform/windows/directx11/directx11_hresult_formatter.cpp
@@ -191,6 +192,7 @@ add_executable(helengine_windows_desktop_tests EXCLUDE_FROM_ALL
     src/platform/windows/win32/win32_desktop_host.cpp
     src/platform/windows/win32/win32_window_style.cpp
     src/platform/windows/directx11/directx11_bootstrap.cpp
+    src/platform/windows/directx11/directx11_output_attachments.cpp
     src/platform/windows/directx11/directx11_hresult_formatter.cpp)
 target_include_directories(helengine_windows_desktop_tests PRIVATE src)
 target_compile_features(helengine_windows_desktop_tests PRIVATE cxx_std_20)
@@ -208,8 +210,19 @@ add_executable(helengine_windows_pointer_tests EXCLUDE_FROM_ALL
     src/platform/windows/win32/win32_desktop_host.cpp
     src/platform/windows/win32/win32_click_through_controller.cpp
     src/platform/windows/directx11/directx11_bootstrap.cpp
+    src/platform/windows/directx11/directx11_output_attachments.cpp
     src/platform/windows/directx11/directx11_hresult_formatter.cpp)
 target_include_directories(helengine_windows_pointer_tests PRIVATE src)
 target_compile_features(helengine_windows_pointer_tests PRIVATE cxx_std_20)
 target_compile_definitions(helengine_windows_pointer_tests PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
 target_link_libraries(helengine_windows_pointer_tests PRIVATE user32 gdi32 d3d11 dcomp dxgi)
+
+# Synthetic engine attachment coverage runs without swapchains, HWNDs or desktop capture.
+add_executable(helengine_windows_output_tests EXCLUDE_FROM_ALL
+    tests/output_attachments_tests.cpp
+    src/platform/windows/directx11/directx11_output_attachments.cpp
+    src/platform/windows/directx11/directx11_hresult_formatter.cpp)
+target_include_directories(helengine_windows_output_tests PRIVATE src)
+target_compile_features(helengine_windows_output_tests PRIVATE cxx_std_20)
+target_compile_definitions(helengine_windows_output_tests PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
+target_link_libraries(helengine_windows_output_tests PRIVATE d3d11 d3dcompiler dxgi)
