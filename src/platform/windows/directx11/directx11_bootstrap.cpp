@@ -1,4 +1,5 @@
 #include "platform/windows/directx11/directx11_bootstrap.hpp"
+#include "platform/windows/directx11/directx11_output_attachments.hpp"
 
 #include <sstream>
 #include <stdexcept>
@@ -12,30 +13,30 @@ namespace helengine::windows {
     /// <param name="height">Initial back-buffer height in pixels.</param>
     /// <param name="useComposition">True only in overlay mode: create a premultiplied composition swap chain and
     /// the DirectComposition device, target and visual instead of the window swap chain.</param>
-    DirectX11Bootstrap::DirectX11Bootstrap(HWND windowHandle, int width, int height, bool useComposition, bool useDesktop)
+    DirectX11Bootstrap::DirectX11Bootstrap(HWND windowHandle, int width, int height, bool useComposition, bool useDesktop, UINT sampleCount)
         : WindowHandle(windowHandle)
         , Width(width)
         , Height(height)
         , UseComposition(useComposition)
-        , UseDesktop(useDesktop) {
+        , UseDesktop(useDesktop), SampleCount(sampleCount) {
+        if (SampleCount != 1 && SampleCount != 4) { throw std::invalid_argument("Output sample count must be 1 or 4."); }
         if (UseDesktop && UseComposition) { throw std::invalid_argument("Desktop presentation cannot use overlay composition."); }
         CreateDevice();
         CreateSwapChain();
-        CreateRenderTargetView();
-        CreateDepthStencilView();
+        CreateOutputAttachments();
     }
 
     /// Creates window-owned presentation resources on the existing shared DirectX11 device.
-    DirectX11Bootstrap::DirectX11Bootstrap(HWND windowHandle, int width, int height, bool useComposition, DirectX11Bootstrap& sharedDevice, bool useDesktop)
-        : WindowHandle(windowHandle), Width(width), Height(height), UseComposition(useComposition), UseDesktop(useDesktop),
+    DirectX11Bootstrap::DirectX11Bootstrap(HWND windowHandle, int width, int height, bool useComposition, DirectX11Bootstrap& sharedDevice, bool useDesktop, UINT sampleCount)
+        : WindowHandle(windowHandle), Width(width), Height(height), UseComposition(useComposition), UseDesktop(useDesktop), SampleCount(sampleCount),
           Device(sharedDevice.GetDevice()), DeviceContext(sharedDevice.GetDeviceContext()) {
+        if (SampleCount != 1 && SampleCount != 4) { throw std::invalid_argument("Output sample count must be 1 or 4."); }
         if (UseDesktop && UseComposition) { throw std::invalid_argument("Desktop presentation cannot use overlay composition."); }
         if (windowHandle == nullptr || width <= 0 || height <= 0) {
             throw std::invalid_argument("A secondary swap chain requires a live window and positive client dimensions.");
         }
         CreateSwapChain();
-        CreateRenderTargetView();
-        CreateDepthStencilView();
+        CreateOutputAttachments();
     }
 
     /// Releases all DirectX11 resources.
@@ -58,12 +59,12 @@ namespace helengine::windows {
 
     /// Gets the back-buffer render target view.
     ID3D11RenderTargetView* DirectX11Bootstrap::GetRenderTargetView() const {
-        return RenderTargetView.Get();
+        return OutputAttachments->GetRenderTargetView();
     }
 
     /// Gets the back-buffer depth-stencil view.
     ID3D11DepthStencilView* DirectX11Bootstrap::GetDepthStencilView() const {
-        return DepthStencilView.Get();
+        return OutputAttachments->GetDepthStencilView();
     }
 
     /// Gets the current swap-chain width in pixels.
@@ -86,8 +87,7 @@ namespace helengine::windows {
             return;
         }
 
-        ReleaseRenderTargetView();
-        ReleaseDepthStencilView();
+        ReleaseOutputAttachments();
         ThrowIfFailed(
             SwapChain->ResizeBuffers(
                 0,
@@ -99,8 +99,7 @@ namespace helengine::windows {
 
         Width = width;
         Height = height;
-        CreateRenderTargetView();
-        CreateDepthStencilView();
+        CreateOutputAttachments();
     }
 
     /// Creates the hardware Direct3D 11 device and immediate context.
@@ -222,46 +221,21 @@ namespace helengine::windows {
         ThrowIfCompositionFailed(CompositionDevice->Commit(), "IDCompositionDevice::Commit");
     }
 
-    /// Creates the back-buffer render target view from the swap chain.
-    void DirectX11Bootstrap::CreateRenderTargetView() {
+    /// Creates complete engine-owned attachments against the current swapchain destination.
+    void DirectX11Bootstrap::CreateOutputAttachments() {
         Microsoft::WRL::ComPtr<ID3D11Texture2D> backBuffer;
-        ThrowIfFailed(SwapChain->GetBuffer(0, __uuidof(ID3D11Texture2D), reinterpret_cast<void**>(backBuffer.GetAddressOf())), "IDXGISwapChain1::GetBuffer failed for the back buffer.");
-        ThrowIfFailed(Device->CreateRenderTargetView(backBuffer.Get(), nullptr, RenderTargetView.GetAddressOf()), "ID3D11Device::CreateRenderTargetView failed for the back buffer.");
+        ThrowIfFailed(SwapChain->GetBuffer(0,__uuidof(ID3D11Texture2D),reinterpret_cast<void**>(backBuffer.GetAddressOf())),"Get output swapchain buffer failed.");
+        OutputAttachments = std::make_unique<DirectX11OutputAttachments>(Device.Get(),backBuffer.Get(),SampleCount);
     }
-
-    /// Creates the back-buffer depth-stencil resources for the current client size.
-    void DirectX11Bootstrap::CreateDepthStencilView() {
-        D3D11_TEXTURE2D_DESC depthDescription {};
-        depthDescription.Width = static_cast<UINT>(Width);
-        depthDescription.Height = static_cast<UINT>(Height);
-        depthDescription.MipLevels = 1;
-        depthDescription.ArraySize = 1;
-        depthDescription.Format = DXGI_FORMAT_D24_UNORM_S8_UINT;
-        depthDescription.SampleDesc.Count = 1;
-        depthDescription.Usage = D3D11_USAGE_DEFAULT;
-        depthDescription.BindFlags = D3D11_BIND_DEPTH_STENCIL;
-
-        ThrowIfFailed(
-            Device->CreateTexture2D(&depthDescription, nullptr, DepthStencilBuffer.GetAddressOf()),
-            "ID3D11Device::CreateTexture2D failed for the back-buffer depth buffer.");
-        ThrowIfFailed(
-            Device->CreateDepthStencilView(DepthStencilBuffer.Get(), nullptr, DepthStencilView.GetAddressOf()),
-            "ID3D11Device::CreateDepthStencilView failed for the back-buffer depth buffer.");
+    /// Drops all context bindings and retained buffer references before changing the swapchain size.
+    void DirectX11Bootstrap::ReleaseOutputAttachments() {
+        DeviceContext->OMSetRenderTargets(0,nullptr,nullptr);
+        OutputAttachments.reset();
     }
-
-    /// Releases the current back-buffer render target binding and view.
-    void DirectX11Bootstrap::ReleaseRenderTargetView() {
-        ID3D11RenderTargetView* nullRenderTargetView = nullptr;
-        DeviceContext->OMSetRenderTargets(1, &nullRenderTargetView, nullptr);
-        RenderTargetView.Reset();
-    }
-
-    /// Releases the current depth-stencil resources.
-    void DirectX11Bootstrap::ReleaseDepthStencilView() {
-        DepthStencilView.Reset();
-        DepthStencilBuffer.Reset();
-    }
-
+    /// Gets the per-output engine sample count without changing presentation policy.
+    UINT DirectX11Bootstrap::GetSampleCount() const { return SampleCount; }
+    /// Resolves color and alpha before any external consumer reads this output's single-sample destination.
+    void DirectX11Bootstrap::ResolveOutput() { OutputAttachments->Resolve(DeviceContext.Get()); }
     /// Throws when one native DirectX call fails.
     void DirectX11Bootstrap::ThrowIfFailed(HRESULT result, const char* message) {
         if (FAILED(result)) {

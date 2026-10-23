@@ -361,6 +361,9 @@ namespace helengine::windows {
         /// Stores the rasterizer state for solid back-face-culled drawing.
         Microsoft::WRL::ComPtr<ID3D11RasterizerState> RasterizerState;
 
+        /// Enables multisample coverage when this renderer selects a 4x output on the shared device.
+        Microsoft::WRL::ComPtr<ID3D11RasterizerState> MultisampleRasterizerState;
+
         /// Stores the depth-stencil state for normal opaque 3D drawing.
         Microsoft::WRL::ComPtr<ID3D11DepthStencilState> DepthStencilState;
 
@@ -609,6 +612,9 @@ namespace helengine::windows {
 
         /// Stores the rasterizer state used by 2D draws.
         Microsoft::WRL::ComPtr<ID3D11RasterizerState> RasterizerState;
+
+        /// Enables multisample coverage when this renderer selects a 4x output on the shared device.
+        Microsoft::WRL::ComPtr<ID3D11RasterizerState> MultisampleRasterizerState;
 
         /// Stores the disabled-depth state used by 2D overlay draws.
         Microsoft::WRL::ComPtr<ID3D11DepthStencilState> DepthStencilState;

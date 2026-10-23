@@ -1455,6 +1455,7 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
         ShadowTransformBuffer.Reset();
         DebugTriangleBuffer.Reset();
         RasterizerState.Reset();
+        MultisampleRasterizerState.Reset();
         DepthStencilState.Reset();
         ShadowRasterizerState.Reset();
         ShadowDepthStencilState.Reset();
@@ -1507,7 +1508,7 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
         ID3D11Buffer* transformBuffer = TransformBuffer.Get();
         context->VSSetConstantBuffers(0, 1, &transformBuffer);
         context->PSSetConstantBuffers(0, 1, &transformBuffer);
-        context->RSSetState(RasterizerState.Get());
+        context->RSSetState(OutputBootstrap->GetSampleCount() == 4 ? MultisampleRasterizerState.Get() : RasterizerState.Get());
         context->OMSetDepthStencilState(DepthStencilState.Get(), 0);
 
         bool renderedAnyCamera = false;
@@ -1858,7 +1859,7 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
 
     /// Creates the shaders, input layout, and fixed pipeline state on first use.
     void Win32RenderManager3D::EnsurePipelineState() {
-        if (VertexShader && PixelShader && InputLayout && TransformBuffer && RasterizerState && DepthStencilState) {
+        if (VertexShader && PixelShader && InputLayout && TransformBuffer && RasterizerState && MultisampleRasterizerState && DepthStencilState) {
             EnsureShadowPipelineState();
             EnsureTextureSamplerState();
             EnsureWhiteTextureFallbackResource();
@@ -1947,6 +1948,9 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
         ThrowIfFailed(
             Bootstrap.GetDevice()->CreateRasterizerState(&rasterizerDescription, RasterizerState.GetAddressOf()),
             "ID3D11Device::CreateRasterizerState failed for the Windows bridge.");
+        rasterizerDescription.MultisampleEnable = TRUE;
+        ThrowIfFailed(Bootstrap.GetDevice()->CreateRasterizerState(&rasterizerDescription, MultisampleRasterizerState.GetAddressOf()),
+            "Create multisampled Windows 3D rasterizer state failed.");
 
         D3D11_DEPTH_STENCIL_DESC depthStencilDescription {};
         depthStencilDescription.DepthEnable = TRUE;
@@ -2297,7 +2301,7 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
         PrepareShadowState(camera, visibleLights);
         context->OMSetRenderTargets(1, &renderTargetView, depthStencilView);
         context->RSSetViewports(1, &viewport);
-        context->RSSetState(RasterizerState.Get());
+        context->RSSetState(OutputBootstrap->GetSampleCount() == 4 ? MultisampleRasterizerState.Get() : RasterizerState.Get());
         context->OMSetDepthStencilState(DepthStencilState.Get(), 0);
         context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
         if (AlphaMode == Win32RenderAlphaMode::Premultiplied) {
@@ -3362,7 +3366,7 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
             && TextureSamplerState
             && AlphaBlendState
             && PremultipliedDestinationBlendState
-            && RasterizerState
+            && RasterizerState && MultisampleRasterizerState
             && DepthStencilState
             && WhiteShaderResourceView) {
             return;
@@ -3582,6 +3586,9 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
         ThrowIfFailed(
             device->CreateRasterizerState(&rasterizerDescription, RasterizerState.GetAddressOf()),
             "ID3D11Device::CreateRasterizerState failed for the Windows 2D rasterizer state.");
+        rasterizerDescription.MultisampleEnable = TRUE;
+        ThrowIfFailed(device->CreateRasterizerState(&rasterizerDescription, MultisampleRasterizerState.GetAddressOf()),
+            "Create multisampled Windows 2D rasterizer state failed.");
 
         D3D11_DEPTH_STENCIL_DESC depthStencilDescription {};
         depthStencilDescription.DepthEnable = FALSE;
@@ -3681,7 +3688,7 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
         ID3D11DepthStencilView* depthStencilView = OutputBootstrap->GetDepthStencilView();
         context->OMSetRenderTargets(1, &renderTargetView, depthStencilView);
         context->RSSetViewports(1, &CurrentViewport);
-        context->RSSetState(RasterizerState.Get());
+        context->RSSetState(OutputBootstrap->GetSampleCount() == 4 ? MultisampleRasterizerState.Get() : RasterizerState.Get());
         ApplyScissorRect();
         context->OMSetDepthStencilState(DepthStencilState.Get(), 0);
 
@@ -3720,7 +3727,7 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
         ID3D11DepthStencilView* depthStencilView = OutputBootstrap->GetDepthStencilView();
         context->OMSetRenderTargets(1, &renderTargetView, depthStencilView);
         context->RSSetViewports(1, &CurrentViewport);
-        context->RSSetState(RasterizerState.Get());
+        context->RSSetState(OutputBootstrap->GetSampleCount() == 4 ? MultisampleRasterizerState.Get() : RasterizerState.Get());
         ApplyScissorRect();
         context->OMSetDepthStencilState(DepthStencilState.Get(), 0);
 
@@ -4518,6 +4525,7 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
         AlphaBlendState.Reset();
         PremultipliedDestinationBlendState.Reset();
         RasterizerState.Reset();
+        MultisampleRasterizerState.Reset();
         DepthStencilState.Reset();
         WhiteTexture.Reset();
         WhiteShaderResourceView.Reset();

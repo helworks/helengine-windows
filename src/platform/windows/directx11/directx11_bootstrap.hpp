@@ -5,8 +5,10 @@
 #include <dcomp.h>
 #include <dxgi1_2.h>
 #include <wrl/client.h>
+#include <memory>
 
 namespace helengine::windows {
+    class DirectX11OutputAttachments;
     /// Owns the first DirectX11 device, context, swap chain, and back-buffer render target. In the default mode the
     /// swap chain is bound to the window with CreateSwapChainForHwnd; in the opt-in overlay mode it is a premultiplied
     /// composition swap chain that DirectComposition shows on the window.
@@ -18,12 +20,13 @@ namespace helengine::windows {
         /// <param name="height">Initial back-buffer height in pixels.</param>
         /// <param name="useComposition">True only in overlay mode: create a premultiplied composition swap chain and
         /// the DirectComposition device, target and visual instead of the window swap chain.</param>
+        /// <param name="sampleCount">Requests 1x or 4x engine rendering without multisampling the swapchain.</param>
         /// <param name="useDesktop">Selects an opaque blt swap chain for a layered Explorer child; false retains normal flip presentation.</param>
-        DirectX11Bootstrap(HWND windowHandle, int width, int height, bool useComposition, bool useDesktop = false);
+        DirectX11Bootstrap(HWND windowHandle, int width, int height, bool useComposition, bool useDesktop = false, UINT sampleCount = 1);
 
         /// Creates an additional swap chain using the primary device and context; resource caches remain shared.
         /// useComposition selects overlay alpha; useDesktop selects opaque blt presentation and cannot accompany composition.
-        DirectX11Bootstrap(HWND windowHandle, int width, int height, bool useComposition, DirectX11Bootstrap& sharedDevice, bool useDesktop = false);
+        DirectX11Bootstrap(HWND windowHandle, int width, int height, bool useComposition, DirectX11Bootstrap& sharedDevice, bool useDesktop = false, UINT sampleCount = 1);
 
         /// Releases all DirectX11 resources.
         ~DirectX11Bootstrap();
@@ -42,6 +45,12 @@ namespace helengine::windows {
 
         /// Gets the back-buffer depth-stencil view.
         ID3D11DepthStencilView* GetDepthStencilView() const;
+
+        /// Gets the requested engine color/depth sample count; the swapchain itself remains single-sample.
+        UINT GetSampleCount() const;
+
+        /// Resolves the completed output before hit-test readback, capture or presentation.
+        void ResolveOutput();
 
         /// Gets the current swap-chain width in pixels.
         int GetWidth() const;
@@ -65,17 +74,11 @@ namespace helengine::windows {
         /// Commit. Throws std::runtime_error carrying the failing HRESULT in hexadecimal when any call fails.
         void CreateCompositionSwapChain();
 
-        /// Creates the back-buffer render target view from the swap chain.
-        void CreateRenderTargetView();
+        /// Creates all output attachments against the current single-sample swapchain buffer.
+        void CreateOutputAttachments();
 
-        /// Creates the back-buffer depth-stencil resources for the current client size.
-        void CreateDepthStencilView();
-
-        /// Releases the current back-buffer render target binding and view.
-        void ReleaseRenderTargetView();
-
-        /// Releases the current depth-stencil resources.
-        void ReleaseDepthStencilView();
+        /// Unbinds and releases every attachment reference before ResizeBuffers.
+        void ReleaseOutputAttachments();
 
         /// Throws when one native DirectX call fails.
         static void ThrowIfFailed(HRESULT result, const char* message);
@@ -99,6 +102,9 @@ namespace helengine::windows {
         /// Selects blt presentation for opaque layered children in Explorer; normal windows keep flip presentation.
         bool UseDesktop;
 
+        /// Stores the validated per-output engine sample count.
+        UINT SampleCount;
+
         /// Stores the Direct3D 11 device.
         Microsoft::WRL::ComPtr<ID3D11Device> Device;
 
@@ -108,14 +114,8 @@ namespace helengine::windows {
         /// Stores the created swap chain.
         Microsoft::WRL::ComPtr<IDXGISwapChain1> SwapChain;
 
-        /// Stores the created back-buffer render target view.
-        Microsoft::WRL::ComPtr<ID3D11RenderTargetView> RenderTargetView;
-
-        /// Stores the created depth-stencil texture for the back buffer.
-        Microsoft::WRL::ComPtr<ID3D11Texture2D> DepthStencilBuffer;
-
-        /// Stores the created depth-stencil view for the back buffer.
-        Microsoft::WRL::ComPtr<ID3D11DepthStencilView> DepthStencilView;
+        /// Owns compatible color/depth resources and retains the resolve destination until resize.
+        std::unique_ptr<DirectX11OutputAttachments> OutputAttachments;
 
         /// Stores the DirectComposition device in overlay mode; null otherwise. Declared after the swap chain and the
         /// device so it is released before them.

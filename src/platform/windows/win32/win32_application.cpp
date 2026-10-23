@@ -773,7 +773,7 @@ namespace helengine::windows {
             MainWindow->GetClientWidth(),
             MainWindow->GetClientHeight(),
             WindowModeSettings->GetWindowMode() == Win32WindowMode::Overlay,
-            WindowModeSettings->GetWindowMode() == Win32WindowMode::Desktop);
+            WindowModeSettings->GetWindowMode() == Win32WindowMode::Desktop, CommandLineOptions.GetSampleCount());
         Presenter = std::make_unique<DirectX11Presenter>(*Bootstrap);
         if (CommandLineOptions.HasCapturePath()) {
             BackBufferCapture = std::make_unique<DirectX11BackBufferCapture>(*Bootstrap);
@@ -1964,6 +1964,7 @@ namespace helengine::windows {
 #endif
             }
 
+            Bootstrap->ResolveOutput();
             if (BackBufferCapture && CommandLineOptions.ShouldCaptureFrame(RenderedFrameCount)) {
                 frameStage = "capture";
                 try {
@@ -3112,6 +3113,7 @@ namespace helengine::windows {
                 ? Win32RenderAlphaMode::Premultiplied : Win32RenderAlphaMode::Straight, WindowModeSettings->GetOverlayBackground());
             EngineCore->Draw();
             coreDrawCompleted = true;
+            Bootstrap->ResolveOutput();
             if (BackBufferCapture && CommandLineOptions.ShouldCaptureFrame(RenderedFrameCount)) {
                 BackBufferCapture->CaptureToBmp(CommandLineOptions.GetCapturePathForFrame(RenderedFrameCount));
             }

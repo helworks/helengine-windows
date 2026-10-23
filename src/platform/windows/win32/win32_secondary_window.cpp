@@ -21,7 +21,7 @@ namespace helengine::windows {
         Window->ShowSecondary();
         Window->RethrowPendingException();
         Bootstrap = std::make_unique<DirectX11Bootstrap>(RegisteredHandle, Window->GetClientWidth(), Window->GetClientHeight(),
-            settings.GetMode() == Win32WindowMode::Overlay, sharedDevice, settings.GetMode() == Win32WindowMode::Desktop);
+            settings.GetMode() == Win32WindowMode::Overlay, sharedDevice, settings.GetMode() == Win32WindowMode::Desktop, settings.GetSampleCount());
         Presenter = std::make_unique<DirectX11Presenter>(*Bootstrap);
         if (options.HasFrameLimit()) {
             Fingerprint = std::make_unique<DirectX11HostFingerprint>(*Bootstrap, RegisteredHandle, settings.GetTag());
@@ -53,6 +53,7 @@ namespace helengine::windows {
     bool Win32SecondaryWindow::ObserveCursorForActivity() { return HitTest && HitTest->ObserveCursorForActivity(); }
     /// Completes one drawn view and performs its own optional capture before presentation.
     void Win32SecondaryWindow::CompleteFrame(bool synchronize, bool idle, bool finalFrame) {
+        Bootstrap->ResolveOutput();
         if (HitTest) { HitTest->SampleFrame(); }
         if (Capture && finalFrame) {
             try { Capture->CaptureToBmp(CapturePath); }
