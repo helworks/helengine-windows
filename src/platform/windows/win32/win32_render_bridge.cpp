@@ -1043,6 +1043,14 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
         , CurrentViewProjection(::float4x4::get_Identity())
         , CurrentShadowViewProjection(::float4x4::get_Identity())
         , CurrentCameraPosition(0.0f, 0.0f, 0.0f) {
+        ShaderCompilation=std::make_unique<DirectX11ShaderCompilation>(std::vector<DirectX11ShaderRequest>{
+            {VertexShaderSource,"EngineMesh","VSMain","vs_5_0",0,{}},
+            {PixelShaderSource,"EngineMesh","PSMain","ps_5_0",0,{}},
+            {DiagnosticVertexShaderSource,"EngineDiagnostic","VSMain","vs_5_0",0,{}},
+            {DiagnosticPixelShaderSource,"EngineDiagnostic","PSMain","ps_5_0",0,{}},
+            {ShadowVertexShaderSource,"EngineShadow","VSMain","vs_5_0",0,{}},
+            {ShadowPixelShaderSource,"EngineShadow","PSMain","ps_5_0",0,{}}
+        });
     }
 
     /// Applies the back-buffer alpha mode and the overlay background once at startup, before the first Draw.
@@ -1122,9 +1130,18 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
                         ? static_cast<std::size_t>(data->Indices16->Length) * sizeof(uint16_t)
                         : 0);
             if (vertexCount > 0) {
+                // Capture bounds from the same Real-valued positions uploaded by this renderer.
+                float3 boundsMin = (*data->Positions)[0];
+                float3 boundsMax = boundsMin;
                 std::vector<Win32VertexPositionNormalUV> vertices(static_cast<std::size_t>(vertexCount));
                 for (int32_t index = 0; index < vertexCount; index++) {
                     const float3& position = (*data->Positions)[index];
+                    boundsMin.X = std::min(boundsMin.X, position.X);
+                    boundsMin.Y = std::min(boundsMin.Y, position.Y);
+                    boundsMin.Z = std::min(boundsMin.Z, position.Z);
+                    boundsMax.X = std::max(boundsMax.X, position.X);
+                    boundsMax.Y = std::max(boundsMax.Y, position.Y);
+                    boundsMax.Z = std::max(boundsMax.Z, position.Z);
                     const float3& normal = (*data->Normals)[index];
                     const float2& texCoord = (*data->TexCoords)[index];
 
@@ -1146,6 +1163,7 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
                 ThrowIfFailed(
                     Bootstrap.GetDevice()->CreateBuffer(&vertexBufferDescription, &vertexData, runtimeModel->VertexBuffer.GetAddressOf()),
                     "ID3D11Device::CreateBuffer failed for the Windows mesh vertex buffer.");
+                runtimeModel->SetBounds(boundsMin, boundsMax);
                 runtimeModel->VertexCount = static_cast<UINT>(vertices.size());
                 runtimeModel->VertexBufferBytes = vertexBufferDescription.ByteWidth;
             }
@@ -1397,6 +1415,8 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
             throw std::invalid_argument("Runtime material must be provided for release.");
         }
 
+        for(auto& registration : CameraToonPasses) registration.second->RemoveMaterialEffects(material);
+
         const std::string materialId = material->get_Id().raw();
         RuntimeRenderDiagnostics::RecordAssetReleaseRequested("material", materialId, "renderer=windows");
         if (!materialId.empty()) {
@@ -1434,6 +1454,10 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
 
     /// Releases Windows renderer-owned 3D resources.
     void Win32RenderManager3D::Dispose() {
+        ShaderCompilation.reset();
+        PipelinePrepared=false;
+        ActiveToonPass = nullptr;
+        CameraToonPasses.clear();
         MaterialShaderResources.clear();
         MaterialConstantBuffers.clear();
         LiveModelBufferCount = 0;
@@ -1473,26 +1497,30 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
         }
 
         RenderManager3D::Draw();
-        EnsurePipelineState();
+        OutputReadiness.Begin(EnsurePipelineState());
         if (!HasWrittenRenderSnapshot) {
             AppendRenderSnapshotLine("draw begin");
             AppendRenderDiagnosticsLine("3d.draw begin");
         }
 
         if (Core::get_Instance() == nullptr || Core::get_Instance()->get_ObjectManager() == nullptr) {
+            OutputReadiness.ObservePass(false);
             ClearBackBuffer(0.0f, 0.0f, 0.0f, 1.0f);
+            if (RenderManager2DBridge) RenderManager2DBridge->RenderDebugBuildIndicator();
             HasWrittenRenderSnapshot = true;
             return;
         }
 
         List<ICamera*>* cameras = Core::get_Instance()->get_ObjectManager()->get_Cameras();
         if (cameras == nullptr || cameras->Count() == 0) {
+            OutputReadiness.ObservePass(false);
             if (!HasWrittenRenderSnapshot) {
                 AppendRenderSnapshotLine("camera count=0");
                 AppendRenderDiagnosticsLine("3d.camera_count=0");
             }
 
             ClearBackBuffer(0.0f, 0.0f, 0.0f, 1.0f);
+            if (RenderManager2DBridge) RenderManager2DBridge->RenderDebugBuildIndicator();
             HasWrittenRenderSnapshot = true;
             return;
         }
@@ -1501,15 +1529,6 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
             AppendRenderSnapshotLine("camera count=" + std::to_string(cameras->Count()));
             AppendRenderDiagnosticsLine("3d.camera_count=" + std::to_string(cameras->Count()));
         }
-
-        ID3D11DeviceContext* context = Bootstrap.GetDeviceContext();
-        context->IASetInputLayout(InputLayout.Get());
-        context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-        ID3D11Buffer* transformBuffer = TransformBuffer.Get();
-        context->VSSetConstantBuffers(0, 1, &transformBuffer);
-        context->PSSetConstantBuffers(0, 1, &transformBuffer);
-        context->RSSetState(OutputBootstrap->GetSampleCount() == 4 ? MultisampleRasterizerState.Get() : RasterizerState.Get());
-        context->OMSetDepthStencilState(DepthStencilState.Get(), 0);
 
         bool renderedAnyCamera = false;
         bool clearedColorBuffer = false;
@@ -1526,16 +1545,23 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
                 continue;
             }
 
-            RenderCamera(camera, !clearedColorBuffer);
+            if(!RenderCamera(camera, !clearedColorBuffer)) continue;
             clearedColorBuffer = true;
             renderedAnyCamera = true;
         }
 
         if (!renderedAnyCamera) {
+            OutputReadiness.ObservePass(false);
             ClearBackBuffer(0.0f, 0.0f, 0.0f, 1.0f);
         }
 
+        if (RenderManager2DBridge) RenderManager2DBridge->RenderDebugBuildIndicator();
         HasWrittenRenderSnapshot = true;
+    }
+
+    /// Requires completed camera passes and the shared 2D pipeline before an output can authorize host input.
+    bool Win32RenderManager3D::IsOutputReady() const {
+        return OutputReadiness.IsComplete() && RenderManager2DBridge!=nullptr && RenderManager2DBridge->IsPipelineReady();
     }
 
     /// Draws one queued mesh for the currently active camera.
@@ -1829,6 +1855,13 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
                 visitStage = "update_transform_buffer";
                 context->UpdateSubresource(TransformBuffer.Get(), 0, nullptr, &constants, 0, 0);
 
+                if (ActiveToonPass != nullptr) {
+                    if (rootMaterial == nullptr) {
+                        throw std::logic_error("Camera toon geometry requires a packaged standard material.");
+                    }
+                    ActiveToonPass->BindRegisteredGeometry(context,runtimeMaterial);
+                }
+
                 int32_t startElement = ResolveRuntimeSubmeshStart(submesh);
                 int32_t elementCount = ResolveRuntimeSubmeshElementCount(submesh, model);
                 if (elementCount <= 0) {
@@ -1857,187 +1890,128 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
         }
     }
 
-    /// Creates the shaders, input layout, and fixed pipeline state on first use.
-    void Win32RenderManager3D::EnsurePipelineState() {
-        if (VertexShader && PixelShader && InputLayout && TransformBuffer && RasterizerState && MultisampleRasterizerState && DepthStencilState) {
-            EnsureShadowPipelineState();
+    /// Polls generic shader loading and creates fixed device state only after the complete 3D batch is ready.
+    bool Win32RenderManager3D::EnsurePipelineState() {
+        if(PipelineFailure) std::rethrow_exception(PipelineFailure);
+        if(PipelinePrepared) return true;
+        if(!ShaderCompilation) throw std::logic_error("Cannot prepare a disposed 3D renderer.");
+        try {
+            DirectX11ShaderCompilation::Bytecodes bytecodes;
+            if(!ShaderCompilation->TryGetBytecodes(bytecodes)) return false;
+            const auto& vertexShaderBlob=bytecodes[0];
+            const auto& pixelShaderBlob=bytecodes[1];
+            ThrowIfFailed(
+                Bootstrap.GetDevice()->CreateVertexShader(vertexShaderBlob->GetBufferPointer(), vertexShaderBlob->GetBufferSize(), nullptr, VertexShader.GetAddressOf()),
+                "ID3D11Device::CreateVertexShader failed for the Windows bridge.");
+            ThrowIfFailed(
+                Bootstrap.GetDevice()->CreatePixelShader(pixelShaderBlob->GetBufferPointer(), pixelShaderBlob->GetBufferSize(), nullptr, PixelShader.GetAddressOf()),
+                "ID3D11Device::CreatePixelShader failed for the Windows bridge.");
+            if (!HasWrittenRenderSnapshot) {
+                AppendRenderSnapshotLine("pipeline shaders created");
+            }
+
+            static const D3D11_INPUT_ELEMENT_DESC InputElements[] = {
+                { "POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 0, D3D11_INPUT_PER_VERTEX_DATA, 0 },
+                { "NORMAL", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 12, D3D11_INPUT_PER_VERTEX_DATA, 0 },
+                { "TEXCOORD", 0, DXGI_FORMAT_R32G32_FLOAT, 0, 24, D3D11_INPUT_PER_VERTEX_DATA, 0 }
+            };
+
+            ThrowIfFailed(
+                Bootstrap.GetDevice()->CreateInputLayout(
+                    InputElements,
+                    static_cast<UINT>(std::size(InputElements)),
+                    vertexShaderBlob->GetBufferPointer(),
+                    vertexShaderBlob->GetBufferSize(),
+                    InputLayout.GetAddressOf()),
+                "ID3D11Device::CreateInputLayout failed for the Windows bridge.");
+            if (!HasWrittenRenderSnapshot) {
+                AppendRenderSnapshotLine("input layout created");
+            }
+
+            D3D11_BUFFER_DESC constantBufferDescription {};
+            constantBufferDescription.ByteWidth = sizeof(Win32TransformConstants);
+            constantBufferDescription.Usage = D3D11_USAGE_DEFAULT;
+            constantBufferDescription.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
+
+            ThrowIfFailed(
+                Bootstrap.GetDevice()->CreateBuffer(&constantBufferDescription, nullptr, TransformBuffer.GetAddressOf()),
+                "ID3D11Device::CreateBuffer failed for the Windows bridge transform buffer.");
+            if (!HasWrittenRenderSnapshot) {
+                AppendRenderSnapshotLine("transform buffer created");
+            }
+
             EnsureTextureSamplerState();
             EnsureWhiteTextureFallbackResource();
-            return;
-        }
 
-        if (!HasWrittenRenderSnapshot) {
-            AppendRenderSnapshotLine("ensure pipeline state begin");
-        }
+            D3D11_RASTERIZER_DESC rasterizerDescription {};
+            rasterizerDescription.FillMode = D3D11_FILL_SOLID;
+            rasterizerDescription.CullMode = D3D11_CULL_NONE;
+            rasterizerDescription.FrontCounterClockwise = TRUE;
+            rasterizerDescription.DepthClipEnable = TRUE;
 
-        Microsoft::WRL::ComPtr<ID3DBlob> vertexShaderBlob;
-        Microsoft::WRL::ComPtr<ID3DBlob> pixelShaderBlob;
-        Microsoft::WRL::ComPtr<ID3DBlob> errorBlob;
+            ThrowIfFailed(
+                Bootstrap.GetDevice()->CreateRasterizerState(&rasterizerDescription, RasterizerState.GetAddressOf()),
+                "ID3D11Device::CreateRasterizerState failed for the Windows bridge.");
+            rasterizerDescription.MultisampleEnable = TRUE;
+            ThrowIfFailed(Bootstrap.GetDevice()->CreateRasterizerState(&rasterizerDescription, MultisampleRasterizerState.GetAddressOf()),
+                "Create multisampled Windows 3D rasterizer state failed.");
 
-        HRESULT vertexShaderResult = D3DCompile(VertexShaderSource, strlen(VertexShaderSource), nullptr, nullptr, nullptr, "VSMain", "vs_5_0", 0, 0, vertexShaderBlob.GetAddressOf(), errorBlob.GetAddressOf());
-        if (FAILED(vertexShaderResult) && errorBlob) {
-            AppendRenderSnapshotLine(std::string("vertex shader compile failed: ") + static_cast<const char*>(errorBlob->GetBufferPointer()));
-        }
-        ThrowIfFailed(
-            vertexShaderResult,
-            errorBlob ? static_cast<const char*>(errorBlob->GetBufferPointer()) : "D3DCompile failed for the Windows bridge vertex shader.");
-        if (!HasWrittenRenderSnapshot) {
-            AppendRenderSnapshotLine("vertex shader compiled");
-        }
-        errorBlob.Reset();
-        HRESULT pixelShaderResult = D3DCompile(PixelShaderSource, strlen(PixelShaderSource), nullptr, nullptr, nullptr, "PSMain", "ps_5_0", 0, 0, pixelShaderBlob.GetAddressOf(), errorBlob.GetAddressOf());
-        if (FAILED(pixelShaderResult) && errorBlob) {
-            AppendRenderSnapshotLine(std::string("pixel shader compile failed: ") + static_cast<const char*>(errorBlob->GetBufferPointer()));
-        }
-        ThrowIfFailed(
-            pixelShaderResult,
-            errorBlob ? static_cast<const char*>(errorBlob->GetBufferPointer()) : "D3DCompile failed for the Windows bridge pixel shader.");
-        if (!HasWrittenRenderSnapshot) {
-            AppendRenderSnapshotLine("pixel shader compiled");
-        }
+            D3D11_DEPTH_STENCIL_DESC depthStencilDescription {};
+            depthStencilDescription.DepthEnable = TRUE;
+            depthStencilDescription.DepthWriteMask = D3D11_DEPTH_WRITE_MASK_ALL;
+            depthStencilDescription.DepthFunc = D3D11_COMPARISON_LESS_EQUAL;
+            depthStencilDescription.StencilEnable = TRUE;
+            depthStencilDescription.StencilReadMask = D3D11_DEFAULT_STENCIL_READ_MASK;
+            depthStencilDescription.StencilWriteMask = D3D11_DEFAULT_STENCIL_WRITE_MASK;
+            depthStencilDescription.FrontFace.StencilFunc = D3D11_COMPARISON_ALWAYS;
+            depthStencilDescription.FrontFace.StencilPassOp = D3D11_STENCIL_OP_KEEP;
+            depthStencilDescription.FrontFace.StencilFailOp = D3D11_STENCIL_OP_KEEP;
+            depthStencilDescription.FrontFace.StencilDepthFailOp = D3D11_STENCIL_OP_KEEP;
+            depthStencilDescription.BackFace = depthStencilDescription.FrontFace;
 
-        ThrowIfFailed(
-            Bootstrap.GetDevice()->CreateVertexShader(vertexShaderBlob->GetBufferPointer(), vertexShaderBlob->GetBufferSize(), nullptr, VertexShader.GetAddressOf()),
-            "ID3D11Device::CreateVertexShader failed for the Windows bridge.");
-        ThrowIfFailed(
-            Bootstrap.GetDevice()->CreatePixelShader(pixelShaderBlob->GetBufferPointer(), pixelShaderBlob->GetBufferSize(), nullptr, PixelShader.GetAddressOf()),
-            "ID3D11Device::CreatePixelShader failed for the Windows bridge.");
-        if (!HasWrittenRenderSnapshot) {
-            AppendRenderSnapshotLine("pipeline shaders created");
-        }
+            ThrowIfFailed(
+                Bootstrap.GetDevice()->CreateDepthStencilState(&depthStencilDescription, DepthStencilState.GetAddressOf()),
+                "ID3D11Device::CreateDepthStencilState failed for the Windows bridge.");
+            if (!HasWrittenRenderSnapshot) {
+                AppendRenderSnapshotLine("depth stencil state created");
+            }
 
-        static const D3D11_INPUT_ELEMENT_DESC InputElements[] = {
-            { "POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 0, D3D11_INPUT_PER_VERTEX_DATA, 0 },
-            { "NORMAL", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 12, D3D11_INPUT_PER_VERTEX_DATA, 0 },
-            { "TEXCOORD", 0, DXGI_FORMAT_R32G32_FLOAT, 0, 24, D3D11_INPUT_PER_VERTEX_DATA, 0 }
-        };
+            const auto& diagnosticVertexShaderBlob=bytecodes[2];
+            const auto& diagnosticPixelShaderBlob=bytecodes[3];
+            ThrowIfFailed(
+                Bootstrap.GetDevice()->CreateVertexShader(diagnosticVertexShaderBlob->GetBufferPointer(), diagnosticVertexShaderBlob->GetBufferSize(), nullptr, DiagnosticVertexShader.GetAddressOf()),
+                "ID3D11Device::CreateVertexShader failed for the Windows bridge diagnostic pass.");
+            ThrowIfFailed(
+                Bootstrap.GetDevice()->CreatePixelShader(diagnosticPixelShaderBlob->GetBufferPointer(), diagnosticPixelShaderBlob->GetBufferSize(), nullptr, DiagnosticPixelShader.GetAddressOf()),
+                "ID3D11Device::CreatePixelShader failed for the Windows bridge diagnostic pass.");
 
-        ThrowIfFailed(
-            Bootstrap.GetDevice()->CreateInputLayout(
-                InputElements,
-                static_cast<UINT>(std::size(InputElements)),
-                vertexShaderBlob->GetBufferPointer(),
-                vertexShaderBlob->GetBufferSize(),
-                InputLayout.GetAddressOf()),
-            "ID3D11Device::CreateInputLayout failed for the Windows bridge.");
-        if (!HasWrittenRenderSnapshot) {
-            AppendRenderSnapshotLine("input layout created");
-        }
+            static const D3D11_INPUT_ELEMENT_DESC DiagnosticInputElements[] = {
+                { "POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 0, D3D11_INPUT_PER_VERTEX_DATA, 0 }
+            };
 
-        D3D11_BUFFER_DESC constantBufferDescription {};
-        constantBufferDescription.ByteWidth = sizeof(Win32TransformConstants);
-        constantBufferDescription.Usage = D3D11_USAGE_DEFAULT;
-        constantBufferDescription.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
+            ThrowIfFailed(
+                Bootstrap.GetDevice()->CreateInputLayout(
+                    DiagnosticInputElements,
+                    static_cast<UINT>(std::size(DiagnosticInputElements)),
+                    diagnosticVertexShaderBlob->GetBufferPointer(),
+                    diagnosticVertexShaderBlob->GetBufferSize(),
+                    DiagnosticInputLayout.GetAddressOf()),
+                "ID3D11Device::CreateInputLayout failed for the Windows bridge diagnostic pass.");
+            if (!HasWrittenRenderSnapshot) {
+                AppendRenderSnapshotLine("diagnostic pipeline created");
+            }
 
-        ThrowIfFailed(
-            Bootstrap.GetDevice()->CreateBuffer(&constantBufferDescription, nullptr, TransformBuffer.GetAddressOf()),
-            "ID3D11Device::CreateBuffer failed for the Windows bridge transform buffer.");
-        if (!HasWrittenRenderSnapshot) {
-            AppendRenderSnapshotLine("transform buffer created");
-        }
-
-        EnsureTextureSamplerState();
-        EnsureWhiteTextureFallbackResource();
-
-        D3D11_RASTERIZER_DESC rasterizerDescription {};
-        rasterizerDescription.FillMode = D3D11_FILL_SOLID;
-        rasterizerDescription.CullMode = D3D11_CULL_NONE;
-        rasterizerDescription.FrontCounterClockwise = TRUE;
-        rasterizerDescription.DepthClipEnable = TRUE;
-
-        ThrowIfFailed(
-            Bootstrap.GetDevice()->CreateRasterizerState(&rasterizerDescription, RasterizerState.GetAddressOf()),
-            "ID3D11Device::CreateRasterizerState failed for the Windows bridge.");
-        rasterizerDescription.MultisampleEnable = TRUE;
-        ThrowIfFailed(Bootstrap.GetDevice()->CreateRasterizerState(&rasterizerDescription, MultisampleRasterizerState.GetAddressOf()),
-            "Create multisampled Windows 3D rasterizer state failed.");
-
-        D3D11_DEPTH_STENCIL_DESC depthStencilDescription {};
-        depthStencilDescription.DepthEnable = TRUE;
-        depthStencilDescription.DepthWriteMask = D3D11_DEPTH_WRITE_MASK_ALL;
-        depthStencilDescription.DepthFunc = D3D11_COMPARISON_LESS_EQUAL;
-        depthStencilDescription.StencilEnable = TRUE;
-        depthStencilDescription.StencilReadMask = D3D11_DEFAULT_STENCIL_READ_MASK;
-        depthStencilDescription.StencilWriteMask = D3D11_DEFAULT_STENCIL_WRITE_MASK;
-        depthStencilDescription.FrontFace.StencilFunc = D3D11_COMPARISON_ALWAYS;
-        depthStencilDescription.FrontFace.StencilPassOp = D3D11_STENCIL_OP_KEEP;
-        depthStencilDescription.FrontFace.StencilFailOp = D3D11_STENCIL_OP_KEEP;
-        depthStencilDescription.FrontFace.StencilDepthFailOp = D3D11_STENCIL_OP_KEEP;
-        depthStencilDescription.BackFace = depthStencilDescription.FrontFace;
-
-        ThrowIfFailed(
-            Bootstrap.GetDevice()->CreateDepthStencilState(&depthStencilDescription, DepthStencilState.GetAddressOf()),
-            "ID3D11Device::CreateDepthStencilState failed for the Windows bridge.");
-        if (!HasWrittenRenderSnapshot) {
-            AppendRenderSnapshotLine("depth stencil state created");
-        }
-
-        Microsoft::WRL::ComPtr<ID3DBlob> diagnosticVertexShaderBlob;
-        Microsoft::WRL::ComPtr<ID3DBlob> diagnosticPixelShaderBlob;
-        errorBlob.Reset();
-        ThrowIfFailed(
-            D3DCompile(DiagnosticVertexShaderSource, strlen(DiagnosticVertexShaderSource), nullptr, nullptr, nullptr, "VSMain", "vs_5_0", 0, 0, diagnosticVertexShaderBlob.GetAddressOf(), errorBlob.GetAddressOf()),
-            errorBlob ? static_cast<const char*>(errorBlob->GetBufferPointer()) : "D3DCompile failed for the Windows bridge diagnostic vertex shader.");
-        errorBlob.Reset();
-        ThrowIfFailed(
-            D3DCompile(DiagnosticPixelShaderSource, strlen(DiagnosticPixelShaderSource), nullptr, nullptr, nullptr, "PSMain", "ps_5_0", 0, 0, diagnosticPixelShaderBlob.GetAddressOf(), errorBlob.GetAddressOf()),
-            errorBlob ? static_cast<const char*>(errorBlob->GetBufferPointer()) : "D3DCompile failed for the Windows bridge diagnostic pixel shader.");
-
-        ThrowIfFailed(
-            Bootstrap.GetDevice()->CreateVertexShader(diagnosticVertexShaderBlob->GetBufferPointer(), diagnosticVertexShaderBlob->GetBufferSize(), nullptr, DiagnosticVertexShader.GetAddressOf()),
-            "ID3D11Device::CreateVertexShader failed for the Windows bridge diagnostic pass.");
-        ThrowIfFailed(
-            Bootstrap.GetDevice()->CreatePixelShader(diagnosticPixelShaderBlob->GetBufferPointer(), diagnosticPixelShaderBlob->GetBufferSize(), nullptr, DiagnosticPixelShader.GetAddressOf()),
-            "ID3D11Device::CreatePixelShader failed for the Windows bridge diagnostic pass.");
-
-        static const D3D11_INPUT_ELEMENT_DESC DiagnosticInputElements[] = {
-            { "POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 0, D3D11_INPUT_PER_VERTEX_DATA, 0 }
-        };
-
-        ThrowIfFailed(
-            Bootstrap.GetDevice()->CreateInputLayout(
-                DiagnosticInputElements,
-                static_cast<UINT>(std::size(DiagnosticInputElements)),
-                diagnosticVertexShaderBlob->GetBufferPointer(),
-                diagnosticVertexShaderBlob->GetBufferSize(),
-                DiagnosticInputLayout.GetAddressOf()),
-            "ID3D11Device::CreateInputLayout failed for the Windows bridge diagnostic pass.");
-        if (!HasWrittenRenderSnapshot) {
-            AppendRenderSnapshotLine("diagnostic pipeline created");
-        }
-
-        EnsureShadowPipelineState();
+            InitializeShadowPipelineState(bytecodes);
+            PipelinePrepared=true;
+            ShaderCompilation.reset();
+            return true;
+        } catch(...) { PipelineFailure=std::current_exception(); throw; }
     }
 
-    /// Creates the shaders, constant buffers, and textures required by the directional shadow path.
-    void Win32RenderManager3D::EnsureShadowPipelineState() {
-        if (ForwardLightConstantBuffer
-            && ShadowConstantBuffer
-            && ShadowTransformBuffer
-            && ShadowVertexShader
-            && ShadowPixelShader
-            && ShadowInputLayout
-            && ShadowRasterizerState
-            && ShadowDepthStencilState
-            && ShadowMapTexture
-            && ShadowMapShaderResourceView
-            && ShadowMapDepthStencilView
-            && ShadowSamplerState) {
-            return;
-        }
-
-        Microsoft::WRL::ComPtr<ID3DBlob> vertexShaderBlob;
-        Microsoft::WRL::ComPtr<ID3DBlob> pixelShaderBlob;
-        Microsoft::WRL::ComPtr<ID3DBlob> errorBlob;
-
-        ThrowIfFailed(
-            D3DCompile(ShadowVertexShaderSource, strlen(ShadowVertexShaderSource), nullptr, nullptr, nullptr, "VSMain", "vs_5_0", 0, 0, vertexShaderBlob.GetAddressOf(), errorBlob.GetAddressOf()),
-            errorBlob ? static_cast<const char*>(errorBlob->GetBufferPointer()) : "D3DCompile failed for the Windows bridge shadow vertex shader.");
-        errorBlob.Reset();
-        ThrowIfFailed(
-            D3DCompile(ShadowPixelShaderSource, strlen(ShadowPixelShaderSource), nullptr, nullptr, nullptr, "PSMain", "ps_5_0", 0, 0, pixelShaderBlob.GetAddressOf(), errorBlob.GetAddressOf()),
-            errorBlob ? static_cast<const char*>(errorBlob->GetBufferPointer()) : "D3DCompile failed for the Windows bridge shadow pixel shader.");
-
+    /// Creates shadow resources from completed bytecode on the render thread without invoking the compiler.
+    void Win32RenderManager3D::InitializeShadowPipelineState(const DirectX11ShaderCompilation::Bytecodes& bytecodes) {
+        const auto& vertexShaderBlob=bytecodes[4];
+        const auto& pixelShaderBlob=bytecodes[5];
         ThrowIfFailed(
             Bootstrap.GetDevice()->CreateVertexShader(vertexShaderBlob->GetBufferPointer(), vertexShaderBlob->GetBufferSize(), nullptr, ShadowVertexShader.GetAddressOf()),
             "ID3D11Device::CreateVertexShader failed for the Windows bridge shadow pass.");
@@ -2223,9 +2197,61 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
             "ID3D11Device::CreateBuffer failed for the Windows bridge debug triangle.");
     }
 
-    /// Clears and renders one camera directly into the main back buffer.
-    void Win32RenderManager3D::RenderCamera(ICamera* camera, bool clearColorBuffer) {
+    /// Registers one live camera without changing engine-core or other platform contracts.
+    void Win32RenderManager3D::ConfigureCameraToon(ICamera* camera, bool enabled, float outsidePixels, float insidePixels, int bands) {
+        if (camera == nullptr || camera->get_Parent() == nullptr) {
+            throw std::invalid_argument("Camera toon requires a live camera with an owning entity.");
+        }
+        if (!enabled) {
+            ClearCameraToon(camera);
+            return;
+        }
+        auto existing = CameraToonPasses.find(camera);
+        if (existing != CameraToonPasses.end()) {
+            existing->second->Configure(outsidePixels, insidePixels, bands);
+        } else {
+            auto pass = std::make_unique<Win32CameraToonPass>(Bootstrap.GetDevice(), outsidePixels, insidePixels, bands);
+            CameraToonPasses.emplace(camera, std::move(pass));
+        }
+    }
+
+    /// Requires existing camera registration so optional effects never invent outline settings.
+    void Win32RenderManager3D::ConfigureCameraToonEffects(ICamera* camera, const CameraToonEffectsConfiguration& configuration) {
+        auto found=CameraToonPasses.find(camera);
+        if(found==CameraToonPasses.end()) throw std::invalid_argument("Camera effects require prior ConfigureCameraToon registration.");
+        found->second->ConfigureEffects(configuration);
+    }
+
+    /// Borrows the exact material instance submitted by the camera's drawable.
+    void Win32RenderManager3D::ConfigureCameraToonMaterialEffects(ICamera* camera, RuntimeMaterial* material, float reflectivity, float bloomWeight, bool pearlSurface) {
+        auto found=CameraToonPasses.find(camera);
+        if(found==CameraToonPasses.end()) throw std::invalid_argument("Camera material effects require prior ConfigureCameraToon registration.");
+        found->second->ConfigureMaterialEffects(material,reflectivity,bloomWeight,pearlSurface);
+    }
+
+    /// Performs the explicitly requested environment upload on the renderer's immediate context.
+    void Win32RenderManager3D::SetCameraToonEnvironment(ICamera* camera, uint32_t width, uint32_t height, const uint8_t* rgbaBytes, std::size_t byteCount) {
+        auto found=CameraToonPasses.find(camera);
+        if(found==CameraToonPasses.end()) throw std::invalid_argument("Camera environment requires prior ConfigureCameraToon registration.");
+        found->second->SetEnvironment(Bootstrap.GetDeviceContext(),width,height,rgbaBytes,byteCount);
+    }
+
+    /// Removes exact camera identity without dereferencing a camera during entity teardown.
+    void Win32RenderManager3D::ClearCameraToon(ICamera* camera) {
+        if (camera == nullptr) throw std::invalid_argument("Camera toon removal requires a camera identity.");
+        auto existing = CameraToonPasses.find(camera);
+        if (existing != CameraToonPasses.end()) {
+            if (ActiveToonPass == existing->second.get()) throw std::logic_error("Cannot remove camera toon settings during its active geometry pass.");
+            CameraToonPasses.erase(existing);
+        }
+    }
+
+    /// Clears the selected camera and finishes its optional toon composition before any 2D draw.
+    bool Win32RenderManager3D::RenderCamera(ICamera* camera, bool clearColorBuffer) {
         HELENGINE_TRACY_ZONE_N("D3D11.RenderCamera");
+        auto toonRegistration=CameraToonPasses.find(camera);
+        Win32CameraToonPass* toonPass=toonRegistration!=CameraToonPasses.end() ? toonRegistration->second.get() : nullptr;
+        const bool toonReady=toonPass==nullptr || toonPass->TryPrepare();
         ID3D11DeviceContext* context = Bootstrap.GetDeviceContext();
         ID3D11RenderTargetView* renderTargetView = OutputBootstrap->GetRenderTargetView();
         ID3D11DepthStencilView* depthStencilView = OutputBootstrap->GetDepthStencilView();
@@ -2255,6 +2281,20 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
         if (clearFlags != 0 && depthStencilView != nullptr) {
             context->ClearDepthStencilView(depthStencilView, clearFlags, clearSettings.get_ClearDepth(), clearSettings.get_ClearStencil());
         }
+
+        if(!PipelinePrepared || !toonReady) {
+            OutputReadiness.ObservePass(false);
+            RenderManager2DBridge->RenderCamera(camera);
+            OutputReadiness.ObservePass(RenderManager2DBridge->IsPipelineReady());
+            return true;
+        }
+        context->IASetInputLayout(InputLayout.Get());
+        context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+        ID3D11Buffer* transformBuffer = TransformBuffer.Get();
+        context->VSSetConstantBuffers(0, 1, &transformBuffer);
+        context->PSSetConstantBuffers(0, 1, &transformBuffer);
+        context->RSSetState(OutputBootstrap->GetSampleCount() == 4 ? MultisampleRasterizerState.Get() : RasterizerState.Get());
+        context->OMSetDepthStencilState(DepthStencilState.Get(), 0);
 
         const D3D11_VIEWPORT viewport = ResolveViewport(camera);
         context->RSSetViewports(1, &viewport);
@@ -2325,12 +2365,33 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
         }
 
         IRenderQueue3D* renderQueue = camera->get_RenderQueue3D();
+
+        if (toonPass != nullptr) {
+            if (!HasWrittenRenderSnapshot) {
+                AppendRenderDiagnosticsLine("3d.camera_toon active=1 viewport=" + std::to_string(viewport.TopLeftX) + ","
+                    + std::to_string(viewport.TopLeftY) + "," + std::to_string(viewport.Width) + "," + std::to_string(viewport.Height)
+                    + " samples=" + std::to_string(OutputBootstrap->GetSampleCount()));
+            }
+            toonPass->Begin(context, viewport, OutputBootstrap->GetSampleCount());
+        }
         if (renderQueue != nullptr) {
             HELENGINE_TRACY_ZONE_N("Render.ExtractAndBuild");
-            renderQueue->VisitOrdered(this);
+            ActiveToonPass = toonPass;
+            try {
+                renderQueue->VisitOrdered(this);
+            } catch (...) {
+                ActiveToonPass = nullptr;
+                throw;
+            }
+            ActiveToonPass = nullptr;
+        }
+        if (toonPass != nullptr) {
+            toonPass->Composite(context, renderTargetView, depthStencilView, viewport);
         }
 
         RenderManager2DBridge->RenderCamera(camera);
+        OutputReadiness.ObservePass(RenderManager2DBridge->IsPipelineReady());
+        return true;
     }
 
     /// Copies the currently visible authored lights relevant to one camera into a render-ready list.
@@ -2376,7 +2437,6 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
 
     /// Uploads the packed forward-light constant buffer used by built-in forward scene shaders.
     void Win32RenderManager3D::PrepareForwardLightState(const std::vector<LightComponent*>& lights) {
-        EnsureShadowPipelineState();
 
         constexpr int32_t AmbientLightTypeValue = 3;
 
@@ -2486,7 +2546,6 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
             throw new ArgumentNullException("camera");
         }
 
-        EnsureShadowPipelineState();
 
         DirectionalLightComponent* light = FindPrimaryDirectionalShadowLight(lights);
         if (!HasWrittenRenderSnapshot) {
@@ -2512,9 +2571,21 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
                 1.0f / static_cast<float>(DirectionalShadowMapResolution),
                 1.0f / static_cast<float>(DirectionalShadowMapResolution),
                 1.0f);
-            constants.Light0.AtlasRect = DirectX::XMFLOAT4(0.0f, 0.0f, 1.0f, 1.0f);
-            constants.Light0.Metadata = DirectX::XMFLOAT4(1.0f, light->get_ShadowStrength(), 1.0f, 0.0f);
-            constants.Light0.WorldToShadowClip = StoreMatrix(transposedWorldToShadowClip);
+            Win32ShadowLightSlotConstants slot {};
+            slot.AtlasRect = DirectX::XMFLOAT4(0.0f, 0.0f, 1.0f, 1.0f);
+            slot.Metadata = DirectX::XMFLOAT4(1.0f, light->get_ShadowStrength(), 1.0f, 0.0f);
+            slot.WorldToShadowClip = StoreMatrix(transposedWorldToShadowClip);
+            int32_t packedIndex=0;
+            for(LightComponent* candidate : lights) {
+                if(candidate==nullptr || candidate->get_Parent()==nullptr || static_cast<int32_t>(candidate->get_LightType())==3) continue;
+                if(candidate==light) break;
+                ++packedIndex;
+            }
+            if(packedIndex==0) constants.Light0=slot;
+            else if(packedIndex==1) constants.Light1=slot;
+            else if(packedIndex==2) constants.Light2=slot;
+            else if(packedIndex==3) constants.Light3=slot;
+            else throw std::logic_error("Directional shadow light must belong to a packed forward-light slot.");
         }
 
         ID3D11DeviceContext* context = Bootstrap.GetDeviceContext();
@@ -2537,11 +2608,14 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
         if (!get_ShadowsEnabled() || get_MaximumVisibleLights() == 0) {
             return nullptr;
         }
-        for (std::size_t lightIndex = 0; lightIndex < lights.size(); lightIndex++) {
-            DirectionalLightComponent* light = dynamic_cast<DirectionalLightComponent*>(lights[lightIndex]);
-            if (light == nullptr || light->get_Parent() == nullptr) {
-                continue;
-            } else if (!light->get_ShadowsEnabled()) {
+        int32_t packedCount=0;
+        const int32_t budget=std::clamp(get_MaximumVisibleLights(),0,4);
+        for (std::size_t lightIndex = 0; lightIndex < lights.size() && packedCount<budget; lightIndex++) {
+            LightComponent* candidate=lights[lightIndex];
+            if(candidate==nullptr || candidate->get_Parent()==nullptr || static_cast<int32_t>(candidate->get_LightType())==3) continue;
+            ++packedCount;
+            DirectionalLightComponent* light = dynamic_cast<DirectionalLightComponent*>(candidate);
+            if (light == nullptr || !light->get_ShadowsEnabled()) {
                 continue;
             } else if (!light->get_Parent()->get_IsHierarchyEnabled()) {
                 continue;
@@ -2561,7 +2635,6 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
             throw new ArgumentNullException("light");
         }
 
-        EnsureShadowPipelineState();
 
         ID3D11DeviceContext* context = Bootstrap.GetDeviceContext();
         ID3D11ShaderResourceView* nullShaderResourceView = nullptr;
@@ -3319,6 +3392,14 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
     Win32RenderManager2D::Win32RenderManager2D(DirectX11Bootstrap& bootstrap)
         : Bootstrap(bootstrap)
         , OutputBootstrap(&bootstrap) {
+        ShaderCompilation=std::make_unique<DirectX11ShaderCompilation>(std::vector<DirectX11ShaderRequest>{
+            {QuadVertexShaderSource,"EngineQuad","VSMain","vs_4_0",0,{}},
+            {QuadPixelShaderSource,"EngineQuad","PSMain","ps_4_0",0,{}},
+            {QuadPixelShaderSource,"EngineFont","FontClearTypePS","ps_4_0",0,{}},
+            {QuadPixelShaderSource,"EngineFont","FontGrayscalePS","ps_4_0",0,{}},
+            {RoundedRectVertexShaderSource,"EngineRoundedRect","VSMain","vs_4_0",0,{}},
+            {RoundedRectPixelShaderSource,"EngineRoundedRect","PSMain","ps_4_0",0,{}}
+        });
 #if __has_include("RenderCommandListBuilder2D.hpp")
         CommandListBuilder = std::make_unique<RenderCommandListBuilder2D>();
 #if defined(TRACY_ENABLE) && __has_include("IRuntimeCpuProfileSink.hpp")
@@ -3347,286 +3428,212 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
             throw std::logic_error("The premultiplied-destination blend state is only bound in the Premultiplied alpha mode.");
         }
 
-        EnsurePipelineState();
+        EnsureBlendStates();
         Bootstrap.GetDeviceContext()->OMSetBlendState(PremultipliedDestinationBlendState.Get(), nullptr, 0xFFFFFFFFu);
     }
 
-    /// Creates the DirectX11 shaders, buffers, and fixed pipeline state needed for 2D rendering.
-    void Win32RenderManager2D::EnsurePipelineState() {
-        if (QuadVertexBuffer
-            && QuadInputLayout
-            && QuadVertexShader
-            && QuadPixelShader
-            && FontClearTypePixelShader
-            && FontGrayscalePixelShader
-            && FontClearTypeBlendState
-            && RoundedRectVertexShader
-            && RoundedRectPixelShader
-            && RoundedRectConstantBuffer
-            && TextureSamplerState
-            && AlphaBlendState
-            && PremultipliedDestinationBlendState
-            && RasterizerState && MultisampleRasterizerState
-            && DepthStencilState
-            && WhiteShaderResourceView) {
-            return;
-        }
-
-        ID3D11Device* device = Bootstrap.GetDevice();
-        if (device == nullptr) {
-            throw std::runtime_error("DirectX11 device must exist before initializing the native 2D bridge.");
-        }
-
-        Microsoft::WRL::ComPtr<ID3DBlob> vertexShaderBytecode;
-        Microsoft::WRL::ComPtr<ID3DBlob> pixelShaderBytecode;
-        Microsoft::WRL::ComPtr<ID3DBlob> compileErrors;
-
-        ThrowIfFailed(
-            D3DCompile(
-                QuadVertexShaderSource,
-                std::strlen(QuadVertexShaderSource),
-                nullptr,
-                nullptr,
-                nullptr,
-                "VSMain",
-                "vs_4_0",
-                0,
-                0,
-                vertexShaderBytecode.GetAddressOf(),
-                compileErrors.GetAddressOf()),
-            "D3DCompile failed for the Windows 2D vertex shader.");
-
-        compileErrors.Reset();
-        ThrowIfFailed(
-            D3DCompile(
-                QuadPixelShaderSource,
-                std::strlen(QuadPixelShaderSource),
-                nullptr,
-                nullptr,
-                nullptr,
-                "PSMain",
-                "ps_4_0",
-                0,
-                0,
-                pixelShaderBytecode.GetAddressOf(),
-                compileErrors.GetAddressOf()),
-            "D3DCompile failed for the Windows 2D pixel shader.");
-
-        ThrowIfFailed(
-            device->CreateVertexShader(
-                vertexShaderBytecode->GetBufferPointer(),
-                vertexShaderBytecode->GetBufferSize(),
-                nullptr,
-                QuadVertexShader.GetAddressOf()),
-            "ID3D11Device::CreateVertexShader failed for the Windows 2D vertex shader.");
-
-        ThrowIfFailed(
-            device->CreatePixelShader(
-                pixelShaderBytecode->GetBufferPointer(),
-                pixelShaderBytecode->GetBufferSize(),
-                nullptr,
-                QuadPixelShader.GetAddressOf()),
-            "ID3D11Device::CreatePixelShader failed for the Windows 2D pixel shader.");
-
-        for (const char* entryPoint : { "FontClearTypePS", "FontGrayscalePS" }) {
-            Microsoft::WRL::ComPtr<ID3DBlob> fontBytecode;
-            compileErrors.Reset();
+    /// Returns immediately while backend HLSL jobs are pending, then creates the immutable 2D resources once.
+    bool Win32RenderManager2D::EnsurePipelineState() {
+        if(PipelineFailure) std::rethrow_exception(PipelineFailure);
+        if(PipelinePrepared) return true;
+        if(!ShaderCompilation) throw std::logic_error("Cannot prepare a disposed 2D renderer.");
+        try {
+            DirectX11ShaderCompilation::Bytecodes bytecodes;
+            if(!ShaderCompilation->TryGetBytecodes(bytecodes)) return false;
+            ID3D11Device* device=Bootstrap.GetDevice();
+            if(!device) throw std::runtime_error("DirectX11 device must exist before initializing the native 2D bridge.");
+            const auto& vertexShaderBytecode=bytecodes[0];
+            const auto& pixelShaderBytecode=bytecodes[1];
             ThrowIfFailed(
-                D3DCompile(QuadPixelShaderSource, std::strlen(QuadPixelShaderSource), nullptr, nullptr, nullptr,
-                    entryPoint, "ps_4_0", 0, 0, fontBytecode.GetAddressOf(), compileErrors.GetAddressOf()),
-                "D3DCompile failed for the Windows font pixel shader.");
-            ID3D11PixelShader** shaderAddress = std::strcmp(entryPoint, "FontClearTypePS") == 0
-                ? FontClearTypePixelShader.GetAddressOf() : FontGrayscalePixelShader.GetAddressOf();
+                device->CreateVertexShader(
+                    vertexShaderBytecode->GetBufferPointer(),
+                    vertexShaderBytecode->GetBufferSize(),
+                    nullptr,
+                    QuadVertexShader.GetAddressOf()),
+                "ID3D11Device::CreateVertexShader failed for the Windows 2D vertex shader.");
+
             ThrowIfFailed(
-                device->CreatePixelShader(fontBytecode->GetBufferPointer(), fontBytecode->GetBufferSize(), nullptr, shaderAddress),
-                "ID3D11Device::CreatePixelShader failed for the Windows font pixel shader.");
-        }
+                device->CreatePixelShader(
+                    pixelShaderBytecode->GetBufferPointer(),
+                    pixelShaderBytecode->GetBufferSize(),
+                    nullptr,
+                    QuadPixelShader.GetAddressOf()),
+                "ID3D11Device::CreatePixelShader failed for the Windows 2D pixel shader.");
 
-        Microsoft::WRL::ComPtr<ID3DBlob> roundedRectVertexShaderBytecode;
-        Microsoft::WRL::ComPtr<ID3DBlob> roundedRectPixelShaderBytecode;
-        compileErrors.Reset();
-        ThrowIfFailed(
-            D3DCompile(
-                RoundedRectVertexShaderSource,
-                std::strlen(RoundedRectVertexShaderSource),
-                nullptr,
-                nullptr,
-                nullptr,
-                "VSMain",
-                "vs_4_0",
-                0,
-                0,
-                roundedRectVertexShaderBytecode.GetAddressOf(),
-                compileErrors.GetAddressOf()),
-            "D3DCompile failed for the Windows rounded-rect vertex shader.");
+            for(std::size_t index=2;index<4;++index) {
+                const auto& fontBytecode=bytecodes[index];
+                auto** address=index==2 ? FontClearTypePixelShader.GetAddressOf() : FontGrayscalePixelShader.GetAddressOf();
+                ThrowIfFailed(device->CreatePixelShader(fontBytecode->GetBufferPointer(),fontBytecode->GetBufferSize(),nullptr,address),
+                    "Create Windows font pixel shader failed.");
+            }
+            const auto& roundedRectVertexShaderBytecode=bytecodes[4];
+            const auto& roundedRectPixelShaderBytecode=bytecodes[5];
+            ThrowIfFailed(
+                device->CreateVertexShader(
+                    roundedRectVertexShaderBytecode->GetBufferPointer(),
+                    roundedRectVertexShaderBytecode->GetBufferSize(),
+                    nullptr,
+                    RoundedRectVertexShader.GetAddressOf()),
+                "ID3D11Device::CreateVertexShader failed for the Windows rounded-rect vertex shader.");
 
-        compileErrors.Reset();
-        ThrowIfFailed(
-            D3DCompile(
-                RoundedRectPixelShaderSource,
-                std::strlen(RoundedRectPixelShaderSource),
-                nullptr,
-                nullptr,
-                nullptr,
-                "PSMain",
-                "ps_4_0",
-                0,
-                0,
-                roundedRectPixelShaderBytecode.GetAddressOf(),
-                compileErrors.GetAddressOf()),
-            "D3DCompile failed for the Windows rounded-rect pixel shader.");
+            ThrowIfFailed(
+                device->CreatePixelShader(
+                    roundedRectPixelShaderBytecode->GetBufferPointer(),
+                    roundedRectPixelShaderBytecode->GetBufferSize(),
+                    nullptr,
+                    RoundedRectPixelShader.GetAddressOf()),
+                "ID3D11Device::CreatePixelShader failed for the Windows rounded-rect pixel shader.");
 
-        ThrowIfFailed(
-            device->CreateVertexShader(
-                roundedRectVertexShaderBytecode->GetBufferPointer(),
-                roundedRectVertexShaderBytecode->GetBufferSize(),
-                nullptr,
-                RoundedRectVertexShader.GetAddressOf()),
-            "ID3D11Device::CreateVertexShader failed for the Windows rounded-rect vertex shader.");
+            const D3D11_INPUT_ELEMENT_DESC inputElements[] = {
+                { "POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 0, D3D11_INPUT_PER_VERTEX_DATA, 0 },
+                { "TEXCOORD", 0, DXGI_FORMAT_R32G32_FLOAT, 0, 12, D3D11_INPUT_PER_VERTEX_DATA, 0 },
+                { "COLOR", 0, DXGI_FORMAT_R32G32B32A32_FLOAT, 0, 20, D3D11_INPUT_PER_VERTEX_DATA, 0 }
+            };
 
-        ThrowIfFailed(
-            device->CreatePixelShader(
-                roundedRectPixelShaderBytecode->GetBufferPointer(),
-                roundedRectPixelShaderBytecode->GetBufferSize(),
-                nullptr,
-                RoundedRectPixelShader.GetAddressOf()),
-            "ID3D11Device::CreatePixelShader failed for the Windows rounded-rect pixel shader.");
+            ThrowIfFailed(
+                device->CreateInputLayout(
+                    inputElements,
+                    static_cast<UINT>(std::size(inputElements)),
+                    vertexShaderBytecode->GetBufferPointer(),
+                    vertexShaderBytecode->GetBufferSize(),
+                    QuadInputLayout.GetAddressOf()),
+                "ID3D11Device::CreateInputLayout failed for the Windows 2D quad pipeline.");
 
-        const D3D11_INPUT_ELEMENT_DESC inputElements[] = {
-            { "POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 0, D3D11_INPUT_PER_VERTEX_DATA, 0 },
-            { "TEXCOORD", 0, DXGI_FORMAT_R32G32_FLOAT, 0, 12, D3D11_INPUT_PER_VERTEX_DATA, 0 },
-            { "COLOR", 0, DXGI_FORMAT_R32G32B32A32_FLOAT, 0, 20, D3D11_INPUT_PER_VERTEX_DATA, 0 }
-        };
+            D3D11_BUFFER_DESC vertexBufferDescription {};
+            vertexBufferDescription.ByteWidth = static_cast<UINT>(sizeof(Win32QuadVertex) * QuadVertexBufferVertexCapacity);
+            vertexBufferDescription.Usage = D3D11_USAGE_DYNAMIC;
+            vertexBufferDescription.BindFlags = D3D11_BIND_VERTEX_BUFFER;
+            vertexBufferDescription.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
 
-        ThrowIfFailed(
-            device->CreateInputLayout(
-                inputElements,
-                static_cast<UINT>(std::size(inputElements)),
-                vertexShaderBytecode->GetBufferPointer(),
-                vertexShaderBytecode->GetBufferSize(),
-                QuadInputLayout.GetAddressOf()),
-            "ID3D11Device::CreateInputLayout failed for the Windows 2D quad pipeline.");
+            ThrowIfFailed(
+                device->CreateBuffer(&vertexBufferDescription, nullptr, QuadVertexBuffer.GetAddressOf()),
+                "ID3D11Device::CreateBuffer failed for the Windows 2D quad vertex buffer.");
+            QuadVertexCapacity = QuadVertexBufferVertexCapacity;
+            QuadVertexCursor = 0;
 
-        D3D11_BUFFER_DESC vertexBufferDescription {};
-        vertexBufferDescription.ByteWidth = static_cast<UINT>(sizeof(Win32QuadVertex) * QuadVertexBufferVertexCapacity);
-        vertexBufferDescription.Usage = D3D11_USAGE_DYNAMIC;
-        vertexBufferDescription.BindFlags = D3D11_BIND_VERTEX_BUFFER;
-        vertexBufferDescription.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
+            D3D11_BUFFER_DESC roundedRectConstantBufferDescription {};
+            roundedRectConstantBufferDescription.ByteWidth = static_cast<UINT>(sizeof(Win32RoundedRectShaderConstants));
+            roundedRectConstantBufferDescription.Usage = D3D11_USAGE_DEFAULT;
+            roundedRectConstantBufferDescription.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
 
-        ThrowIfFailed(
-            device->CreateBuffer(&vertexBufferDescription, nullptr, QuadVertexBuffer.GetAddressOf()),
-            "ID3D11Device::CreateBuffer failed for the Windows 2D quad vertex buffer.");
-        QuadVertexCapacity = QuadVertexBufferVertexCapacity;
-        QuadVertexCursor = 0;
+            ThrowIfFailed(
+                device->CreateBuffer(&roundedRectConstantBufferDescription, nullptr, RoundedRectConstantBuffer.GetAddressOf()),
+                "ID3D11Device::CreateBuffer failed for the Windows rounded-rect constant buffer.");
 
-        D3D11_BUFFER_DESC roundedRectConstantBufferDescription {};
-        roundedRectConstantBufferDescription.ByteWidth = static_cast<UINT>(sizeof(Win32RoundedRectShaderConstants));
-        roundedRectConstantBufferDescription.Usage = D3D11_USAGE_DEFAULT;
-        roundedRectConstantBufferDescription.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
+            D3D11_SAMPLER_DESC samplerDescription {};
+            samplerDescription.Filter = D3D11_FILTER_MIN_MAG_MIP_POINT;
+            samplerDescription.AddressU = D3D11_TEXTURE_ADDRESS_CLAMP;
+            samplerDescription.AddressV = D3D11_TEXTURE_ADDRESS_CLAMP;
+            samplerDescription.AddressW = D3D11_TEXTURE_ADDRESS_CLAMP;
+            samplerDescription.ComparisonFunc = D3D11_COMPARISON_NEVER;
+            samplerDescription.MinLOD = 0.0f;
+            samplerDescription.MaxLOD = D3D11_FLOAT32_MAX;
 
-        ThrowIfFailed(
-            device->CreateBuffer(&roundedRectConstantBufferDescription, nullptr, RoundedRectConstantBuffer.GetAddressOf()),
-            "ID3D11Device::CreateBuffer failed for the Windows rounded-rect constant buffer.");
+            ThrowIfFailed(
+                device->CreateSamplerState(&samplerDescription, TextureSamplerState.GetAddressOf()),
+                "ID3D11Device::CreateSamplerState failed for the Windows 2D sampler state.");
 
-        D3D11_SAMPLER_DESC samplerDescription {};
-        samplerDescription.Filter = D3D11_FILTER_MIN_MAG_MIP_POINT;
-        samplerDescription.AddressU = D3D11_TEXTURE_ADDRESS_CLAMP;
-        samplerDescription.AddressV = D3D11_TEXTURE_ADDRESS_CLAMP;
-        samplerDescription.AddressW = D3D11_TEXTURE_ADDRESS_CLAMP;
-        samplerDescription.ComparisonFunc = D3D11_COMPARISON_NEVER;
-        samplerDescription.MinLOD = 0.0f;
-        samplerDescription.MaxLOD = D3D11_FLOAT32_MAX;
+            EnsureBlendStates();
 
-        ThrowIfFailed(
-            device->CreateSamplerState(&samplerDescription, TextureSamplerState.GetAddressOf()),
-            "ID3D11Device::CreateSamplerState failed for the Windows 2D sampler state.");
+            D3D11_RASTERIZER_DESC rasterizerDescription {};
+            rasterizerDescription.FillMode = D3D11_FILL_SOLID;
+            rasterizerDescription.CullMode = D3D11_CULL_NONE;
+            rasterizerDescription.DepthClipEnable = FALSE;
+            rasterizerDescription.ScissorEnable = TRUE;
 
-        D3D11_BLEND_DESC blendDescription {};
-        blendDescription.RenderTarget[0].BlendEnable = TRUE;
-        blendDescription.RenderTarget[0].SrcBlend = D3D11_BLEND_SRC_ALPHA;
-        blendDescription.RenderTarget[0].DestBlend = D3D11_BLEND_INV_SRC_ALPHA;
-        blendDescription.RenderTarget[0].BlendOp = D3D11_BLEND_OP_ADD;
-        blendDescription.RenderTarget[0].SrcBlendAlpha = D3D11_BLEND_ONE;
-        blendDescription.RenderTarget[0].DestBlendAlpha = D3D11_BLEND_ZERO;
-        blendDescription.RenderTarget[0].BlendOpAlpha = D3D11_BLEND_OP_ADD;
-        blendDescription.RenderTarget[0].RenderTargetWriteMask = D3D11_COLOR_WRITE_ENABLE_ALL;
+            ThrowIfFailed(
+                device->CreateRasterizerState(&rasterizerDescription, RasterizerState.GetAddressOf()),
+                "ID3D11Device::CreateRasterizerState failed for the Windows 2D rasterizer state.");
+            rasterizerDescription.MultisampleEnable = TRUE;
+            ThrowIfFailed(device->CreateRasterizerState(&rasterizerDescription, MultisampleRasterizerState.GetAddressOf()),
+                "Create multisampled Windows 2D rasterizer state failed.");
 
-        ThrowIfFailed(
-            device->CreateBlendState(&blendDescription, AlphaBlendState.GetAddressOf()),
-            "ID3D11Device::CreateBlendState failed for the Windows 2D alpha blend state.");
+            D3D11_DEPTH_STENCIL_DESC depthStencilDescription {};
+            depthStencilDescription.DepthEnable = FALSE;
+            depthStencilDescription.DepthWriteMask = D3D11_DEPTH_WRITE_MASK_ZERO;
+            depthStencilDescription.DepthFunc = D3D11_COMPARISON_ALWAYS;
 
-        D3D11_BLEND_DESC fontBlendDescription = blendDescription;
-        fontBlendDescription.RenderTarget[0].SrcBlend = D3D11_BLEND_ONE;
-        fontBlendDescription.RenderTarget[0].DestBlend = D3D11_BLEND_INV_SRC1_COLOR;
-        fontBlendDescription.RenderTarget[0].DestBlendAlpha = D3D11_BLEND_INV_SRC1_ALPHA;
-        ThrowIfFailed(
-            device->CreateBlendState(&fontBlendDescription, FontClearTypeBlendState.GetAddressOf()),
-            "ID3D11Device::CreateBlendState failed for the Windows ClearType blend state.");
+            ThrowIfFailed(
+                device->CreateDepthStencilState(&depthStencilDescription, DepthStencilState.GetAddressOf()),
+                "ID3D11Device::CreateDepthStencilState failed for the Windows 2D depth state.");
 
-        D3D11_BLEND_DESC premultipliedDestinationBlendDescription {};
-        premultipliedDestinationBlendDescription.RenderTarget[0].BlendEnable = TRUE;
-        premultipliedDestinationBlendDescription.RenderTarget[0].SrcBlend = D3D11_BLEND_SRC_ALPHA;
-        premultipliedDestinationBlendDescription.RenderTarget[0].DestBlend = D3D11_BLEND_INV_SRC_ALPHA;
-        premultipliedDestinationBlendDescription.RenderTarget[0].BlendOp = D3D11_BLEND_OP_ADD;
-        premultipliedDestinationBlendDescription.RenderTarget[0].SrcBlendAlpha = D3D11_BLEND_ONE;
-        premultipliedDestinationBlendDescription.RenderTarget[0].DestBlendAlpha = D3D11_BLEND_INV_SRC_ALPHA;
-        premultipliedDestinationBlendDescription.RenderTarget[0].BlendOpAlpha = D3D11_BLEND_OP_ADD;
-        premultipliedDestinationBlendDescription.RenderTarget[0].RenderTargetWriteMask = D3D11_COLOR_WRITE_ENABLE_ALL;
+            const uint32_t whitePixel = 0xFFFFFFFFu;
+            D3D11_TEXTURE2D_DESC whiteTextureDescription {};
+            whiteTextureDescription.Width = 1;
+            whiteTextureDescription.Height = 1;
+            whiteTextureDescription.MipLevels = 1;
+            whiteTextureDescription.ArraySize = 1;
+            whiteTextureDescription.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+            whiteTextureDescription.SampleDesc.Count = 1;
+            whiteTextureDescription.Usage = D3D11_USAGE_DEFAULT;
+            whiteTextureDescription.BindFlags = D3D11_BIND_SHADER_RESOURCE;
 
-        ThrowIfFailed(
-            device->CreateBlendState(&premultipliedDestinationBlendDescription, PremultipliedDestinationBlendState.GetAddressOf()),
-            "ID3D11Device::CreateBlendState failed for the Windows 2D premultiplied-destination blend state.");
+            D3D11_SUBRESOURCE_DATA whiteTextureData {};
+            whiteTextureData.pSysMem = &whitePixel;
+            whiteTextureData.SysMemPitch = sizeof(uint32_t);
 
-        D3D11_RASTERIZER_DESC rasterizerDescription {};
-        rasterizerDescription.FillMode = D3D11_FILL_SOLID;
-        rasterizerDescription.CullMode = D3D11_CULL_NONE;
-        rasterizerDescription.DepthClipEnable = FALSE;
-        rasterizerDescription.ScissorEnable = TRUE;
+            ThrowIfFailed(
+                device->CreateTexture2D(&whiteTextureDescription, &whiteTextureData, WhiteTexture.GetAddressOf()),
+                "ID3D11Device::CreateTexture2D failed for the Windows 2D white texture.");
 
-        ThrowIfFailed(
-            device->CreateRasterizerState(&rasterizerDescription, RasterizerState.GetAddressOf()),
-            "ID3D11Device::CreateRasterizerState failed for the Windows 2D rasterizer state.");
-        rasterizerDescription.MultisampleEnable = TRUE;
-        ThrowIfFailed(device->CreateRasterizerState(&rasterizerDescription, MultisampleRasterizerState.GetAddressOf()),
-            "Create multisampled Windows 2D rasterizer state failed.");
+            D3D11_SHADER_RESOURCE_VIEW_DESC whiteResourceViewDescription {};
+            whiteResourceViewDescription.Format = whiteTextureDescription.Format;
+            whiteResourceViewDescription.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
+            whiteResourceViewDescription.Texture2D.MostDetailedMip = 0;
+            whiteResourceViewDescription.Texture2D.MipLevels = 1;
 
-        D3D11_DEPTH_STENCIL_DESC depthStencilDescription {};
-        depthStencilDescription.DepthEnable = FALSE;
-        depthStencilDescription.DepthWriteMask = D3D11_DEPTH_WRITE_MASK_ZERO;
-        depthStencilDescription.DepthFunc = D3D11_COMPARISON_ALWAYS;
+            ThrowIfFailed(
+                device->CreateShaderResourceView(WhiteTexture.Get(), &whiteResourceViewDescription, WhiteShaderResourceView.GetAddressOf()),
+                "ID3D11Device::CreateShaderResourceView failed for the Windows 2D white texture.");
+            PipelinePrepared=true;
+            ShaderCompilation.reset();
+            return true;
+        } catch(...) { PipelineFailure=std::current_exception(); throw; }
+    }
 
-        ThrowIfFailed(
-            device->CreateDepthStencilState(&depthStencilDescription, DepthStencilState.GetAddressOf()),
-            "ID3D11Device::CreateDepthStencilState failed for the Windows 2D depth state.");
+    /// Creates shader-independent composition states so ready 3D rendering does not depend on 2D compilation.
+    void Win32RenderManager2D::EnsureBlendStates() {
+        if(BlendFailure) std::rethrow_exception(BlendFailure);
+        if(AlphaBlendState && FontClearTypeBlendState && PremultipliedDestinationBlendState) return;
+        try {
+            ID3D11Device* device=Bootstrap.GetDevice();
+            D3D11_BLEND_DESC blendDescription {};
+            blendDescription.RenderTarget[0].BlendEnable = TRUE;
+            blendDescription.RenderTarget[0].SrcBlend = D3D11_BLEND_SRC_ALPHA;
+            blendDescription.RenderTarget[0].DestBlend = D3D11_BLEND_INV_SRC_ALPHA;
+            blendDescription.RenderTarget[0].BlendOp = D3D11_BLEND_OP_ADD;
+            blendDescription.RenderTarget[0].SrcBlendAlpha = D3D11_BLEND_ONE;
+            blendDescription.RenderTarget[0].DestBlendAlpha = D3D11_BLEND_ZERO;
+            blendDescription.RenderTarget[0].BlendOpAlpha = D3D11_BLEND_OP_ADD;
+            blendDescription.RenderTarget[0].RenderTargetWriteMask = D3D11_COLOR_WRITE_ENABLE_ALL;
 
-        const uint32_t whitePixel = 0xFFFFFFFFu;
-        D3D11_TEXTURE2D_DESC whiteTextureDescription {};
-        whiteTextureDescription.Width = 1;
-        whiteTextureDescription.Height = 1;
-        whiteTextureDescription.MipLevels = 1;
-        whiteTextureDescription.ArraySize = 1;
-        whiteTextureDescription.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
-        whiteTextureDescription.SampleDesc.Count = 1;
-        whiteTextureDescription.Usage = D3D11_USAGE_DEFAULT;
-        whiteTextureDescription.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+            ThrowIfFailed(
+                device->CreateBlendState(&blendDescription, AlphaBlendState.GetAddressOf()),
+                "ID3D11Device::CreateBlendState failed for the Windows 2D alpha blend state.");
 
-        D3D11_SUBRESOURCE_DATA whiteTextureData {};
-        whiteTextureData.pSysMem = &whitePixel;
-        whiteTextureData.SysMemPitch = sizeof(uint32_t);
+            D3D11_BLEND_DESC fontBlendDescription = blendDescription;
+            fontBlendDescription.RenderTarget[0].SrcBlend = D3D11_BLEND_ONE;
+            fontBlendDescription.RenderTarget[0].DestBlend = D3D11_BLEND_INV_SRC1_COLOR;
+            fontBlendDescription.RenderTarget[0].DestBlendAlpha = D3D11_BLEND_INV_SRC1_ALPHA;
+            ThrowIfFailed(
+                device->CreateBlendState(&fontBlendDescription, FontClearTypeBlendState.GetAddressOf()),
+                "ID3D11Device::CreateBlendState failed for the Windows ClearType blend state.");
 
-        ThrowIfFailed(
-            device->CreateTexture2D(&whiteTextureDescription, &whiteTextureData, WhiteTexture.GetAddressOf()),
-            "ID3D11Device::CreateTexture2D failed for the Windows 2D white texture.");
+            D3D11_BLEND_DESC premultipliedDestinationBlendDescription {};
+            premultipliedDestinationBlendDescription.RenderTarget[0].BlendEnable = TRUE;
+            premultipliedDestinationBlendDescription.RenderTarget[0].SrcBlend = D3D11_BLEND_SRC_ALPHA;
+            premultipliedDestinationBlendDescription.RenderTarget[0].DestBlend = D3D11_BLEND_INV_SRC_ALPHA;
+            premultipliedDestinationBlendDescription.RenderTarget[0].BlendOp = D3D11_BLEND_OP_ADD;
+            premultipliedDestinationBlendDescription.RenderTarget[0].SrcBlendAlpha = D3D11_BLEND_ONE;
+            premultipliedDestinationBlendDescription.RenderTarget[0].DestBlendAlpha = D3D11_BLEND_INV_SRC_ALPHA;
+            premultipliedDestinationBlendDescription.RenderTarget[0].BlendOpAlpha = D3D11_BLEND_OP_ADD;
+            premultipliedDestinationBlendDescription.RenderTarget[0].RenderTargetWriteMask = D3D11_COLOR_WRITE_ENABLE_ALL;
 
-        D3D11_SHADER_RESOURCE_VIEW_DESC whiteResourceViewDescription {};
-        whiteResourceViewDescription.Format = whiteTextureDescription.Format;
-        whiteResourceViewDescription.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
-        whiteResourceViewDescription.Texture2D.MostDetailedMip = 0;
-        whiteResourceViewDescription.Texture2D.MipLevels = 1;
+            ThrowIfFailed(
+                device->CreateBlendState(&premultipliedDestinationBlendDescription, PremultipliedDestinationBlendState.GetAddressOf()),
+                "ID3D11Device::CreateBlendState failed for the Windows 2D premultiplied-destination blend state.");
 
-        ThrowIfFailed(
-            device->CreateShaderResourceView(WhiteTexture.Get(), &whiteResourceViewDescription, WhiteShaderResourceView.GetAddressOf()),
-            "ID3D11Device::CreateShaderResourceView failed for the Windows 2D white texture.");
+        } catch(...) { BlendFailure=std::current_exception(); throw; }
     }
 
     /// Resolves one camera viewport against the current swap-chain size.
@@ -3679,9 +3686,9 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
         return owner->second->ShaderResourceView.Get();
     }
 
-    /// Configures the DirectX11 state used by one textured quad draw.
-    void Win32RenderManager2D::PrepareTexturedQuadDraw(ID3D11ShaderResourceView* textureView, bool rgbFontCoverage, bool allowClearType) {
-        EnsurePipelineState();
+    /// Skips a pending quad/font pipeline before changing context state; otherwise prepares the actual draw.
+    bool Win32RenderManager2D::PrepareTexturedQuadDraw(ID3D11ShaderResourceView* textureView, bool rgbFontCoverage, bool allowClearType) {
+        if(!EnsurePipelineState()) return false;
 
         ID3D11DeviceContext* context = Bootstrap.GetDeviceContext();
         ID3D11RenderTargetView* renderTargetView = OutputBootstrap->GetRenderTargetView();
@@ -3716,11 +3723,12 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
         context->PSSetShaderResources(0, 1, &textureView);
         ID3D11SamplerState* samplerState = TextureSamplerState.Get();
         context->PSSetSamplers(0, 1, &samplerState);
+        return true;
     }
 
     /// Configures the DirectX11 state used by one rounded-rect SDF draw.
-    void Win32RenderManager2D::PrepareRoundedRectDraw() {
-        EnsurePipelineState();
+    bool Win32RenderManager2D::PrepareRoundedRectDraw() {
+        if(!EnsurePipelineState()) return false;
 
         ID3D11DeviceContext* context = Bootstrap.GetDeviceContext();
         ID3D11RenderTargetView* renderTargetView = OutputBootstrap->GetRenderTargetView();
@@ -3748,6 +3756,7 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
         ID3D11Buffer* roundedRectConstantBuffer = RoundedRectConstantBuffer.Get();
         context->VSSetConstantBuffers(0, 1, &roundedRectConstantBuffer);
         context->PSSetConstantBuffers(0, 1, &roundedRectConstantBuffer);
+        return true;
     }
 
     /// Applies the currently active scissor rectangle, or falls back to the full viewport when clipping is inactive.
@@ -3839,7 +3848,7 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
             return;
         }
 
-        PrepareTexturedQuadDraw(textureView, rgbFontCoverage, allowClearType);
+        if(!PrepareTexturedQuadDraw(textureView, rgbFontCoverage, allowClearType)) return;
 
         const float leftNdc = (((x - CurrentViewport.TopLeftX) / CurrentViewport.Width) * 2.0f) - 1.0f;
         const float rightNdc = ((((x + width) - CurrentViewport.TopLeftX) / CurrentViewport.Width) * 2.0f) - 1.0f;
@@ -3867,7 +3876,7 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
             return;
         }
 
-        PrepareTexturedQuadDraw(textureView);
+        if(!PrepareTexturedQuadDraw(textureView)) return;
 
         const DirectX::XMFLOAT4 tint = ConvertColor(color);
 
@@ -3936,7 +3945,7 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
             return;
         }
 
-        PrepareRoundedRectDraw();
+        if(!PrepareRoundedRectDraw()) return;
 
         const float leftNdc = static_cast<float>((((bounds.X - CurrentViewport.TopLeftX) / CurrentViewport.Width) * 2.0f) - 1.0f);
         const float rightNdc = static_cast<float>(((((bounds.X + bounds.Z) - CurrentViewport.TopLeftX) / CurrentViewport.Width) * 2.0f) - 1.0f);
@@ -3971,6 +3980,8 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
         if (!IsAlphaModeConfigured) {
             throw std::logic_error("The Windows 2D render bridge alpha mode must be configured before the first 2D pass.");
         }
+
+        if(!EnsurePipelineState()) return;
 
         Entity* cameraParent = camera->get_Parent();
         if (cameraParent == nullptr || !cameraParent->get_IsHierarchyEnabled()) {
@@ -4015,6 +4026,53 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
         int texturedQuadCount = 0;
         int glyphQuadCount = 0;
         int roundedRectCount = 0;
+        const int32_t commandCount = commandList->get_Count();
+        DrawCommands(commandList, texturedQuadCount, glyphQuadCount, roundedRectCount, false);
+#else
+        renderQueue->VisitOrdered(this);
+#endif
+
+        if (!HasWritten2DSummary) {
+            AppendRenderDiagnosticsLine(
+                std::string("2d.summary")
+#if __has_include("RenderCommandListBuilder2D.hpp")
+                + " command_count=" + std::to_string(commandCount)
+                + " command_textured_quads=" + std::to_string(texturedQuadCount)
+                + " command_glyph_quads=" + std::to_string(glyphQuadCount)
+                + " command_rounded_rects=" + std::to_string(roundedRectCount));
+#else
+                + " visits=" + std::to_string(Logged2DVisitCount)
+                + " rects=" + std::to_string(Logged2DRectCount)
+                + " texts=" + std::to_string(Logged2DTextCount)
+                + " sprites=" + std::to_string(Logged2DSpriteCount)
+                + " text_early_returns=" + std::to_string(Logged2DTextEarlyReturnCount));
+#endif
+            HasWritten2DSummary = true;
+        }
+        ClipRectStack.clear();
+        HasActiveClipRect = false;
+        HasActiveViewport = false;
+    }
+
+    /// Draws the final indicator independently of authored cameras, clipping and depth state.
+    void Win32RenderManager2D::RenderDebugBuildIndicator() {
+#if __has_include("RenderCommandListBuilder2D.hpp")
+        if(!EnsurePipelineState()) return;
+        auto* commands = BuildDebugBuildIndicatorCommands(static_cast<int32_t>(OutputBootstrap->GetWidth()), static_cast<int32_t>(OutputBootstrap->GetHeight()));
+        if (!commands) return;
+        if (!IsAlphaModeConfigured) throw std::logic_error("The Windows 2D bridge requires a configured alpha mode before the final pass.");
+        CurrentViewport = {0.0f, 0.0f, static_cast<float>(OutputBootstrap->GetWidth()), static_cast<float>(OutputBootstrap->GetHeight()), 0.0f, 1.0f};
+        HasActiveViewport = true; QuadVertexCursor = 0;
+        ClipRectStack.clear(); HasActiveClipRect = false;
+        int texturedQuadCount = 0, glyphQuadCount = 0, roundedRectCount = 0;
+        DrawCommands(commands, texturedQuadCount, glyphQuadCount, roundedRectCount, true);
+        ClipRectStack.clear(); HasActiveClipRect = false; HasActiveViewport = false;
+#endif
+    }
+
+    /// Reuses retained command decoding for authored cameras and the final physical overlay.
+    void Win32RenderManager2D::DrawCommands(RenderCommandList2D* commandList, int& texturedQuadCount, int& glyphQuadCount, int& roundedRectCount, bool finalOverlay) {
+#if __has_include("RenderCommandListBuilder2D.hpp")
         const int32_t commandCount = commandList->get_Count();
         for (int32_t commandIndex = 0; commandIndex < commandCount; commandIndex++) {
             RenderCommand2DType commandType = commandList->GetCommandType(commandIndex);
@@ -4077,7 +4135,9 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
                     bounds.Z.ToSingle(),
                     bounds.W.ToSingle(),
                     commandList->GetGlyphQuadSourceRect(payloadIndex),
-                    commandList->GetGlyphQuadColor(payloadIndex));
+                    commandList->GetGlyphQuadColor(payloadIndex),
+                    finalOverlay && texture->get_UsesRgbFontCoverage(),
+                    false);
                 continue;
             }
 
@@ -4107,30 +4167,7 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
                 continue;
             }
         }
-#else
-        renderQueue->VisitOrdered(this);
 #endif
-
-        if (!HasWritten2DSummary) {
-            AppendRenderDiagnosticsLine(
-                std::string("2d.summary")
-#if __has_include("RenderCommandListBuilder2D.hpp")
-                + " command_count=" + std::to_string(commandCount)
-                + " command_textured_quads=" + std::to_string(texturedQuadCount)
-                + " command_glyph_quads=" + std::to_string(glyphQuadCount)
-                + " command_rounded_rects=" + std::to_string(roundedRectCount));
-#else
-                + " visits=" + std::to_string(Logged2DVisitCount)
-                + " rects=" + std::to_string(Logged2DRectCount)
-                + " texts=" + std::to_string(Logged2DTextCount)
-                + " sprites=" + std::to_string(Logged2DSpriteCount)
-                + " text_early_returns=" + std::to_string(Logged2DTextEarlyReturnCount));
-#endif
-            HasWritten2DSummary = true;
-        }
-        ClipRectStack.clear();
-        HasActiveClipRect = false;
-        HasActiveViewport = false;
     }
 
     /// Visits one queued 2D drawable and lets it dispatch into the concrete draw methods.
@@ -4473,6 +4510,8 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
 
     /// Releases Windows renderer-owned 2D resources.
     void Win32RenderManager2D::Dispose() {
+        ShaderCompilation.reset();
+        PipelinePrepared=false;
         RenderManager2D::Dispose();
 
         while (!RuntimeTextureResourceOwners.empty()) {
@@ -4714,7 +4753,7 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
         }
         OutputBootstrap = &output;
         AlphaMode = alphaMode;
-        EnsurePipelineState();
+        EnsureBlendStates();
         Bootstrap.GetDeviceContext()->OMSetBlendState(alphaMode == Win32RenderAlphaMode::Premultiplied
             ? PremultipliedDestinationBlendState.Get() : AlphaBlendState.Get(), nullptr, 0xFFFFFFFFu);
     }

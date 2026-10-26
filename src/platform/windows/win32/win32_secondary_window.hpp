@@ -35,7 +35,7 @@ namespace helengine::windows {
         /// Reports cursor activity over a transparent overlay, where ordinary mouse messages are unavailable.
         bool ObserveCursorForActivity();
         /// Samples overlay alpha, optionally captures the final frame, then presents and counts this view's frame.
-        void CompleteFrame(bool synchronize, bool idle, bool finalFrame);
+        void CompleteFrame(bool synchronize, bool idle, bool finalFrame, bool sceneReady, bool renderReady);
         /// Builds this view's final fingerprint from its own presented-frame counters.
         std::string DescribeFingerprint(bool idleEnabled) const;
         /// Reports whether this overlay has a deterministic hit-test probe result to log.
@@ -43,6 +43,10 @@ namespace helengine::windows {
         /// Builds the probe result with the window tag appended for multi-window diagnostics.
         std::string DescribeProbeResult() const;
     private:
+        /// Avoids per-frame diagnostic writes after this output completes its first presentation path.
+        bool HasCompletedFirstFrame=false;
+        /// Logs one first-frame output boundary without taking a screenshot or changing graphics state.
+        void TraceFirstFrame(const char* stage) const;
         /// Stores this view's validated configuration.
         Win32AdditionalWindowSettings Settings;
         /// Owns the window; declared before its graphics resources so it outlives them.

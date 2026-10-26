@@ -1,4 +1,6 @@
 #include <array>
+#include <chrono>
+#include <thread>
 #include <cstring>
 #include <iostream>
 #include <stdexcept>
@@ -21,7 +23,10 @@ namespace helengine::windows {
         }
         /// Verifies colors, crop, bounds, caching, explicit rejection and caller-state preservation.
         void Run() {
+            auto submitted=std::chrono::steady_clock::now();
             DirectX11PreviewProcessor processor(Device.Get(),Context.Get());
+            Require(std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-submitted).count()<500,
+                "Preview creation blocked on shader compilation.");
             DirectX11TexturePreview preview(Device.Get(),720,480);
             Require(preview.GetTexture()==nullptr,"An unused preview must allocate no image.");
             auto bgra=CreateSource(8,6,DXGI_FORMAT_B8G8R8A8_UNORM,0,4,2);
@@ -32,9 +37,28 @@ namespace helengine::windows {
             D3D11_VIEWPORT viewport {2,3,4,5,0.2f,0.8f}; Context->RSSetViewports(1,&viewport);
             Context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_LINELIST);
             const float blend[4] {0.1f,0.2f,0.3f,0.4f}; Context->OMSetBlendState(nullptr,blend,0x1234);
+            // Exercise Update itself before readiness, not only the polling helper.
+            bool updated=processor.Update(preview,bgra.Get(),4,2);
+            VerifyCallerState(target.Get());
+            if(!updated) {
+                Require(preview.GetTexture()==nullptr,"Loading preview shaders allocated an unrendered image.");
+                VerifyCallerState(target.Get());
+            }
+            auto deadline=std::chrono::steady_clock::now()+std::chrono::seconds(10);
+            while(!processor.TryPrepare()) {
+                Require(std::chrono::steady_clock::now()<deadline,"Preview shaders did not finish.");
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            }
             processor.Update(preview,bgra.Get(),4,2);
             VerifyCallerState(target.Get()); VerifyCrop(preview,4,2);
             auto* retained=preview.GetTexture();
+            DirectX11PreviewProcessor loading(Device.Get(),Context.Get());
+            if(!loading.Update(preview,bgra.Get(),4,2)) {
+                Require(preview.GetTexture()==retained,"A pending shader discarded the previous preview texture.");
+                VerifyCrop(preview,4,2);
+                VerifyCallerState(target.Get());
+                std::cout<<"Pending Update preserved cached image and caller bindings.\n";
+            }
             preview.ResetSourceCopy();
             Require(preview.GetTexture()==retained,"Suspending capture must retain the last image.");
             processor.Update(preview,bgra.Get(),4,2);

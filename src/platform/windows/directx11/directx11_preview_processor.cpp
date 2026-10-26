@@ -29,18 +29,31 @@ namespace helengine::windows {
             Texture2D Image : register(t0); SamplerState LinearClamp : register(s0);
             float4 PS(Fragment input) : SV_Target { return Image.Sample(LinearClamp,clamp(input.UV*Extent,Minimum,Maximum)); }
         )";
-        Microsoft::WRL::ComPtr<ID3DBlob> vertex,pixel,errors;
-        Check(D3DCompile(shader,std::strlen(shader),nullptr,nullptr,nullptr,"VS","vs_4_0",D3DCOMPILE_OPTIMIZATION_LEVEL3,0,&vertex,&errors),"Compile preview vertex shader");
-        Check(D3DCompile(shader,std::strlen(shader),nullptr,nullptr,nullptr,"PS","ps_4_0",D3DCOMPILE_OPTIMIZATION_LEVEL3,0,&pixel,&errors),"Compile preview pixel shader");
-        Check(Device->CreateVertexShader(vertex->GetBufferPointer(),vertex->GetBufferSize(),nullptr,&VertexShader),"Create preview vertex shader");
-        Check(Device->CreatePixelShader(pixel->GetBufferPointer(),pixel->GetBufferSize(),nullptr,&PixelShader),"Create preview pixel shader");
-        D3D11_BUFFER_DESC buffer {}; buffer.ByteWidth=32; buffer.BindFlags=D3D11_BIND_CONSTANT_BUFFER;
-        Check(Device->CreateBuffer(&buffer,nullptr,&Constants),"Create preview crop constants");
-        D3D11_SAMPLER_DESC sampler {}; sampler.Filter=D3D11_FILTER_MIN_MAG_MIP_LINEAR;
-        sampler.AddressU=sampler.AddressV=sampler.AddressW=D3D11_TEXTURE_ADDRESS_CLAMP; sampler.MaxLOD=D3D11_FLOAT32_MAX;
-        Check(Device->CreateSamplerState(&sampler,&Sampler),"Create preview sampler");
-        D3D11_RASTERIZER_DESC raster {}; raster.FillMode=D3D11_FILL_SOLID; raster.CullMode=D3D11_CULL_NONE; raster.DepthClipEnable=TRUE;
-        Check(Device->CreateRasterizerState(&raster,&Rasterizer),"Create preview rasterizer");
+        ShaderCompilation=std::make_unique<DirectX11ShaderCompilation>(std::vector<DirectX11ShaderRequest>{
+            {shader,"EnginePreview","VS","vs_4_0",D3DCOMPILE_OPTIMIZATION_LEVEL3,{}},
+            {shader,"EnginePreview","PS","ps_4_0",D3DCOMPILE_OPTIMIZATION_LEVEL3,{}}
+        });
+    }
+    bool DirectX11PreviewProcessor::TryPrepare() {
+        if(PipelineFailure) std::rethrow_exception(PipelineFailure);
+        if(PipelinePrepared) return true;
+        try {
+            DirectX11ShaderCompilation::Bytecodes bytecodes;
+            if(!ShaderCompilation->TryGetBytecodes(bytecodes)) return false;
+            const auto& vertex=bytecodes[0]; const auto& pixel=bytecodes[1];
+            Check(Device->CreateVertexShader(vertex->GetBufferPointer(),vertex->GetBufferSize(),nullptr,&VertexShader),"Create preview vertex shader");
+            Check(Device->CreatePixelShader(pixel->GetBufferPointer(),pixel->GetBufferSize(),nullptr,&PixelShader),"Create preview pixel shader");
+            D3D11_BUFFER_DESC buffer {}; buffer.ByteWidth=32; buffer.BindFlags=D3D11_BIND_CONSTANT_BUFFER;
+            Check(Device->CreateBuffer(&buffer,nullptr,&Constants),"Create preview crop constants");
+            D3D11_SAMPLER_DESC sampler {}; sampler.Filter=D3D11_FILTER_MIN_MAG_MIP_LINEAR;
+            sampler.AddressU=sampler.AddressV=sampler.AddressW=D3D11_TEXTURE_ADDRESS_CLAMP; sampler.MaxLOD=D3D11_FLOAT32_MAX;
+            Check(Device->CreateSamplerState(&sampler,&Sampler),"Create preview sampler");
+            D3D11_RASTERIZER_DESC raster {}; raster.FillMode=D3D11_FILL_SOLID; raster.CullMode=D3D11_CULL_NONE; raster.DepthClipEnable=TRUE;
+            Check(Device->CreateRasterizerState(&raster,&Rasterizer),"Create preview rasterizer");
+            PipelinePrepared=true;
+            ShaderCompilation.reset();
+            return true;
+        } catch(...) { PipelineFailure=std::current_exception(); throw; }
     }
     D3D11_TEXTURE2D_DESC DirectX11PreviewProcessor::Validate(DirectX11TexturePreview& preview,ID3D11Texture2D* source,UINT width,UINT height) const {
         if(source==nullptr || preview.Device.Get()!=Device.Get() || source==preview.Texture.Get()) {
@@ -55,8 +68,9 @@ namespace helengine::windows {
         }
         return desc;
     }
-    void DirectX11PreviewProcessor::Update(DirectX11TexturePreview& preview,ID3D11Texture2D* source,UINT contentWidth,UINT contentHeight) {
+    bool DirectX11PreviewProcessor::Update(DirectX11TexturePreview& preview,ID3D11Texture2D* source,UINT contentWidth,UINT contentHeight) {
         auto desc=Validate(preview,source,contentWidth,contentHeight);
+        if(!TryPrepare()) return false;
         double aspect=static_cast<double>(contentWidth)/contentHeight;
         UINT width=(std::min)(preview.MaximumWidth,contentWidth);
         UINT height=(std::max)(1u,static_cast<UINT>(width/aspect));
@@ -92,6 +106,7 @@ namespace helengine::windows {
         ID3D11ShaderResourceView* unbound=nullptr; Context->PSSetShaderResources(0,1,&unbound);
         Context->OMSetRenderTargets(0,nullptr,nullptr);
         Context->Flush();
+        return true;
     }
     void DirectX11PreviewProcessor::Check(HRESULT result,const char* operation) {
         if(FAILED(result)) { throw std::runtime_error(std::string(operation)+": "+DirectX11HResultFormatter::ToHex(result)); }

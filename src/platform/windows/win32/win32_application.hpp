@@ -80,6 +80,12 @@ namespace helengine::windows {
         /// Updates the shared core once, then draws and presents every live view.
         void RenderMultiWindowFrame();
 
+        /// Logs first-frame boundaries for every output without changing presentation or input policy.
+        void TraceFirstMultiWindowFrame(const char* stage,const char* tag) const;
+
+        /// Stops verbose boundary logging after the first complete multi-window frame.
+        bool HasCompletedFirstMultiWindowFrame=false;
+
         /// Returns whether any live view has a nonzero client area.
         bool HasRenderableWindow() const;
 
@@ -165,6 +171,11 @@ namespace helengine::windows {
 
         /// Loads the packaged startup scene from the built content root when one is present.
         void LoadPackagedStartupScene();
+
+        /// Requires completed scene materialization before a presented frame can authorize host shortcuts.
+        bool IsStartupSceneReady() const;
+        /// Reports completion of the current renderer output while retaining the native host without generated-core support.
+        bool IsRenderedOutputReady() const;
 
         /// Resolves the runtime player profile that controls initial window sizing.
         RuntimePlayerProfile ResolveRuntimePlayerProfile() const;

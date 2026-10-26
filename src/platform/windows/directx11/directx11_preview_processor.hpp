@@ -2,10 +2,17 @@
 #include <d3d11_1.h>
 #include <wrl/client.h>
 #include "directx11_texture_preview.hpp"
+#include "directx11_shader_compilation.hpp"
 
 namespace helengine::windows {
     /// Shares an engine-owned GPU copy/reduction pass across authorized external texture previews on one immediate context.
     class DirectX11PreviewProcessor {
+        /// Uses the common backend shader loader without retaining a context in any worker.
+        std::unique_ptr<DirectX11ShaderCompilation> ShaderCompilation;
+        /// Retains device setup failures rather than recreating partially initialized resources.
+        std::exception_ptr PipelineFailure;
+        /// Gates GPU processing until both shaders and all fixed resources are ready.
+        bool PipelinePrepared=false;
         /// Retains the common resource device.
         Microsoft::WRL::ComPtr<ID3D11Device> Device;
         /// Retains the immediate context used on the renderer's owning thread.
@@ -27,9 +34,11 @@ namespace helengine::windows {
         /// Reports the original HRESULT for failed graphics initialization or processing.
         static void Check(HRESULT result,const char* operation);
     public:
-        /// Prepares shaders and isolated state once on a matching immediate context; no windows are created.
+        /// Schedules common backend shader loading and creates isolated state on a matching context without opening a window.
         DirectX11PreviewProcessor(ID3D11Device* device,ID3D11DeviceContext* context);
-        /// Crops to valid content, fits the per-preview bounds without upscaling, and retains the resulting RGBA image entirely on the GPU.
-        void Update(DirectX11TexturePreview& preview,ID3D11Texture2D* source,UINT contentWidth,UINT contentHeight);
+        /// Polls readiness without waiting; creates device objects on the caller thread only after HLSL completes.
+        bool TryPrepare();
+        /// Returns false while loading without touching the cached image or caller state; returns true after GPU processing.
+        bool Update(DirectX11TexturePreview& preview,ID3D11Texture2D* source,UINT contentWidth,UINT contentHeight);
     };
 }

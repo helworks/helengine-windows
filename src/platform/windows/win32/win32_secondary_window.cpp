@@ -1,3 +1,5 @@
+#include "platform/windows/win32/win32_presentation_health.hpp"
+#include "platform/windows/runtime/runtime_render_diagnostics.hpp"
 #include "platform/windows/win32/win32_secondary_window.hpp"
 
 #include <filesystem>
@@ -52,24 +54,38 @@ namespace helengine::windows {
     /// Tracks overlay cursor motion without moving the user's cursor.
     bool Win32SecondaryWindow::ObserveCursorForActivity() { return HitTest && HitTest->ObserveCursorForActivity(); }
     /// Completes one drawn view and performs its own optional capture before presentation.
-    void Win32SecondaryWindow::CompleteFrame(bool synchronize, bool idle, bool finalFrame) {
+    void Win32SecondaryWindow::CompleteFrame(bool synchronize, bool idle, bool finalFrame, bool sceneReady, bool renderReady) {
+        TraceFirstFrame("resolve.begin");
         Bootstrap->ResolveOutput();
+        TraceFirstFrame("resolve.end");
+        TraceFirstFrame("hit-test.begin");
         if (HitTest) { HitTest->SampleFrame(); }
+        TraceFirstFrame("hit-test.end");
         if (Capture && finalFrame) {
             try { Capture->CaptureToBmp(CapturePath); }
             catch (const std::exception& error) {
                 throw Win32ExitRequest(3, "Capture failed for window " + Settings.GetTag() + ": " + error.what());
             }
         }
+        TraceFirstFrame("present.begin");
         HRESULT result = synchronize ? Presenter->RenderFrame() : Presenter->RenderFrameWithoutWait();
         if (FAILED(result)) {
             throw std::runtime_error("Present failed for window " + Settings.GetTag() + ": " + DirectX11HostFingerprint::DescribePresentFailure(result));
         }
+        Win32PresentationHealth::RecordPresentation(Window->GetHandle(),result,sceneReady,renderReady);
+        TraceFirstFrame("present.end");
+        HasCompletedFirstFrame=true;
         if (Fingerprint) {
             Fingerprint->RecordPresent(result);
             PresentedFrames++;
             if (idle) { IdleFrames++; } else { ActiveFrames++; }
         }
+    }
+    /// Records output-specific completion boundaries once, so a hang has a concrete last operation.
+    void Win32SecondaryWindow::TraceFirstFrame(const char* stage) const {
+        if(HasCompletedFirstFrame) return;
+        RuntimeRenderDiagnostics::WriteHostEvent("window.first-frame","window="+Settings.GetTag()+" stage="+stage
+            +" tick="+std::to_string(GetTickCount64()));
     }
     /// Describes only the presentations that this view actually completed.
     std::string Win32SecondaryWindow::DescribeFingerprint(bool idleEnabled) const {

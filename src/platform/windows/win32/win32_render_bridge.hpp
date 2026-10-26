@@ -1,4 +1,5 @@
 #pragma once
+#include "platform/windows/win32/win32_frame_readiness.hpp"
 
 #ifdef DrawText
 #undef DrawText
@@ -16,11 +17,13 @@
 
 #include "platform/windows/win32/win32_overlay_background.hpp"
 #include "platform/windows/win32/win32_render_alpha_mode.hpp"
+#include "platform/windows/win32/win32_camera_toon_pass.hpp"
 
 #if __has_include("RenderManager2D.hpp")
 class LightComponent;
 class DirectionalLightComponent;
 class RenderCommandListBuilder2D;
+class RenderCommandList2D;
 
 #include "Core.hpp"
 #include "FontAsset.hpp"
@@ -138,6 +141,21 @@ namespace helengine::windows {
         /// <exception cref="std::logic_error">Thrown when the alpha mode was already configured.</exception>
         void ConfigureAlphaMode(Win32RenderAlphaMode alphaMode, Win32OverlayBackground overlayBackground);
 
+        /// Enables validated viewport-local toon shading for one live camera, or explicitly removes its registration.
+        void ConfigureCameraToon(ICamera* camera, bool enabled, float outsidePixels, float insidePixels, int bands);
+
+        /// Configures independent effects on an already registered camera; legacy registration defaults remain unchanged.
+        void ConfigureCameraToonEffects(ICamera* camera, const CameraToonEffectsConfiguration& configuration);
+
+        /// Registers exact draw-material identity with bounded reflection and selected-emission weights.
+        void ConfigureCameraToonMaterialEffects(ICamera* camera, RuntimeMaterial* material, float reflectivity, float bloomWeight, bool pearlSurface = false);
+
+        /// Uploads explicit RGBA wallpaper pixels and generates filtered environment mips on the render thread.
+        void SetCameraToonEnvironment(ICamera* camera, uint32_t width, uint32_t height, const uint8_t* rgbaBytes, std::size_t byteCount);
+
+        /// Releases camera targets, owned environment and all borrowed material identities; repeated removal is harmless.
+        void ClearCameraToon(ICamera* camera);
+
         /// Returns the number of uploaded texture resources currently cached by the Windows bridge.
         std::size_t GetTextureResourceCount() const;
 
@@ -188,16 +206,37 @@ namespace helengine::windows {
 
         /// Draws every registered camera to the Windows back buffer in camera order.
         void Draw() override;
+        /// Reports whether the selected output completed its camera draws without waiting on required shaders.
+        bool IsOutputReady() const;
+
 
         /// Draws one queued mesh for the currently active camera.
         void Visit(IDrawable3D* drawable) override;
 
     private:
-        /// Creates the shaders, input layout, and fixed pipeline state on first use.
-        void EnsurePipelineState();
+        /// Resets for each output draw and remains false when any required camera pipeline is pending.
+        Win32FrameReadiness OutputReadiness;
 
-        /// Creates the shaders, constant buffers, and textures required by the directional shadow path.
-        void EnsureShadowPipelineState();
+        /// Owns opt-in resources by exact camera identity; ordinary cameras never enter the toon pipeline.
+        std::unordered_map<ICamera*, std::unique_ptr<Win32CameraToonPass>> CameraToonPasses;
+
+        /// Borrows the registered helper only while its camera's mesh queue is executing.
+        Win32CameraToonPass* ActiveToonPass = nullptr;
+
+        /// Polls generic shader loading and creates the 3D pipeline once bytecode is ready; never waits.
+        bool EnsurePipelineState();
+
+        /// Owns generic background shader loading; never waits for workers during drawing or disposal.
+        std::unique_ptr<DirectX11ShaderCompilation> ShaderCompilation;
+        /// Retains pipeline initialization failures instead of retrying partially created GPU state.
+        std::exception_ptr PipelineFailure;
+        /// Becomes true only after every device object in this pipeline has been created.
+        bool PipelinePrepared=false;
+
+
+
+        /// Creates shadow device resources from the already completed common 3D shader batch.
+        void InitializeShadowPipelineState(const DirectX11ShaderCompilation::Bytecodes& bytecodes);
 
         /// Creates the default sampler used by material texture bindings.
         void EnsureTextureSamplerState();
@@ -221,7 +260,7 @@ namespace helengine::windows {
         DXGI_FORMAT ResolveVertexElementFormat(HeCppString format) const;
 
         /// Clears and renders one camera directly into the main back buffer.
-        void RenderCamera(ICamera* camera, bool clearColorBuffer);
+        bool RenderCamera(ICamera* camera, bool clearColorBuffer);
 
         /// Copies the currently visible authored lights relevant to one camera into a render-ready list.
         std::vector<LightComponent*> SnapshotVisibleLights(ICamera* camera) const;
@@ -428,6 +467,8 @@ namespace helengine::windows {
 
         /// Creates the native 2D bridge for one DirectX11 bootstrap.
         explicit Win32RenderManager2D(DirectX11Bootstrap& bootstrap);
+        /// Reports readiness of the shared 2D shader pipeline without polling or blocking compilation.
+        bool IsPipelineReady() const { return PipelinePrepared; }
 
         /// Applies the back-buffer alpha mode once at startup, before the first 2D pass. Straight keeps today's
         /// AlphaBlendState binds; Premultiplied binds PremultipliedDestinationBlendState at the same sites.
@@ -475,6 +516,8 @@ namespace helengine::windows {
 
         /// Draws every queued 2D drawable for one camera.
         void RenderCamera(ICamera* camera);
+        /// Draws shared debug commands on the full physical output after every authored camera.
+        void RenderDebugBuildIndicator();
 
         /// Visits one queued 2D drawable and lets it dispatch into the concrete draw methods.
         void Visit(IDrawable2D* drawable) override;
@@ -499,8 +542,23 @@ namespace helengine::windows {
             int32_t sourceRowPitch) override;
 
     private:
-        /// Creates the DirectX11 shaders, buffers, and fixed pipeline state needed for 2D rendering.
-        void EnsurePipelineState();
+        /// Returns false while common backend shader loading is pending; creates 2D resources only once ready.
+        bool EnsurePipelineState();
+        /// Creates fixed composition state independently of any HLSL loading.
+        void EnsureBlendStates();
+        /// Retains a fixed-state creation failure without exposing partially initialized blends.
+        std::exception_ptr BlendFailure;
+
+        /// Owns generic background shader loading; never waits for workers during drawing or disposal.
+        std::unique_ptr<DirectX11ShaderCompilation> ShaderCompilation;
+        /// Retains pipeline initialization failures instead of retrying partially created GPU state.
+        std::exception_ptr PipelineFailure;
+        /// Becomes true only after every device object in this pipeline has been created.
+        bool PipelinePrepared=false;
+
+
+        /// Decodes retained commands for camera and final overlay passes without rebuilding their queues.
+        void DrawCommands(RenderCommandList2D* commands, int& texturedQuadCount, int& glyphQuadCount, int& roundedRectCount, bool finalOverlay);
 
         /// Resolves one camera viewport against the current swap-chain size.
         D3D11_VIEWPORT ResolveViewport(ICamera* camera) const;
@@ -508,8 +566,8 @@ namespace helengine::windows {
         /// Resolves an uploaded shader resource view for one runtime texture.
         ID3D11ShaderResourceView* ResolveTextureResourceView(RuntimeTexture* texture) const;
 
-        /// Configures the DirectX11 state used by one textured quad draw.
-        void PrepareTexturedQuadDraw(ID3D11ShaderResourceView* textureView, bool rgbFontCoverage = false, bool allowClearType = true);
+        /// Returns false before state mutation when quad/font shaders are pending; otherwise binds the draw state.
+        bool PrepareTexturedQuadDraw(ID3D11ShaderResourceView* textureView, bool rgbFontCoverage = false, bool allowClearType = true);
 
         /// Draws one textured quad in window-space pixel coordinates.
         void DrawTexturedQuad(
@@ -537,7 +595,7 @@ namespace helengine::windows {
         void DrawSolidRect(float x, float y, float width, float height, byte4 color);
 
         /// Configures the DirectX11 state used by one rounded-rect SDF draw.
-        void PrepareRoundedRectDraw();
+        bool PrepareRoundedRectDraw();
 
         /// Draws one rounded rectangle using the native signed-distance-field shader path.
         void DrawRoundedRectSdf(float4 bounds, float radius, float borderThickness, byte4 fillColor, byte4 borderColor, int32_t corners);

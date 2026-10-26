@@ -90,6 +90,7 @@ set(HELENGINE_WINDOWS_SOURCES
     src/platform/windows/directx11/directx11_bootstrap.cpp
     src/platform/windows/directx11/directx11_output_attachments.cpp
     src/platform/windows/directx11/directx11_texture_preview.cpp
+    src/platform/windows/directx11/directx11_shader_compilation.cpp
     src/platform/windows/directx11/directx11_preview_processor.cpp
     src/platform/windows/directx11/directx11_hit_test_sampler.cpp
     src/platform/windows/directx11/directx11_host_fingerprint.cpp
@@ -102,6 +103,7 @@ if(HELENGINE_WINDOWS_INCLUDE_GENERATED_CORE)
         src/platform/windows/win32/win32_audio_backend.cpp
         src/platform/windows/win32/win32_input_bridge.cpp
         src/platform/windows/win32/win32_render_bridge.cpp
+        src/platform/windows/win32/win32_camera_toon_pass.cpp
     )
 
     list(APPEND HELENGINE_WINDOWS_SOURCES "${HELENGINE_CORE_TRANSLATION_UNIT}")
@@ -232,9 +234,37 @@ target_link_libraries(helengine_windows_output_tests PRIVATE d3d11 d3dcompiler d
 add_executable(helengine_windows_preview_tests EXCLUDE_FROM_ALL
     tests/texture_preview_tests.cpp
     src/platform/windows/directx11/directx11_texture_preview.cpp
+    src/platform/windows/directx11/directx11_shader_compilation.cpp
     src/platform/windows/directx11/directx11_preview_processor.cpp
     src/platform/windows/directx11/directx11_hresult_formatter.cpp)
 target_include_directories(helengine_windows_preview_tests PRIVATE src)
 target_compile_features(helengine_windows_preview_tests PRIVATE cxx_std_20)
 target_compile_definitions(helengine_windows_preview_tests PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
 target_link_libraries(helengine_windows_preview_tests PRIVATE d3d11 d3dcompiler dxgi)
+
+# Camera-local toon tests draw owned geometric fixtures, without HWNDs or desktop capture.
+add_executable(helengine_windows_toon_tests EXCLUDE_FROM_ALL
+    tests/camera_toon_tests.cpp
+    tests/camera_toon_radio_fixture.cpp
+    src/platform/windows/win32/win32_camera_toon_pass.cpp
+    src/platform/windows/directx11/directx11_shader_compilation.cpp)
+target_include_directories(helengine_windows_toon_tests PRIVATE src)
+target_compile_features(helengine_windows_toon_tests PRIVATE cxx_std_20)
+target_compile_definitions(helengine_windows_toon_tests PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
+target_link_libraries(helengine_windows_toon_tests PRIVATE d3d11 d3dcompiler dxgi)
+
+# General shader loading is a backend feature; these fixtures create no HWND or device context.
+add_executable(helengine_windows_shader_tests EXCLUDE_FROM_ALL
+    tests/shader_compilation_tests.cpp
+    src/platform/windows/directx11/directx11_shader_compilation.cpp)
+target_include_directories(helengine_windows_shader_tests PRIVATE src)
+target_compile_features(helengine_windows_shader_tests PRIVATE cxx_std_20)
+target_compile_definitions(helengine_windows_shader_tests PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
+target_link_libraries(helengine_windows_shader_tests PRIVATE d3dcompiler)
+
+# Presentation health tests create only an HWND_MESSAGE receiver; no player or visible window.
+add_executable(helengine_windows_presentation_health_tests EXCLUDE_FROM_ALL tests/presentation_health_tests.cpp)
+target_include_directories(helengine_windows_presentation_health_tests PRIVATE src)
+target_compile_features(helengine_windows_presentation_health_tests PRIVATE cxx_std_20)
+target_compile_definitions(helengine_windows_presentation_health_tests PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
+target_link_libraries(helengine_windows_presentation_health_tests PRIVATE user32)

@@ -1,3 +1,4 @@
+#include "platform/windows/win32/win32_presentation_health.hpp"
 #include "platform/windows/win32/win32_secondary_window.hpp"
 #include "platform/windows/win32/win32_application.hpp"
 #include "platform/windows/win32/win32_desktop_host.hpp"
@@ -1354,8 +1355,8 @@ namespace helengine::windows {
 
         const std::string loadingScreenSceneId = he_get_runtime_loading_screen_scene_id();
         if (loadingScreenSceneId.empty() || loadingScreenSceneId == startupEntry->get_SceneId()) {
-            EngineCore->get_SceneManager()->LoadScene(startupEntry->get_SceneId(), SceneLoadMode::Single);
-            WriteLifecycleLog("Packaged startup scene applied through scene manager.");
+            EngineCore->get_SceneManager()->RequestSceneTransition(startupEntry->get_SceneId());
+            WriteLifecycleLog("Packaged startup scene queued for incremental materialization.");
         } else {
             RuntimeSceneCatalogEntry* loadingScreenEntry = nullptr;
             for (int32_t entryIndex = 0; entryIndex < catalogEntries->get_Length(); entryIndex++) {
@@ -1376,6 +1377,26 @@ namespace helengine::windows {
             EngineCore->get_SceneManager()->RequestSceneTransition(startupEntry->get_SceneId());
             WriteLifecycleLog(("Packaged startup scene transition queued: " + startupEntry->get_SceneId()).c_str());
         }
+#endif
+    }
+
+    /// Separates healthy loading frames from frames containing the completed startup scene.
+    bool Win32Application::IsStartupSceneReady() const {
+#if __has_include("Core.hpp")
+        if(EngineCore==nullptr || EngineCore->get_SceneManager()==nullptr) return false;
+        SceneManager* scenes=EngineCore->get_SceneManager();
+        return !scenes->get_IsSceneTransitionActive() && scenes->get_LoadedScenes()->get_Count()>0;
+#else
+        return true;
+#endif
+    }
+
+    /// Requires the actual current output pipelines rather than inferring readiness from a successfully cleared frame.
+    bool Win32Application::IsRenderedOutputReady() const {
+#if __has_include("Core.hpp")
+        return EngineRenderManager3D!=nullptr && EngineRenderManager3D->IsOutputReady();
+#else
+        return true;
 #endif
     }
 
@@ -1989,6 +2010,7 @@ namespace helengine::windows {
             {
                 HELENGINE_TRACY_ZONE_N("Frame.PacingAndIdle");
                 presentResult = Presenter->RenderFrame();
+                Win32PresentationHealth::RecordPresentation(MainWindow->GetHandle(),presentResult,IsStartupSceneReady(),IsRenderedOutputReady());
             }
             if (CommandLineOptions.HasFrameLimit()) {
                 if (HostFingerprint->RecordPresent(presentResult)) {
@@ -3059,6 +3081,13 @@ namespace helengine::windows {
 #endif
     }
 
+    /// Records the blocking boundary and monotonic time when the first multi-window frame fails to finish.
+    void Win32Application::TraceFirstMultiWindowFrame(const char* stage,const char* tag) const {
+        if(HasCompletedFirstMultiWindowFrame) return;
+        std::string message="First multi-window frame: window="+std::string(tag)+" stage="+stage+" tick="+std::to_string(GetTickCount64());
+        WriteLifecycleLog(message.c_str());
+    }
+
     /// Commits scene work once, updates once and renders the resulting shared scene into every visible window.
     void Win32Application::RenderMultiWindowFrame() {
         if (!HasRenderableWindow()) {
@@ -3066,6 +3095,7 @@ namespace helengine::windows {
             return;
         }
 #if __has_include("Core.hpp")
+        TraceFirstMultiWindowFrame("begin","all");
         for (auto iterator = SecondaryWindows.begin(); iterator != SecondaryWindows.end();) {
             if ((*iterator)->GetWindow().GetHandle() == nullptr) {
                 EngineInputBackend->SelectWindow(*MainWindow);
@@ -3085,10 +3115,14 @@ namespace helengine::windows {
                     view->GetWindow().GetClientWidth(), view->GetWindow().GetClientHeight());
             }
         }
+        TraceFirstMultiWindowFrame("input.begin","all");
         SelectMultiWindowInput();
+        TraceFirstMultiWindowFrame("update.begin","all");
         if (CommandLineOptions.HasFixedDelta()) { EngineCore->Update(CommandLineOptions.GetFixedDeltaSeconds()); }
         else { EngineCore->Update(); }
+        TraceFirstMultiWindowFrame("update.end","all");
         PollSceneTransitionDiagnostics();
+        TraceFirstMultiWindowFrame("scene-diagnostics.end","all");
         bool finalFrame = CommandLineOptions.HasFrameLimit() && RenderedFrameCount + 1 == CommandLineOptions.GetFrameLimit();
         bool coreDrawCompleted = false;
         // A visible overlay owns VSync ahead of desktop views so interaction follows its monitor's refresh rate.
@@ -3111,15 +3145,22 @@ namespace helengine::windows {
             }
             EngineRenderManager3D->SelectOutputWindow(reinterpret_cast<intptr_t>(MainWindow->GetHandle()), *Bootstrap, WindowModeSettings->GetWindowMode() == Win32WindowMode::Overlay
                 ? Win32RenderAlphaMode::Premultiplied : Win32RenderAlphaMode::Straight, WindowModeSettings->GetOverlayBackground());
+            TraceFirstMultiWindowFrame("draw.begin","main");
             EngineCore->Draw();
+            TraceFirstMultiWindowFrame("draw.end","main");
             coreDrawCompleted = true;
+            TraceFirstMultiWindowFrame("resolve.begin","main");
             Bootstrap->ResolveOutput();
+            TraceFirstMultiWindowFrame("resolve.end","main");
             if (BackBufferCapture && CommandLineOptions.ShouldCaptureFrame(RenderedFrameCount)) {
                 BackBufferCapture->CaptureToBmp(CommandLineOptions.GetCapturePathForFrame(RenderedFrameCount));
             }
             if (OverlayHitTestController) { OverlayHitTestController->SampleFrame(); }
+            TraceFirstMultiWindowFrame("present.begin","main");
             HRESULT result = pacingView == nullptr ? Presenter->RenderFrame() : Presenter->RenderFrameWithoutWait();
             if (FAILED(result)) { throw std::runtime_error(DirectX11HostFingerprint::DescribePresentFailure(result)); }
+            Win32PresentationHealth::RecordPresentation(MainWindow->GetHandle(),result,IsStartupSceneReady(),IsRenderedOutputReady());
+            TraceFirstMultiWindowFrame("present.end","main");
             if (HostFingerprint) { HostFingerprint->RecordPresent(result); }
             if (CommandLineOptions.HasFrameLimit()) {
                 MultiWindowPrimaryFrames++;
@@ -3146,12 +3187,17 @@ namespace helengine::windows {
             if (output.GetWidth() != width || output.GetHeight() != height) { output.Resize(width, height); }
             EngineRenderManager3D->SelectOutputWindow(handle, output, view->GetMode() == Win32WindowMode::Overlay
                 ? Win32RenderAlphaMode::Premultiplied : Win32RenderAlphaMode::Straight, Win32OverlayBackground::Transparent);
+            TraceFirstMultiWindowFrame("draw.begin",view->GetTag().c_str());
             if (!coreDrawCompleted) { EngineCore->Draw(); coreDrawCompleted = true; }
             else { EngineRenderManager3D->Draw(); }
-            view->CompleteFrame(view.get() == pacingView, CurrentFrameIsIdle, finalFrame);
+            TraceFirstMultiWindowFrame("draw.end",view->GetTag().c_str());
+            view->CompleteFrame(view.get() == pacingView, CurrentFrameIsIdle, finalFrame,IsStartupSceneReady(),IsRenderedOutputReady());
+            TraceFirstMultiWindowFrame("present.end",view->GetTag().c_str());
         }
         EngineRenderManager3D->SelectOutputWindow(reinterpret_cast<intptr_t>(MainWindow->GetHandle()), *Bootstrap, WindowModeSettings->GetWindowMode() == Win32WindowMode::Overlay
             ? Win32RenderAlphaMode::Premultiplied : Win32RenderAlphaMode::Straight, WindowModeSettings->GetOverlayBackground());
+        TraceFirstMultiWindowFrame("completed","all");
+        HasCompletedFirstMultiWindowFrame=true;
         if (CommandLineOptions.HasFrameLimit()) { RenderedFrameCount++; }
         if (finalFrame) {
             std::string fingerprint = HostFingerprint->Describe(MultiWindowPrimaryFrames, IdleFramePacer != nullptr,
