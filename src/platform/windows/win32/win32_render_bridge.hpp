@@ -5,6 +5,9 @@
 #undef DrawText
 #endif
 
+#include "platform/windows/directx11/directx11_material_binding_cache.hpp"
+#include "platform/windows/directx11/directx11_constant_data_pool.hpp"
+#include "platform/windows/directx11/directx11_prepared_material.hpp"
 #include <d3d11.h>
 #include <wrl/client.h>
 
@@ -296,10 +299,10 @@ namespace helengine::windows {
         void ApplyMaterial(RuntimeMaterial* material);
 
         /// Applies authored material constant-buffer payloads for one runtime material while leaving engine-managed buffers untouched.
-        void BindMaterialConstantBuffers(RuntimeMaterial* material);
+        void BindMaterialConstantBuffers(const DirectX11PreparedMaterial& material);
 
         /// Binds the resolved runtime material textures to the pixel shader slots consumed by the Windows forward path.
-        void BindMaterialTextures(RuntimeMaterial* material);
+        void BindMaterialTextures(const DirectX11PreparedMaterial& material);
 
         /// Resolves one runtime texture for the requested material binding name after applying parent-material inheritance.
         RuntimeTexture* ResolveMaterialTexture(ShaderRuntimeMaterial* material, HeCppString bindingName);
@@ -307,8 +310,11 @@ namespace helengine::windows {
         /// Resolves an uploaded shader resource view for one runtime texture.
         ID3D11ShaderResourceView* ResolveTextureResourceView(RuntimeTexture* texture) const;
 
-        /// Resolves or creates one Direct3D constant buffer matching the requested shader slot and byte size.
-        ID3D11Buffer* GetOrCreateMaterialConstantBuffer(int32_t slot, int32_t sizeInBytes);
+        /// Reuses exact immutable constant contents across materials, uploading only a previously unseen payload.
+        std::shared_ptr<const Microsoft::WRL::ComPtr<ID3D11Buffer>> GetOrCreateMaterialConstantBuffer(int32_t slot, std::span<const uint8_t> data);
+
+        /// Resolves material-owned bindings once per dependency change and publishes only completed preparation.
+        const DirectX11PreparedMaterial& GetPreparedMaterial(ShaderRuntimeMaterial* material);
 
         /// Returns whether one constant-buffer binding is owned by the renderer instead of material-authored property data.
         static bool IsEngineManagedConstantBufferBinding(HeCppString bindingName);
@@ -442,8 +448,11 @@ namespace helengine::windows {
         /// Caches uploaded shader resources by material id.
         std::unordered_map<std::string, std::unique_ptr<Win32ShaderResource>> MaterialShaderResources;
 
-        /// Caches authored material constant buffers by slot and byte size.
-        std::unordered_map<uint64_t, Microsoft::WRL::ComPtr<ID3D11Buffer>> MaterialConstantBuffers;
+        /// Shares immutable authored constants by content while prepared materials own their GPU lifetime.
+        DirectX11ConstantDataPool<Microsoft::WRL::ComPtr<ID3D11Buffer>> MaterialConstantBuffers;
+
+        /// Retains the latest complete material bindings with inherited revision and exact mutable-layout validation.
+        DirectX11MaterialBindingCache<ShaderRuntimeMaterial, DirectX11PreparedMaterial> PreparedMaterials;
 
         /// Tracks how many uploaded runtime models currently retain native vertex or index buffers.
         std::size_t LiveModelBufferCount = 0;

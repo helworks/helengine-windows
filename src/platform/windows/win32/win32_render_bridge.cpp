@@ -1079,7 +1079,7 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
 
     /// Returns the number of authored material constant buffers currently cached by the Windows bridge.
     std::size_t Win32RenderManager3D::GetMaterialConstantBufferCount() const {
-        return MaterialConstantBuffers.size();
+        return MaterialConstantBuffers.GetCount();
     }
 
     /// Returns the number of uploaded runtime models currently retaining native vertex or index buffers.
@@ -1328,7 +1328,7 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
                 + " authored_constant_buffer_count=" + std::to_string(authoredConstantBufferCount)
                 + " authored_constant_buffer_bytes=" + std::to_string(authoredConstantBufferBytes)
                 + " live_material_shader_resources=" + std::to_string(MaterialShaderResources.size())
-                + " live_material_constant_buffers=" + std::to_string(MaterialConstantBuffers.size())
+                + " live_material_constant_buffers=" + std::to_string(MaterialConstantBuffers.GetCount())
                 + " live_material_constant_buffer_bytes=" + std::to_string(LiveMaterialConstantBufferBytes),
             MaterialShaderResources.size());
         return runtimeMaterial;
@@ -1415,6 +1415,9 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
             throw std::invalid_argument("Runtime material must be provided for release.");
         }
 
+        PreparedMaterials.Invalidate(material);
+
+        LiveMaterialConstantBufferBytes=MaterialConstantBuffers.GetRetainedBytes();
         for(auto& registration : CameraToonPasses) registration.second->RemoveMaterialEffects(material);
 
         const std::string materialId = material->get_Id().raw();
@@ -1427,13 +1430,14 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
             "material",
             materialId,
             "renderer=windows material_shader_resources=" + std::to_string(MaterialShaderResources.size())
-                + " material_constant_buffers=" + std::to_string(MaterialConstantBuffers.size())
+                + " material_constant_buffers=" + std::to_string(MaterialConstantBuffers.GetCount())
                 + " material_constant_buffer_bytes=" + std::to_string(LiveMaterialConstantBufferBytes));
     }
 
     /// Flushes any deferred Windows runtime asset releases.
     void Win32RenderManager3D::FlushReleasedAssets() {
-        MaterialConstantBuffers.clear();
+        PreparedMaterials.Clear();
+        MaterialConstantBuffers.Clear();
         LiveMaterialConstantBufferBytes = 0;
         HasWrittenRenderSnapshot = false;
         Logged3DVisitCount = 0;
@@ -1459,7 +1463,8 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
         ActiveToonPass = nullptr;
         CameraToonPasses.clear();
         MaterialShaderResources.clear();
-        MaterialConstantBuffers.clear();
+        PreparedMaterials.Clear();
+        MaterialConstantBuffers.Clear();
         LiveModelBufferCount = 0;
         LiveModelVertexBufferBytes = 0;
         LiveModelIndexBufferBytes = 0;
@@ -3071,7 +3076,6 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
         ID3D11Buffer* transformBuffer = TransformBuffer.Get();
         context->VSSetConstantBuffers(0, 1, &transformBuffer);
         context->PSSetConstantBuffers(0, 1, &transformBuffer);
-        BindMaterialConstantBuffers(material);
 
         ShaderRuntimeMaterial* shaderRuntimeMaterial = RequireShaderRuntimeMaterial(material);
         MaterialLayout* layout = shaderRuntimeMaterial->get_Layout();
@@ -3089,10 +3093,12 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
                 + " constant_buffer_bindings=" + std::to_string(constantBufferBindingCount)
                 + " has_properties=" + std::to_string(properties != nullptr ? 1 : 0));
         }
-        if (layout != nullptr && properties != nullptr) {
+        if (layout != nullptr) {
+            const auto& prepared=GetPreparedMaterial(shaderRuntimeMaterial);
+            BindMaterialConstantBuffers(prepared);
             Array<MaterialLayoutBinding*>* textureBindings = layout->get_TextureBindings();
             if (textureBindings != nullptr && textureBindings->Length > 0) {
-                BindMaterialTextures(material);
+                BindMaterialTextures(prepared);
             } else {
                 ID3D11ShaderResourceView* nullResourceView = nullptr;
                 context->PSSetShaderResources(0, 1, &nullResourceView);
@@ -3102,65 +3108,66 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
         }
     }
 
-    /// Applies authored material constant-buffer payloads for one runtime material while leaving engine-managed buffers untouched.
-    void Win32RenderManager3D::BindMaterialConstantBuffers(RuntimeMaterial* material) {
-        if (material == nullptr) {
-            throw new ArgumentNullException("material");
+    /// Binds already uploaded immutable constants or clears explicit missing bindings, leaving frame/object slots untouched.
+    void Win32RenderManager3D::BindMaterialConstantBuffers(const DirectX11PreparedMaterial& material) {
+        auto* context=Bootstrap.GetDeviceContext();
+        for(const auto& binding:material.Constants) {
+            ID3D11Buffer* buffer=binding.Buffer?binding.Buffer->Get():nullptr;
+            context->VSSetConstantBuffers(static_cast<UINT>(binding.Slot),1,&buffer);
+            context->PSSetConstantBuffers(static_cast<UINT>(binding.Slot),1,&buffer);
         }
+    }
 
-        ShaderRuntimeMaterial* shaderRuntimeMaterial = RequireShaderRuntimeMaterial(material);
-        MaterialLayout* layout = shaderRuntimeMaterial->get_Layout();
-        if (layout == nullptr) {
-            return;
-        }
-
-        Array<MaterialLayoutBinding*>* constantBufferBindings = layout->get_ConstantBufferBindings();
-        if (constantBufferBindings == nullptr) {
-            return;
-        }
-
-        ID3D11DeviceContext* context = Bootstrap.GetDeviceContext();
-        for (int32_t bindingIndex = 0; bindingIndex < constantBufferBindings->Length; bindingIndex++) {
-            MaterialLayoutBinding* binding = (*constantBufferBindings)[bindingIndex];
-            if (binding == nullptr) {
-                continue;
-            }
-
-            HeCppString bindingName = binding->get_Name();
-            if (IsEngineManagedConstantBufferBinding(bindingName)) {
-                if (!HasWrittenRenderSnapshot) {
-                    AppendRenderDiagnosticsLine(
-                        "3d.material_cb skip_engine_managed name=" + bindingName
-                        + " slot=" + std::to_string(binding->get_Slot()));
+    /// Resolves authored values only on a cache miss and keeps GPU-content ownership transactional across failures.
+    const DirectX11PreparedMaterial& Win32RenderManager3D::GetPreparedMaterial(ShaderRuntimeMaterial* material) {
+        if(const auto* retained=PreparedMaterials.Read(material))return *retained;
+        auto* layout=material->get_Layout();
+        if(!layout || !material->get_Properties())throw std::invalid_argument("Cannot prepare a disposed Windows material.");
+        try {
+            DirectX11PreparedMaterial replacement;
+            auto* constants=layout->get_ConstantBufferBindings();
+            if(constants) for(int32_t index=0;index<constants->Length;++index) {
+                auto* binding=(*constants)[index];
+                if (!binding) continue;
+                const auto bindingName = binding->get_Name();
+                if (IsEngineManagedConstantBufferBinding(bindingName)) {
+                    if (!HasWrittenRenderSnapshot) {
+                        AppendRenderDiagnosticsLine("3d.material_cb skip_engine_managed name=" + bindingName
+                            + " slot=" + std::to_string(binding->get_Slot()));
+                    }
+                    continue;
                 }
-                continue;
-            }
-
-            Array<uint8_t>* data = nullptr;
-            if (!shaderRuntimeMaterial->TryResolveConstantBufferData__out1(bindingName, data) || data == nullptr || data->Length == 0) {
-                if (!HasWrittenRenderSnapshot) {
-                    AppendRenderDiagnosticsLine(
-                        "3d.material_cb missing name=" + bindingName
-                        + " slot=" + std::to_string(binding->get_Slot()));
+                Array<uint8_t>* resolved=nullptr;
+                const bool assigned=material->TryResolveConstantBufferData__out1(binding->get_Name(),resolved);
+                std::unique_ptr<Array<uint8_t>> data(resolved);
+                DirectX11PreparedMaterial::Constant value{binding->get_Slot(),{}};
+                if (assigned && data && data->Length > 0) {
+                    value.Buffer = GetOrCreateMaterialConstantBuffer(value.Slot, {data->Data, static_cast<size_t>(data->Length)});
+                    if (!HasWrittenRenderSnapshot) {
+                        AppendRenderDiagnosticsLine("3d.material_cb bind name=" + bindingName
+                            + " slot=" + std::to_string(value.Slot) + " size=" + std::to_string(data->Length));
+                    }
+                } else if (!HasWrittenRenderSnapshot) {
+                    AppendRenderDiagnosticsLine("3d.material_cb missing name=" + bindingName
+                        + " slot=" + std::to_string(value.Slot));
                 }
-                ID3D11Buffer* nullBuffer = nullptr;
-                context->VSSetConstantBuffers(static_cast<UINT>(binding->get_Slot()), 1, &nullBuffer);
-                context->PSSetConstantBuffers(static_cast<UINT>(binding->get_Slot()), 1, &nullBuffer);
-                continue;
+                replacement.Constants.push_back(std::move(value));
             }
-
-            int32_t dataLength = data->Length;
-            if (!HasWrittenRenderSnapshot) {
-                AppendRenderDiagnosticsLine(
-                    "3d.material_cb bind name=" + bindingName
-                    + " slot=" + std::to_string(binding->get_Slot())
-                    + " size=" + std::to_string(dataLength));
+            auto* textures=layout->get_TextureBindings();
+            if(textures) for(int32_t index=0;index<textures->Length;++index) {
+                auto* binding=(*textures)[index];
+                if(!binding || IsEngineManagedTextureBinding(binding->get_Name()))continue;
+                const auto name=binding->get_Name();bool diffuse=false;
+#if __has_include("StandardMaterialTextureBindingDefaults.hpp")
+                diffuse=String::Equals(name,StandardMaterialTextureBindingDefaults::DiffuseTextureBindingName(),StringComparison::Ordinal);
+#endif
+                replacement.Textures.push_back({name.raw(),binding->get_Slot(),ResolveDirectX11TextureBindingSlot(binding->get_Slot()),ResolveMaterialTexture(material,name),diffuse});
             }
-            ID3D11Buffer* constantBuffer = GetOrCreateMaterialConstantBuffer(binding->get_Slot(), dataLength);
-            context->UpdateSubresource(constantBuffer, 0, nullptr, data->Data, 0, 0);
-            delete data;
-            context->VSSetConstantBuffers(static_cast<UINT>(binding->get_Slot()), 1, &constantBuffer);
-            context->PSSetConstantBuffers(static_cast<UINT>(binding->get_Slot()), 1, &constantBuffer);
+            const auto& result=PreparedMaterials.Publish(material,std::move(replacement));
+            LiveMaterialConstantBufferBytes=MaterialConstantBuffers.GetRetainedBytes();
+            return result;
+        } catch(...) {
+            LiveMaterialConstantBufferBytes=MaterialConstantBuffers.GetRetainedBytes();throw;
         }
     }
 
@@ -3196,69 +3203,29 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
     }
 
     /// Binds the resolved runtime material textures to the pixel shader slots consumed by the Windows forward path.
-    void Win32RenderManager3D::BindMaterialTextures(RuntimeMaterial* material) {
-        if (material == nullptr) {
-            throw new ArgumentNullException("material");
-        }
-
-        ShaderRuntimeMaterial* shaderRuntimeMaterial = RequireShaderRuntimeMaterial(material);
-        ID3D11DeviceContext* context = Bootstrap.GetDeviceContext();
-        ID3D11ShaderResourceView* clearedShaderResources[ClearedMaterialTextureSlotCount] = {};
-        ID3D11SamplerState* clearedSamplers[ClearedMaterialTextureSlotCount] = {};
+    void Win32RenderManager3D::BindMaterialTextures(const DirectX11PreparedMaterial& material) {
+        auto* context=Bootstrap.GetDeviceContext();
+        ID3D11ShaderResourceView* clearedShaderResources[ClearedMaterialTextureSlotCount]={};
+        ID3D11SamplerState* clearedSamplers[ClearedMaterialTextureSlotCount]={};
+        context->PSSetShaderResources(0,ClearedMaterialTextureSlotCount,clearedShaderResources);
+        context->PSSetSamplers(0,ClearedMaterialTextureSlotCount,clearedSamplers);
 #if __has_include("StandardMaterialTextureBindingDefaults.hpp")
-        RuntimeTexture* pixelTexture = RenderManager2DBridge->get_PixelTexture();
+        RuntimeTexture* pixelTexture=RenderManager2DBridge->get_PixelTexture();
 #endif
-        context->PSSetShaderResources(0, ClearedMaterialTextureSlotCount, clearedShaderResources);
-        context->PSSetSamplers(0, ClearedMaterialTextureSlotCount, clearedSamplers);
-
-        MaterialLayout* layout = shaderRuntimeMaterial->get_Layout();
-        if (layout == nullptr || layout->get_TextureBindings() == nullptr) {
-            return;
-        }
-
-        Array<MaterialLayoutBinding*>* textureBindings = layout->get_TextureBindings();
-        for (int32_t bindingIndex = 0; bindingIndex < textureBindings->Length; bindingIndex++) {
-            MaterialLayoutBinding* binding = (*textureBindings)[bindingIndex];
-            if (binding == nullptr) {
-                continue;
-            }
-
-            HeCppString bindingName = binding->get_Name();
-            if (IsEngineManagedTextureBinding(bindingName)) {
-                continue;
-            }
-
-            RuntimeTexture* texture = ResolveMaterialTexture(shaderRuntimeMaterial, bindingName);
+        for(const auto& binding:material.Textures) {
+            if(binding.Slot<0)continue;
+            RuntimeTexture* texture=binding.Value;
 #if __has_include("StandardMaterialTextureBindingDefaults.hpp")
-            if (texture == nullptr && String::Equals(bindingName, StandardMaterialTextureBindingDefaults::DiffuseTextureBindingName(), StringComparison::Ordinal)) {
-                texture = pixelTexture;
-            }
+            if(!texture && binding.DiffuseFallback)texture=pixelTexture;
 #endif
-            ID3D11ShaderResourceView* resourceView = ResolveTextureResourceView(texture);
+            auto* resourceView=ResolveTextureResourceView(texture);
 #if __has_include("StandardMaterialTextureBindingDefaults.hpp")
-            if (resourceView == nullptr && texture == pixelTexture && pixelTexture != nullptr) {
-                EnsureWhiteTextureFallbackResource();
-                resourceView = WhiteTextureFallbackShaderResourceView.Get();
-            }
+            if(!resourceView && texture==pixelTexture && pixelTexture){EnsureWhiteTextureFallbackResource();resourceView=WhiteTextureFallbackShaderResourceView.Get();}
 #endif
-
-            const int32_t shaderSlot = ResolveDirectX11TextureBindingSlot(binding->get_Slot());
-            if (shaderSlot < 0) {
-                continue;
-            }
-
-            context->PSSetShaderResources(static_cast<UINT>(shaderSlot), 1, &resourceView);
-            ID3D11SamplerState* samplerState = resourceView != nullptr ? TextureSamplerState.Get() : nullptr;
-            context->PSSetSamplers(static_cast<UINT>(shaderSlot), 1, &samplerState);
-
-            if (!HasWrittenRenderSnapshot) {
-                AppendRenderDiagnosticsLine(
-                    "3d.material_tex "
-                    + std::string(resourceView != nullptr ? "bind" : "clear")
-                    + " name=" + bindingName
-                    + " unified_slot=" + std::to_string(binding->get_Slot())
-                    + " shader_slot=" + std::to_string(shaderSlot));
-            }
+            context->PSSetShaderResources(static_cast<UINT>(binding.Slot),1,&resourceView);
+            ID3D11SamplerState* sampler=resourceView?TextureSamplerState.Get():nullptr;
+            context->PSSetSamplers(static_cast<UINT>(binding.Slot),1,&sampler);
+            if(!HasWrittenRenderSnapshot)AppendRenderDiagnosticsLine("3d.material_tex "+std::string(resourceView?"bind":"clear")+" name="+binding.Name+" unified_slot="+std::to_string(binding.UnifiedSlot)+" shader_slot="+std::to_string(binding.Slot));
         }
     }
 
@@ -3281,42 +3248,28 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
         return resource->second->ShaderResourceView.Get();
     }
 
-    /// Resolves or creates one Direct3D constant buffer matching the requested shader slot and byte size.
-    ID3D11Buffer* Win32RenderManager3D::GetOrCreateMaterialConstantBuffer(int32_t slot, int32_t sizeInBytes) {
-        if (slot < 0) {
-            throw new ArgumentOutOfRangeException("slot", "Constant-buffer slot cannot be negative.");
+    /// Shares exact immutable material contents across shader slots and uploads only new payloads.
+    std::shared_ptr<const Microsoft::WRL::ComPtr<ID3D11Buffer>> Win32RenderManager3D::GetOrCreateMaterialConstantBuffer(int32_t slot,std::span<const uint8_t> data) {
+        if(slot<0)throw new ArgumentOutOfRangeException("slot","Constant-buffer slot cannot be negative.");
+        bool created = false;
+        auto resource=MaterialConstantBuffers.Get(data,[this,data,&created] {
+            D3D11_BUFFER_DESC description{};description.ByteWidth=static_cast<UINT>(data.size());description.Usage=D3D11_USAGE_IMMUTABLE;description.BindFlags=D3D11_BIND_CONSTANT_BUFFER;
+            D3D11_SUBRESOURCE_DATA initial{};initial.pSysMem=data.data();
+            Microsoft::WRL::ComPtr<ID3D11Buffer> buffer;
+            ThrowIfFailed(Bootstrap.GetDevice()->CreateBuffer(&description,&initial,buffer.GetAddressOf()),"ID3D11Device::CreateBuffer failed for an immutable Windows material constant buffer.");
+            created = true;
+            return buffer;
+        });
+        LiveMaterialConstantBufferBytes=MaterialConstantBuffers.GetRetainedBytes();
+        if (created) {
+            RuntimeRenderDiagnostics::WriteHostEvent(
+                "material-constant-buffer",
+                "slot=" + std::to_string(slot)
+                    + " size_in_bytes=" + std::to_string(data.size())
+                    + " live_material_constant_buffers=" + std::to_string(MaterialConstantBuffers.GetCount())
+                    + " live_material_constant_buffer_bytes=" + std::to_string(LiveMaterialConstantBufferBytes));
         }
-        if (sizeInBytes <= 0) {
-            throw new ArgumentOutOfRangeException("sizeInBytes", "Constant-buffer size must be positive.");
-        }
-
-        uint64_t key = (static_cast<uint64_t>(static_cast<uint32_t>(slot)) << 32) | static_cast<uint32_t>(sizeInBytes);
-        auto existing = MaterialConstantBuffers.find(key);
-        if (existing != MaterialConstantBuffers.end() && existing->second) {
-            return existing->second.Get();
-        }
-
-        D3D11_BUFFER_DESC description {};
-        description.ByteWidth = static_cast<UINT>(sizeInBytes);
-        description.Usage = D3D11_USAGE_DEFAULT;
-        description.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
-        description.CPUAccessFlags = 0;
-        description.MiscFlags = 0;
-        description.StructureByteStride = 0;
-
-        Microsoft::WRL::ComPtr<ID3D11Buffer> constantBuffer;
-        ThrowIfFailed(
-            Bootstrap.GetDevice()->CreateBuffer(&description, nullptr, constantBuffer.GetAddressOf()),
-            "ID3D11Device::CreateBuffer failed for a Windows material constant buffer.");
-        MaterialConstantBuffers[key] = constantBuffer;
-        LiveMaterialConstantBufferBytes += static_cast<std::size_t>(description.ByteWidth);
-        RuntimeRenderDiagnostics::WriteHostEvent(
-            "material-constant-buffer",
-            "slot=" + std::to_string(slot)
-                + " size_in_bytes=" + std::to_string(sizeInBytes)
-                + " live_material_constant_buffers=" + std::to_string(MaterialConstantBuffers.size())
-                + " live_material_constant_buffer_bytes=" + std::to_string(LiveMaterialConstantBufferBytes));
-        return MaterialConstantBuffers[key].Get();
+        return resource;
     }
 
     /// Returns whether one constant-buffer binding is owned by the renderer instead of material-authored property data.
