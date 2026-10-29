@@ -47,6 +47,7 @@
 #include "MaterialPropertyBlock.hpp"
 #endif
 #include "MaterialLayoutBinding.hpp"
+#include "MaterialLayoutBindings.hpp"
 #if __has_include("MaterialConstantBufferAsset.hpp")
 #include "MaterialConstantBufferAsset.hpp"
 #endif
@@ -3082,10 +3083,10 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
         MaterialPropertyBlock* properties = shaderRuntimeMaterial->get_Properties();
         if (!HasWrittenRenderSnapshot) {
             const int32_t textureBindingCount = layout != nullptr && layout->get_TextureBindings() != nullptr
-                ? layout->get_TextureBindings()->Length
+                ? layout->get_TextureBindings()->get_Length()
                 : 0;
             const int32_t constantBufferBindingCount = layout != nullptr && layout->get_ConstantBufferBindings() != nullptr
-                ? layout->get_ConstantBufferBindings()->Length
+                ? layout->get_ConstantBufferBindings()->get_Length()
                 : 0;
             AppendRenderDiagnosticsLine(
                 "3d.material_layout material_id=" + materialId
@@ -3096,8 +3097,8 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
         if (layout != nullptr) {
             const auto& prepared=GetPreparedMaterial(shaderRuntimeMaterial);
             BindMaterialConstantBuffers(prepared);
-            Array<MaterialLayoutBinding*>* textureBindings = layout->get_TextureBindings();
-            if (textureBindings != nullptr && textureBindings->Length > 0) {
+            auto* textureBindings = layout->get_TextureBindings();
+            if (textureBindings != nullptr && textureBindings->get_Length() > 0) {
                 BindMaterialTextures(prepared);
             } else {
                 ID3D11ShaderResourceView* nullResourceView = nullptr;
@@ -3126,8 +3127,8 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
         try {
             DirectX11PreparedMaterial replacement;
             auto* constants=layout->get_ConstantBufferBindings();
-            if(constants) for(int32_t index=0;index<constants->Length;++index) {
-                auto* binding=(*constants)[index];
+            if(constants) for(int32_t index=0;index<constants->get_Length();++index) {
+                auto* binding=constants->get_Item(index);
                 if (!binding) continue;
                 const auto bindingName = binding->get_Name();
                 if (IsEngineManagedConstantBufferBinding(bindingName)) {
@@ -3154,8 +3155,8 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
                 replacement.Constants.push_back(std::move(value));
             }
             auto* textures=layout->get_TextureBindings();
-            if(textures) for(int32_t index=0;index<textures->Length;++index) {
-                auto* binding=(*textures)[index];
+            if(textures) for(int32_t index=0;index<textures->get_Length();++index) {
+                auto* binding=textures->get_Item(index);
                 if(!binding || IsEngineManagedTextureBinding(binding->get_Name()))continue;
                 const auto name=binding->get_Name();bool diffuse=false;
 #if __has_include("StandardMaterialTextureBindingDefaults.hpp")

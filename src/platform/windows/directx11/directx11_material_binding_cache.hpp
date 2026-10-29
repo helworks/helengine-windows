@@ -7,7 +7,7 @@
 #include <vector>
 
 namespace helengine::windows {
-/// <summary>Retains backend-owned material values while exact inherited property revisions and mutable layout arrays remain current.</summary>
+/// <summary>Retains backend-owned material values while exact inherited property revisions and binding collection revisions remain current.</summary>
 template<class TMaterial,class TValue> class DirectX11MaterialBindingCache final {
     /// <summary>Owns binding metadata rather than dereferencing a possibly released previous layout.</summary>
     struct Binding {
@@ -22,10 +22,14 @@ template<class TMaterial,class TValue> class DirectX11MaterialBindingCache final
         /// <summary>Compares immutable metadata without relying on recycled object addresses.</summary>
         bool operator==(const Binding&)const=default;
     };
-    /// <summary>Captures each binding in its exact order, including null arrays and null entries.</summary>
+    /// <summary>Retains collection identity/revision or ordered legacy metadata, including null arrays and entries.</summary>
     struct Bindings {
         /// <summary>Preserves null independently from an empty generated array.</summary>
         bool Null=false;
+        /// <summary>Borrows only the controlled collection identity.</summary>
+        const void* Collection=nullptr;
+        /// <summary>Tracks all effective controlled slot writes.</summary>
+        uint64_t Revision=0;
         /// <summary>Owns ordered records for allocation-free hit validation.</summary>
         std::vector<Binding> Items;
     };
@@ -53,26 +57,34 @@ template<class TMaterial,class TValue> class DirectX11MaterialBindingCache final
         const auto& name=current->get_Name();
         return {true,name.is_null(),name.raw(),static_cast<int>(current->get_ResourceType()),current->get_Set(),current->get_Slot(),current->get_Size()};
     }
-    /// <summary>Captures a mutable generated array before publishing its dependent backend value.</summary>
+    /// <summary>Captures collection identity/revision or exact legacy array metadata before publication.</summary>
     template<class TArray> static Bindings CaptureBindings(TArray* current) {
         Bindings result;result.Null=current==nullptr;if(!current)return result;
-        if(current->Length<0)throw std::invalid_argument("Material binding array has negative length.");
-        result.Items.reserve(static_cast<size_t>(current->Length));
-        for(int32_t i=0;i<current->Length;++i)result.Items.push_back(CaptureBinding((*current)[i]));
+        if constexpr(requires {current->get_Revision();}) {
+            result.Collection=current;result.Revision=current->get_Revision();
+        } else {
+            if(current->Length<0)throw std::invalid_argument("Material binding array has negative length.");
+            result.Items.reserve(static_cast<size_t>(current->Length));
+            for(int32_t i=0;i<current->Length;++i)result.Items.push_back(CaptureBinding((*current)[i]));
+        }
         return result;
     }
-    /// <summary>Compares current binding fields without allocating copied names on a cache hit.</summary>
+    /// <summary>Validates versioned collections without enumeration; legacy arrays retain exact field comparison.</summary>
     template<class TArray> static bool Matches(const Bindings& expected,TArray* current) {
         if(!current)return expected.Null;
-        if(expected.Null || current->Length<0 || static_cast<size_t>(current->Length)!=expected.Items.size())return false;
-        for(int32_t i=0;i<current->Length;++i){
-            auto* binding=(*current)[i];const auto& item=expected.Items[static_cast<size_t>(i)];
-            if(!binding){if(item.Present)return false;continue;}
-            if(!item.Present)return false;
-            const auto& name=binding->get_Name();
-            if(name.is_null()!=item.NullName || name.raw()!=item.Name || static_cast<int>(binding->get_ResourceType())!=item.Type || binding->get_Set()!=item.Set || binding->get_Slot()!=item.Slot || binding->get_Size()!=item.Size)return false;
+        if constexpr(requires {current->get_Revision();}) {
+            return !expected.Null && expected.Collection==current && expected.Revision==current->get_Revision();
+        } else {
+            if(expected.Collection || expected.Null || current->Length<0 || static_cast<size_t>(current->Length)!=expected.Items.size())return false;
+            for(int32_t i=0;i<current->Length;++i){
+                auto* binding=(*current)[i];const auto& item=expected.Items[static_cast<size_t>(i)];
+                if(!binding){if(item.Present)return false;continue;}
+                if(!item.Present)return false;
+                const auto& name=binding->get_Name();
+                if(name.is_null()!=item.NullName || name.raw()!=item.Name || static_cast<int>(binding->get_ResourceType())!=item.Type || binding->get_Set()!=item.Set || binding->get_Slot()!=item.Slot || binding->get_Size()!=item.Size)return false;
+            }
+            return true;
         }
-        return true;
     }
     /// <summary>Follows only shader-backed parents, matching the existing material resolver's inheritance rule.</summary>
     static TMaterial* Parent(TMaterial* material){return dynamic_cast<TMaterial*>(material->get_ParentMaterial());}

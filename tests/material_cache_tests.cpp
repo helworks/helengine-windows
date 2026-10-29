@@ -11,7 +11,14 @@ class MaterialCacheTests {
     /// <summary>Models immutable binding metadata whose containing array remains externally mutable.</summary>
     struct Binding {Name Text{"Color"};int Slot=3;auto get_Name()const{return Text;}int get_Slot()const{return Slot;}int get_Set()const{return 0;}int get_Size()const{return 16;}int get_ResourceType()const{return 0;}};
     /// <summary>Models the generated array container, including null binding elements.</summary>
-    struct Array {int Length=1;Binding* Value;Binding* operator[](int)const{return Value;}};
+    struct Array {
+        int Length=1;Binding* Value;uint64_t Revision=0;mutable int Reads=0;bool Fail=false;
+        uint64_t get_Revision()const{if(Fail)throw std::runtime_error("disposed bindings");return Revision;}
+        int get_Length()const{return Length;}
+        Binding* get_Item(int)const{++Reads;return Value;}
+        Binding* operator[](int index)const{return get_Item(index);}
+        void set_Item(int,Binding* value){if(Value!=value){++Revision;Value=value;}}
+    };
     /// <summary>Supplies shared constant/texture arrays that may be reordered without a material revision.</summary>
     struct Layout {Array Constants;Array Textures{0,nullptr};auto get_ConstantBufferBindings(){return &Constants;}auto get_TextureBindings(){return &Textures;}};
     /// <summary>Supplies setter-driven property invalidation without exposing mutable payloads.</summary>
@@ -28,9 +35,18 @@ public:
         DirectX11MaterialBindingCache<Material,int> cache;
         Require(!cache.Read(&child),"unprepared material unexpectedly hit");
         cache.Publish(&child,42);Require(*cache.Read(&child)==42,"unchanged prepared state missed");
+        Require(layout.Constants.Reads==0 && layout.Textures.Reads==0,"versioned dependencies enumerated bindings");
         parentValues.Revision++;Require(!cache.Read(&child),"parent mutation did not invalidate child");cache.Publish(&child,43);
-        Binding replacement;replacement.Slot=4;layout.Constants.Value=&replacement;
+        Binding replacement;replacement.Slot=4;layout.Constants.set_Item(0,&replacement);
         Require(!cache.Read(&child),"in-place layout replacement did not invalidate");cache.Publish(&child,44);
+        const auto retained=cache.Read(&child);layout.Textures.Fail=true;bool captureFailed=false;
+        try{cache.Publish(&child,99);}catch(const std::runtime_error&){captureFailed=true;}
+        layout.Textures.Fail=false;
+        Require(captureFailed && cache.Read(&child)==retained && *retained==44,"failed revision capture replaced valid entry");
+        Layout identical=layout;parent.Shape=&identical;
+        Require(!cache.Read(&child),"ancestor collection identity ignored");parent.Shape=&layout;
+        layout.Constants.set_Item(0,nullptr);Require(!cache.Read(&child),"null slot revision ignored");
+        layout.Constants.set_Item(0,&replacement);cache.Publish(&child,44);
         child.Parent=nullptr;Require(!cache.Read(&child),"parent change did not invalidate");cache.Publish(&child,45);
         cache.Invalidate(&parent);Require(cache.Read(&child)!=nullptr,"unrelated parent release evicted detached child");
         child.Parent=&parent;cache.Publish(&child,46);cache.Invalidate(&parent);Require(!cache.Read(&child),"parent release kept dependent child");
