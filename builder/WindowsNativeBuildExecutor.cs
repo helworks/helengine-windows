@@ -125,10 +125,46 @@ internal sealed class WindowsNativeBuildExecutor : IWindowsNativeBuildExecutor {
     static string BuildConfigureArguments(string repositoryRoot, string buildRoot, string generatedCoreCppRootPath, string stagedCodeRootPath, string vsDevCmdPath, WindowsNativeBuildProfile profile) {
         WindowsNativeBuildProfileResolution profileResolution = WindowsNativeBuildProfileResolver.Resolve(profile);
         string physicsOverrideArguments = BuildPhysicsOverrideArguments();
+        string voxelGiArguments = BuildVoxelGiArguments();
+        string lightmapArguments = BuildLightmapArguments();
         return string.Join(" ", [
             "/c",
-            $"call \"{vsDevCmdPath}\" -arch=amd64 -host_arch=amd64 && cmake -S \"{repositoryRoot}\" -B \"{buildRoot}\" -G Ninja -DCMAKE_BUILD_TYPE={profileResolution.CmakeBuildType} -DHELENGINE_WINDOWS_NATIVE_PROFILE={profile} -DHELENGINE_WINDOWS_INCLUDE_GENERATED_CORE=ON -DHELENGINE_CORE_CPP_ROOT=\"{generatedCoreCppRootPath}\" -DHELENGINE_CODE_ROOT=\"{stagedCodeRootPath}\" -DHELENGINE_WINDOWS_RENDER_BACKEND=DirectX11{physicsOverrideArguments}"
+            $"call \"{vsDevCmdPath}\" -arch=amd64 -host_arch=amd64 && cmake -S \"{repositoryRoot}\" -B \"{buildRoot}\" -G Ninja -DCMAKE_BUILD_TYPE={profileResolution.CmakeBuildType} -DHELENGINE_WINDOWS_NATIVE_PROFILE={profile} -DHELENGINE_WINDOWS_INCLUDE_GENERATED_CORE=ON -DHELENGINE_CORE_CPP_ROOT=\"{generatedCoreCppRootPath}\" -DHELENGINE_CODE_ROOT=\"{stagedCodeRootPath}\" -DHELENGINE_WINDOWS_RENDER_BACKEND=DirectX11{physicsOverrideArguments}{voxelGiArguments}{lightmapArguments}"
         ]);
+    }
+
+    /// <summary>Enables optional transport only from an explicit validated module path and resets cached configurations otherwise.</summary>
+    /// <returns>Quoted GI source arguments, or an explicit disabled definition when no module was requested.</returns>
+    static string BuildVoxelGiArguments() {
+        var root = Environment.GetEnvironmentVariable("HELENGINE_VOXEL_GI_ROOT");
+        if (string.IsNullOrWhiteSpace(root)) {
+            return " -DHELENGINE_ENABLE_VOXEL_GI=OFF";
+        }
+        if (root.IndexOfAny(['\"', '%', '!', '^', '&', '|', '<', '>', '\r', '\n']) >= 0) {
+            throw new InvalidOperationException("HELENGINE_VOXEL_GI_ROOT contains unsupported command-line characters.");
+        }
+        string fullRoot = Path.GetFullPath(root);
+        if (!File.Exists(Path.Combine(fullRoot, "CMakeLists.txt")) || !File.Exists(Path.Combine(fullRoot, "include", "helgi", "VoxelGi.h"))) {
+            throw new InvalidOperationException("HELENGINE_VOXEL_GI_ROOT must identify the optional helengine.gi.native source module.");
+        }
+        return $" -DHELENGINE_ENABLE_VOXEL_GI=ON -DHELENGINE_VOXEL_GI_ROOT=\"{fullRoot.Replace('\\', '/')}\"";
+    }
+
+    /// <summary>Enables saved lightmap capture and consumption from the explicit portable tooling module, or resets cached support to disabled.</summary>
+    /// <returns>Quoted lightmap source arguments, or an explicit disabled definition when no module was requested.</returns>
+    static string BuildLightmapArguments() {
+        var root = Environment.GetEnvironmentVariable("HELENGINE_LIGHTMAP_ROOT");
+        if (string.IsNullOrWhiteSpace(root)) {
+            return " -DHELENGINE_ENABLE_LIGHTMAP=OFF";
+        }
+        if (root.IndexOfAny(['\"', '%', '!', '^', '&', '|', '<', '>', '\r', '\n']) >= 0) {
+            throw new InvalidOperationException("HELENGINE_LIGHTMAP_ROOT contains unsupported command-line characters.");
+        }
+        string fullRoot = Path.GetFullPath(root);
+        if (!File.Exists(Path.Combine(fullRoot, "CMakeLists.txt")) || !File.Exists(Path.Combine(fullRoot, "include", "hellm", "Lightmap.h"))) {
+            throw new InvalidOperationException("HELENGINE_LIGHTMAP_ROOT must identify the optional helengine.lightmap.native source module.");
+        }
+        return $" -DHELENGINE_ENABLE_LIGHTMAP=ON -DHELENGINE_LIGHTMAP_ROOT=\"{fullRoot.Replace('\\', '/')}\"";
     }
 
     /// <summary>

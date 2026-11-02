@@ -136,6 +136,45 @@ namespace helengine::windows {
         return bounds;
     }
 
+    /// Maps existing full-monitor outputs by their primary-first slot, falling back to primary when that slot disappears.
+    bool Win32DesktopHost::RemapMonitorRectangle(const std::vector<RECT>& previous, const std::vector<RECT>& current, const RECT& window, RECT& result) {
+        if(current.empty()) throw std::invalid_argument("Display changes require an active monitor.");
+        for(size_t index=0;index<previous.size();++index) {
+            if(EqualRect(&previous[index],&window)) {
+                result=current[index<current.size() ? index : 0]; return true;
+            }
+        }
+        return false;
+    }
+
+    /// Converts physical desktop coordinates into the existing window/parent context without reparenting or activation.
+    void Win32DesktopHost::SetPhysicalWindowRectangle(HWND window, const RECT& bounds) {
+        DWORD process=0;
+        if(!GetWindowThreadProcessId(window,&process) || process!=GetCurrentProcessId() || bounds.right<=bounds.left || bounds.bottom<=bounds.top)
+            throw std::invalid_argument("Display resize requires positive bounds and a player-owned window.");
+        RECT actual=ReadPhysicalWindowRectangle(window);
+        if(EqualRect(&actual,&bounds)) return;
+        auto context=GetWindowDpiAwarenessContext(window);
+        auto previous=SetThreadDpiAwarenessContext(context);
+        if(!previous) throw std::runtime_error("Cannot enter window DPI context for display resize.");
+        POINT corners[2]{{bounds.left,bounds.top},{bounds.right,bounds.bottom}};
+        HWND parent=(GetWindowLongPtrW(window,GWL_STYLE)&WS_CHILD) ? GetParent(window) : nullptr;
+        HWND reference=parent ? parent : window;
+        bool converted=GetAwarenessFromDpiAwarenessContext(context)==DPI_AWARENESS_PER_MONITOR_AWARE
+            || (PhysicalToLogicalPointForPerMonitorDPI(reference,&corners[0]) && PhysicalToLogicalPointForPerMonitorDPI(reference,&corners[1]));
+        DWORD error=GetLastError();
+        if(converted && parent) {
+            SetLastError(ERROR_SUCCESS);
+            int mapped=MapWindowPoints(nullptr,parent,corners,2);error=GetLastError();
+            converted=mapped!=0 || error==ERROR_SUCCESS;
+        }
+        BOOL placed=converted && SetWindowPos(window,nullptr,corners[0].x,corners[0].y,
+            corners[1].x-corners[0].x,corners[1].y-corners[0].y,SWP_NOACTIVATE|SWP_NOZORDER);
+        if(converted && !placed) error=GetLastError();
+        if(!SetThreadDpiAwarenessContext(previous)) throw std::runtime_error("Cannot restore DPI context after display resize.");
+        if(!placed) throw std::runtime_error("Display resize failed with Win32 error "+std::to_string(error));
+    }
+
     /// Creates a disabled layered child using the shell parent's own DPI context, avoiding cross-process SetParent.
     HWND Win32DesktopHost::CreateChild(const wchar_t* className, const wchar_t* title, HINSTANCE instance, void* state, const RECT& bounds) const {
         if (bounds.right <= bounds.left || bounds.bottom <= bounds.top || !IsWindow(Parent)) {

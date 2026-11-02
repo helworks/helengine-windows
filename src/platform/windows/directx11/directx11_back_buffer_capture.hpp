@@ -15,7 +15,8 @@ namespace helengine::windows {
         explicit DirectX11BackBufferCapture(DirectX11Bootstrap& bootstrap);
 
         /// Copies the back buffer through a CPU-readable staging texture and writes it as a top-down 32-bit BMP to path.
-        /// Throws std::runtime_error on any failed DirectX call or when the back buffer is not DXGI_FORMAT_B8G8R8A8_UNORM.
+        /// BGRA8 is copied unchanged; RGBA16F scRGB is normalized to current SDR white, clamped, sRGB encoded and
+        /// premultiplied again while preserving alpha. Throws on failed DirectX calls, unsupported formats or invalid pixels.
         void CaptureToBmp(const std::wstring& path);
 
     private:

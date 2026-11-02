@@ -9,6 +9,7 @@ namespace helengine::windows {
     /// Records activity now when the message is a keyboard, mouse or window-state message; ignores all others.
     /// <param name="message">Win32 message identifier received by the window procedure.</param>
     void Win32ActivityTracker::ObserveMessage(UINT message) {
+        if(message==WM_DISPLAYCHANGE || message==WM_DPICHANGED) DisplayChangePending=true;
         switch (message) {
             case WM_KEYDOWN:
             case WM_KEYUP:
@@ -40,6 +41,11 @@ namespace helengine::windows {
                 MarkActivity();
                 return;
         }
+    }
+
+    /// Clears the pending transition only when the host is ready to update its existing window bounds.
+    bool Win32ActivityTracker::ConsumeDisplayChange() {
+        bool pending=DisplayChangePending; DisplayChangePending=false; return pending;
     }
 
     /// Records activity now regardless of any message.

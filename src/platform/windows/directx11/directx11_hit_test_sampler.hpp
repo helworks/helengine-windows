@@ -17,8 +17,7 @@ namespace helengine::windows {
     /// constructed in overlay mode.
     class DirectX11HitTestSampler {
     public:
-        /// Creates the three 1x1 B8G8R8A8 staging textures on the bootstrap's device. The format matches the swap
-        /// chain's back buffer, which both swap-chain paths create as DXGI_FORMAT_B8G8R8A8_UNORM. Throws
+        /// Creates three 1x1 staging textures matching the bootstrap's BGRA8 SDR or RGBA16F scRGB output. Throws
         /// std::runtime_error carrying the HRESULT in hexadecimal when a texture cannot be created.
         /// <param name="bootstrap">Bootstrap that owns the device, context and swap chain; not owned, must outlive the
         /// sampler.</param>
@@ -45,6 +44,9 @@ namespace helengine::windows {
         bool TryReadLatestAlpha(int& alpha);
 
     private:
+        /// Recreates the staging ring and drops pending samples when the presentation format changes.
+        void UpdateOutputFormat();
+
         /// Number of staging textures in the ring: enough for one copy per frame to finish on the GPU before it is
         /// read, with one to spare.
         static constexpr int RingSize = 3;
@@ -61,5 +63,8 @@ namespace helengine::windows {
         /// Stores how many captured slots have not been read yet, from 0 to RingSize; the oldest of them is the slot
         /// PendingCount positions before NextSlot.
         int PendingCount;
+
+        /// Tracks the typed staging format so a changed HDR/SDR output never copies into an incompatible texture.
+        DXGI_FORMAT OutputFormat;
     };
 }

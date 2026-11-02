@@ -513,7 +513,7 @@ namespace helengine::windows {
             return windowMode;
         }
 
-        throw std::invalid_argument("Command-line flag --window-mode requires \"normal\", \"overlay\" or \"desktop\", got: " + text);
+        throw std::invalid_argument("Command-line flag --window-mode requires \"normal\", \"overlay\", \"desktop\" or \"shell\", got: " + text);
     }
 
     /// Parses an --overlay-bounds value that must be exactly "monitor" or "profile", throwing std::invalid_argument otherwise.

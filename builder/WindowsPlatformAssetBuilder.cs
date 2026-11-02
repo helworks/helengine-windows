@@ -98,6 +98,9 @@ public sealed class WindowsPlatformAssetBuilder : IPlatformAssetBuilder, IPlatfo
         string roughnessTextureAssetId = request.FieldValues.TryGetValue(RoughnessTextureFieldId, out string authoredRoughnessTextureAssetId) && !string.IsNullOrWhiteSpace(authoredRoughnessTextureAssetId)
             ? authoredRoughnessTextureAssetId
             : string.Empty;
+        string emissiveColor = request.FieldValues.TryGetValue("emissive-color", out string authoredEmission) ? authoredEmission : "#00000000";
+        string emissiveTextureAssetId = request.FieldValues.TryGetValue("emissive-texture-id", out string authoredEmissiveTexture) && !string.IsNullOrWhiteSpace(authoredEmissiveTexture)
+            ? authoredEmissiveTexture : string.Empty;
         float roughness = ReadOptionalFloatField(request.FieldValues, RoughnessFieldId, StandardMaterialRoughnessDefaults.DefaultRoughness);
         float metallic = ReadOptionalFloatField(request.FieldValues, MetallicFieldId, StandardMaterialMetallicDefaults.DefaultMetallic);
         float specular = ReadOptionalFloatField(request.FieldValues, SpecularFieldId, StandardMaterialSpecularDefaults.DefaultSpecular);
@@ -112,13 +115,19 @@ public sealed class WindowsPlatformAssetBuilder : IPlatformAssetBuilder, IPlatfo
             Variant = variant,
             DiffuseTextureAssetId = diffuseTextureAssetId,
             RoughnessTextureAssetId = roughnessTextureAssetId,
+            EmissiveTextureAssetId = emissiveTextureAssetId,
             CastsShadows = castsShadows,
             ReceivesShadows = receivesShadows,
-            RenderState = new MaterialRenderState(),
+            RenderState = ResolveMaterialRenderState(request.FieldValues),
             ConstantBuffers = [
                 new MaterialConstantBufferAsset {
                     Name = BaseColorBufferName,
                     Data = CreateFloat4ConstantBufferData(ParseBaseColor(baseColor))
+                },
+                new MaterialConstantBufferAsset {
+                    Name = "EmissiveColorBuffer",
+                    Data = CreateEmissiveConstantBufferData(ParseBaseColor(emissiveColor),
+                        ReadOptionalFloatField(request.FieldValues, "emissive-intensity", 1f))
                 },
                 new MaterialConstantBufferAsset {
                     Name = StandardMaterialRoughnessDefaults.RoughnessBufferName,
@@ -218,6 +227,25 @@ public sealed class WindowsPlatformAssetBuilder : IPlatformAssetBuilder, IPlatfo
         return parsedValue;
     }
 
+    /// <summary>Preserves the authored blend and culling modes in the cooked payload instead of restoring opaque defaults.</summary>
+    /// <param name="fields">Schema-normalized material fields supplied by the editor packager.</param>
+    /// <returns>Fixed-function state matching the supported Windows material schema.</returns>
+    static MaterialRenderState ResolveMaterialRenderState(IReadOnlyDictionary<string, string> fields) {
+        string mode = fields.TryGetValue("alpha-mode", out string authoredMode) ? authoredMode : "opaque";
+        MaterialBlendMode blend;
+        if (string.Equals(mode, "opaque", StringComparison.OrdinalIgnoreCase)) {
+            blend = MaterialBlendMode.Opaque;
+        } else if (string.Equals(mode, "alpha-blend", StringComparison.OrdinalIgnoreCase)) {
+            blend = MaterialBlendMode.AlphaBlend;
+        } else {
+            throw new InvalidOperationException("Unsupported Windows material alpha-mode: " + mode);
+        }
+        return new MaterialRenderState {
+            BlendMode = blend,
+            CullMode = ReadOptionalBooleanField(fields, "double-sided", false) ? MaterialCullMode.None : MaterialCullMode.Back
+        };
+    }
+
     /// <summary>
     /// Reads an optional floating-point material field from the builder-owned field map.
     /// </summary>
@@ -242,6 +270,18 @@ public sealed class WindowsPlatformAssetBuilder : IPlatformAssetBuilder, IPlatfo
         }
 
         return parsedValue;
+    }
+
+    /// <summary>Packs HDR emission using the existing shader strength channel, independently of surface transparency.</summary>
+    /// <param name="color">Linear tint with legacy emission strength in alpha.</param>
+    /// <param name="intensity">Finite nonnegative emission multiplier; one preserves older materials.</param>
+    /// <returns>The existing sixteen-byte emission buffer.</returns>
+    static byte[] CreateEmissiveConstantBufferData(float4 color, float intensity) {
+        if (!float.IsFinite(intensity) || intensity < 0) {
+            throw new ArgumentOutOfRangeException(nameof(intensity), "Emissive intensity must be finite and nonnegative.");
+        }
+        color.W *= intensity;
+        return CreateFloat4ConstantBufferData(color);
     }
 
     /// <summary>

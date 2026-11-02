@@ -1,0 +1,21 @@
+{
+  "ocio": "2.5.0",
+  "config": "cg-config-v4.0.0_aces-v2.0_ocio-v2.5",
+  "input": "Linear Rec.709 (sRGB)",
+  "display": "sRGB - Display",
+  "view": "ACES 2.0 - SDR 100 nits (Rec.709)",
+  "edge": 129,
+  "format": "RGBA16F little-endian, red fastest",
+  "range": [
+    0,
+    1023.984375
+  ],
+  "shaper": "log2(1 + max(linearRGB, 0) * 64) / 16",
+  "sha256": "04889f9bddda0fafd2590a408544b55dc1be717f85b20e7728461bc086094422",
+  "validation_samples": 51005,
+  "encoded_sRGB_error": {
+    "maximum": 0.022530103102326393,
+    "p99": 0.0008758162148296833,
+    "rms": 0.00027933044475503266
+  }
+}

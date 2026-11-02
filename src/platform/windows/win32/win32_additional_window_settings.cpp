@@ -38,13 +38,13 @@ namespace helengine::windows {
         }
         Win32WindowMode mode;
         if (!Win32WindowModeNames::TryParseWindowMode(fields[1], mode)) {
-            throw std::invalid_argument("--window mode must be normal, overlay or desktop.");
+            throw std::invalid_argument("--window mode must be normal, overlay, desktop or shell.");
         }
         int left = ParseInteger(fields[2], false);
         int top = ParseInteger(fields[3], false);
         int width = ParseInteger(fields[4], true);
         int height = ParseInteger(fields[5], true);
-        if (mode == Win32WindowMode::Desktop && (static_cast<long long>(left) + width > std::numeric_limits<int>::max()
+        if ((mode == Win32WindowMode::Desktop || mode == Win32WindowMode::Shell) && (static_cast<long long>(left) + width > std::numeric_limits<int>::max()
             || static_cast<long long>(top) + height > std::numeric_limits<int>::max())) {
             throw std::invalid_argument("--window desktop bounds exceed the signed screen-coordinate range.");
         }

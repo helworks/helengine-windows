@@ -6,7 +6,7 @@ namespace helengine::windows {
     /// Owns matching output color/depth attachments and resolves engine rendering into a retained single-sample presentation surface.
     class DirectX11OutputAttachments {
     public:
-        /// Requires a single-sample BGRA8 render target on the supplied device and explicitly supported 1x or 4x sampling.
+        /// Requires a single-sample BGRA8 SDR or RGBA16F scRGB render target and explicitly supported 1x or 4x sampling.
         DirectX11OutputAttachments(ID3D11Device* device, ID3D11Texture2D* destination, UINT sampleCount);
         /// Gets the output's renderable color view, backed by separate multisampled storage only for 4x.
         ID3D11RenderTargetView* GetRenderTargetView() const;
@@ -35,5 +35,7 @@ namespace helengine::windows {
         Microsoft::WRL::ComPtr<ID3D11DepthStencilView> DepthView;
         /// Stores the validated sample count for both color and depth.
         UINT SampleCount;
+        /// Preserves the destination's typed color format for a matching multisample resolve.
+        DXGI_FORMAT ColorFormat;
     };
 }

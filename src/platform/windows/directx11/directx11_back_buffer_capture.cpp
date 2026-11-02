@@ -1,7 +1,6 @@
 #include "platform/windows/directx11/directx11_back_buffer_capture.hpp"
 
 #include <cstdint>
-#include <cstring>
 #include <sstream>
 #include <stdexcept>
 #include <vector>
@@ -11,6 +10,7 @@
 
 #include "platform/windows/directx11/directx11_bootstrap.hpp"
 #include "platform/windows/directx11/directx11_hresult_formatter.hpp"
+#include "platform/windows/directx11/directx11_output_pixel_conversion.hpp"
 #include "platform/windows/win32/bmp_image_writer.hpp"
 
 namespace helengine::windows {
@@ -20,7 +20,7 @@ namespace helengine::windows {
     }
 
     /// Copies the back buffer through a CPU-readable staging texture and writes it as a top-down 32-bit BMP to path.
-    /// Throws std::runtime_error on any failed DirectX call or when the back buffer is not DXGI_FORMAT_B8G8R8A8_UNORM.
+    /// Preserves SDR bytes and explicitly exports scRGB as bounded premultiplied SDR with the current OS white reference.
     void DirectX11BackBufferCapture::CaptureToBmp(const std::wstring& path) {
         Microsoft::WRL::ComPtr<ID3D11Texture2D> backBuffer;
         ThrowIfFailed(
@@ -29,11 +29,14 @@ namespace helengine::windows {
 
         D3D11_TEXTURE2D_DESC backBufferDesc = {};
         backBuffer->GetDesc(&backBufferDesc);
-        if (backBufferDesc.Format != DXGI_FORMAT_B8G8R8A8_UNORM) {
+        if (backBufferDesc.Format != DXGI_FORMAT_B8G8R8A8_UNORM && backBufferDesc.Format != DXGI_FORMAT_R16G16B16A16_FLOAT) {
             std::ostringstream messageBuilder;
-            messageBuilder << "Back-buffer capture requires DXGI_FORMAT_B8G8R8A8_UNORM but the back buffer uses DXGI format "
+            messageBuilder << "Back-buffer capture requires BGRA8 SDR or RGBA16F scRGB but the back buffer uses DXGI format "
                            << static_cast<int>(backBufferDesc.Format) << ".";
             throw std::runtime_error(messageBuilder.str());
+        }
+        if (backBufferDesc.Format != Bootstrap.GetOutputFormat() || backBufferDesc.SampleDesc.Count != 1) {
+            throw std::runtime_error("Back-buffer capture requires a single-sample texture matching the active output format.");
         }
 
         D3D11_TEXTURE2D_DESC stagingDesc = {};
@@ -57,19 +60,25 @@ namespace helengine::windows {
         ID3D11DeviceContext* deviceContext = Bootstrap.GetDeviceContext();
         deviceContext->CopyResource(stagingTexture.Get(), backBuffer.Get());
 
+        const size_t tightRowByteCount = static_cast<size_t>(stagingDesc.Width) * 4u;
+        std::vector<uint8_t> bgraRows(tightRowByteCount * static_cast<size_t>(stagingDesc.Height));
         D3D11_MAPPED_SUBRESOURCE mapped = {};
         ThrowIfFailed(
             deviceContext->Map(stagingTexture.Get(), 0, D3D11_MAP_READ, 0, &mapped),
             "ID3D11DeviceContext::Map");
 
-        const size_t tightRowByteCount = static_cast<size_t>(stagingDesc.Width) * 4u;
-        std::vector<uint8_t> bgraRows(tightRowByteCount * static_cast<size_t>(stagingDesc.Height));
         const uint8_t* sourceBytes = static_cast<const uint8_t*>(mapped.pData);
-        for (UINT rowIndex = 0; rowIndex < stagingDesc.Height; rowIndex++) {
-            std::memcpy(
-                bgraRows.data() + static_cast<size_t>(rowIndex) * tightRowByteCount,
-                sourceBytes + static_cast<size_t>(rowIndex) * mapped.RowPitch,
-                tightRowByteCount);
+        try {
+            for (UINT rowIndex = 0; rowIndex < stagingDesc.Height; rowIndex++) {
+                DirectX11OutputPixelConversion::ConvertRowToSdrBgra(
+                    sourceBytes + static_cast<size_t>(rowIndex) * mapped.RowPitch,
+                    bgraRows.data() + static_cast<size_t>(rowIndex) * tightRowByteCount,
+                    stagingDesc.Width, stagingDesc.Format, Bootstrap.GetSdrWhiteScale());
+            }
+        }
+        catch (...) {
+            deviceContext->Unmap(stagingTexture.Get(), 0);
+            throw;
         }
         deviceContext->Unmap(stagingTexture.Get(), 0);
 

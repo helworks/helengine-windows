@@ -11,6 +11,8 @@ namespace helengine::windows {
         Overlay,
 
         /// An opaque, noninteractive window in Explorer's wallpaper layer behind desktop icons.
-        Desktop
+        Desktop,
+        /// An independent, interactive desktop surface behind application windows; no Explorer parent.
+        Shell
     };
 }

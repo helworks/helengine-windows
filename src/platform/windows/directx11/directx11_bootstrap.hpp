@@ -6,6 +6,7 @@
 #include <dxgi1_2.h>
 #include <wrl/client.h>
 #include <memory>
+#include "platform/windows/directx11/directx11_output_color_state.hpp"
 
 namespace helengine::windows {
     class DirectX11OutputAttachments;
@@ -21,11 +22,11 @@ namespace helengine::windows {
         /// <param name="useComposition">True only in overlay mode: create a premultiplied composition swap chain and
         /// the DirectComposition device, target and visual instead of the window swap chain.</param>
         /// <param name="sampleCount">Requests 1x or 4x engine rendering without multisampling the swapchain.</param>
-        /// <param name="useDesktop">Selects an opaque blt swap chain for a layered Explorer child; false retains normal flip presentation.</param>
+        /// <param name="useDesktop">Preserves the layered Explorer child; HDR uses opaque DirectComposition and SDR retains blt presentation.</param>
         DirectX11Bootstrap(HWND windowHandle, int width, int height, bool useComposition, bool useDesktop = false, UINT sampleCount = 1);
 
         /// Creates an additional swap chain using the primary device and context; resource caches remain shared.
-        /// useComposition selects overlay alpha; useDesktop selects opaque blt presentation and cannot accompany composition.
+        /// useComposition selects overlay alpha; useDesktop keeps an opaque Explorer child with HDR composition or SDR blt.
         DirectX11Bootstrap(HWND windowHandle, int width, int height, bool useComposition, DirectX11Bootstrap& sharedDevice, bool useDesktop = false, UINT sampleCount = 1);
 
         /// Releases all DirectX11 resources.
@@ -49,6 +50,18 @@ namespace helengine::windows {
         /// Gets the requested engine color/depth sample count; the swapchain itself remains single-sample.
         UINT GetSampleCount() const;
 
+        /// Gets the actual presentation format selected after explicit HDR capability validation.
+        DXGI_FORMAT GetOutputFormat() const;
+
+        /// Reports whether the current swapchain presents linear FP16 scRGB through the compositor.
+        bool IsHdrOutput() const;
+
+        /// Gets Windows UI reference white in scRGB units; scene lighting uses its own 80-nit reference.
+        float GetSdrWhiteScale() const;
+
+        /// Refreshes monitor/HDR/reference-white changes at bounded intervals before a new output frame begins.
+        void RefreshOutputColorState();
+
         /// Resolves the completed output before hit-test readback, capture or presentation.
         void ResolveOutput();
 
@@ -69,10 +82,19 @@ namespace helengine::windows {
         /// otherwise the window swap chain with exactly the calls the player has always made.
         void CreateSwapChain();
 
-        /// Creates the premultiplied composition swap chain (B8G8R8A8, 2 buffers, STRETCH, FLIP_DISCARD) and shows it
+        /// Creates a two-buffer flip-sequential composition swapchain, opaque for desktop and premultiplied for overlay, and shows it
         /// on the window through a DirectComposition device, a topmost target, one visual, SetContent, SetRoot and
         /// Commit. Throws std::runtime_error carrying the failing HRESULT in hexadecimal when any call fails.
         void CreateCompositionSwapChain();
+
+        /// Applies scRGB only after the created swapchain explicitly reports color-space presentation support.
+        void ConfigureOutputColorSpace();
+
+        /// Disconnects the visual and releases presentation resources before changing the output format.
+        void ReleaseSwapChain();
+
+        /// Writes the selected output transfer, white levels and capability fallback to native diagnostics.
+        void WriteOutputColorDiagnostics() const;
 
         /// Creates all output attachments against the current single-sample swapchain buffer.
         void CreateOutputAttachments();
@@ -96,14 +118,20 @@ namespace helengine::windows {
         /// Stores the target client height.
         int Height;
 
-        /// Stores whether the swap chain is a composition swap chain shown through DirectComposition (overlay mode).
+        /// Stores semantic overlay mode; HDR desktop composition independently preserves its opaque input contract.
         bool UseComposition;
 
-        /// Selects blt presentation for opaque layered children in Explorer; normal windows keep flip presentation.
+        /// Selects an opaque Explorer child, using HDR composition or the existing SDR blt fallback.
         bool UseDesktop;
 
         /// Stores the validated per-output engine sample count.
         UINT SampleCount;
+
+        /// Keeps monitor capabilities and Windows UI reference white local to this output.
+        DirectX11OutputColorState OutputColor;
+
+        /// Throttles OS display discovery while still applying reference-white changes during rendering.
+        ULONGLONG NextColorQueryTick = 0;
 
         /// Stores the Direct3D 11 device.
         Microsoft::WRL::ComPtr<ID3D11Device> Device;

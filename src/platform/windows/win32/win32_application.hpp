@@ -74,6 +74,9 @@ namespace helengine::windows {
         /// Initializes explicitly configured secondary views before the shared core starts.
         void CreateSecondaryWindows();
 
+        /// Reapplies existing desktop and monitor-filling overlay bounds once after a display/DPI event batch.
+        void RefreshDesktopMonitorBounds();
+
         /// Enumerates primary desktop coverage and validates automatic view limits and reserved tags before creation.
         void ConfigureDesktopMonitors(const Win32WindowModeSettings& windowModeSettings);
 
@@ -473,7 +476,7 @@ namespace helengine::windows {
         /// Counts frames that reached Presenter->RenderFrame() while --frames is active, used to honor the frame limit and pick the capture frame; never advanced without --frames.
         int RenderedFrameCount;
 
-        /// Stores the activity tracker attached to the main window; null unless the idle throttle is enabled.
+        /// Tracks display/DPI events for every window, independently of whether idle frame pacing is enabled.
         std::unique_ptr<Win32ActivityTracker> ActivityTracker;
 
         /// Stores the idle frame pacer that drives RunIdleThrottledLoop; null unless the idle throttle is enabled, which

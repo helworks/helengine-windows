@@ -39,20 +39,20 @@ public sealed class WindowsProfilerArtifactPackagingTests {
     }
 
     /// <summary>
-    /// Verifies non-profiler packages omit profiler-only artifacts even when a native executor reports a PDB.
+    /// Verifies debug packages retain local symbols while only profiler packages include the instrumentation manifest.
     /// </summary>
-    /// <param name="profileId">Non-profiler Windows profile whose package must remain artifact-free.</param>
+    /// <param name="profileId">Non-profiler Windows profile whose local-symbol policy is verified.</param>
     [Theory]
     [InlineData("debug")]
     [InlineData("release")]
-    public async Task BuildAsync_non_profiler_omits_manifest_and_pdb(string profileId) {
+    public async Task BuildAsync_non_profiler_keeps_symbols_only_for_debug(string profileId) {
         using ProfilerArtifactPackagingFixture fixture = new(profileId, true, true);
 
         PlatformBuildReport report = await fixture.BuildAsync();
 
         Assert.True(report.Succeeded);
         Assert.False(File.Exists(Path.Combine(fixture.OutputRoot, "runtime", "generated_profiler_manifest.json")));
-        Assert.False(File.Exists(Path.Combine(fixture.OutputRoot, "helengine_windows.pdb")));
+        Assert.Equal(profileId == "debug", File.Exists(Path.Combine(fixture.OutputRoot, "helengine_windows.pdb")));
     }
 
     /// <summary>

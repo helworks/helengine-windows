@@ -1,3 +1,5 @@
+#include "platform/windows/win32/win32_frame_rate_limit.hpp"
+#include "platform/windows/win32/win32_frame_stage_timings.hpp"
 #include "platform/windows/win32/win32_presentation_health.hpp"
 #include "platform/windows/win32/win32_secondary_window.hpp"
 #include "platform/windows/win32/win32_application.hpp"
@@ -573,6 +575,14 @@ namespace helengine::windows {
         if (ActivityTracker) {
             MainWindow->SetActivityTracker(nullptr);
         }
+#if defined(HELENGINE_WINDOWS_DEBUG_RUNTIME_DIAGNOSTICS)
+        // Core disposal may fail after Run has returned. Keep diagnostics alive until owned engine teardown ends,
+        // then detach before member destruction can close the lifecycle log used by the callbacks.
+        if (ActiveCrashLoggingApplication == this) {
+            UninstallDebugAbortHandlers();
+            UninstallDebugCrashHandler();
+        }
+#endif
     }
 
     /// Boots the Win32 window and DirectX11 loop and returns the process exit code.
@@ -619,17 +629,11 @@ namespace helengine::windows {
             WriteSceneDiagnosticsCheckpoint("fatal_exception");
 #if defined(HELENGINE_WINDOWS_DEBUG_RUNTIME_DIAGNOSTICS)
             WriteCurrentThreadStackTrace("Fatal host/engine stack trace.", 1);
-            UninstallDebugAbortHandlers();
-            UninstallDebugCrashHandler();
 #endif
             delete exception;
             return EXIT_FAILURE;
         } catch (const Win32ExitRequest& request) {
             WriteLifecycleLog(request.what());
-#if defined(HELENGINE_WINDOWS_DEBUG_RUNTIME_DIAGNOSTICS)
-            UninstallDebugAbortHandlers();
-            UninstallDebugCrashHandler();
-#endif
             return request.GetExitCode();
         } catch (const std::exception& exception) {
             std::ostringstream messageBuilder;
@@ -639,8 +643,6 @@ namespace helengine::windows {
             WriteSceneDiagnosticsCheckpoint("fatal_exception");
 #if defined(HELENGINE_WINDOWS_DEBUG_RUNTIME_DIAGNOSTICS)
             WriteCurrentThreadStackTrace("Fatal host/engine stack trace.", 1);
-            UninstallDebugAbortHandlers();
-            UninstallDebugCrashHandler();
 #endif
             return EXIT_FAILURE;
         }
@@ -649,15 +651,25 @@ namespace helengine::windows {
         messageBuilder << "Host shutdown requested with exit code " << ExitCode << '.';
         std::string message = messageBuilder.str();
         WriteLifecycleLog(message.c_str());
-#if defined(HELENGINE_WINDOWS_DEBUG_RUNTIME_DIAGNOSTICS)
-        UninstallDebugAbortHandlers();
-        UninstallDebugCrashHandler();
-#endif
         return ExitCode;
     }
 
     /// Attaches to the parent console or creates one so host and engine logs have a stable output target.
     void Win32Application::InitializeConsole() {
+        // Desktop hosts opt out before AllocConsole so no terminal flashes during launch or recovery.
+        wchar_t hideConsole[2] {};
+        if (GetEnvironmentVariableW(L"HELENGINE_HIDE_CONSOLE", hideConsole, 2) == 1 && hideConsole[0] == L'1') {
+            const auto directory = ResolveApplicationDirectoryPath();
+            FILE* stream = nullptr;
+            if (_wfreopen_s(&stream, (directory / L"helengine_windows.stdout.log").c_str(), L"w", stdout) != 0) {
+                throw std::runtime_error("Cannot open hidden-console stdout log.");
+            }
+            if (_wfreopen_s(&stream, (directory / L"helengine_windows.stderr.log").c_str(), L"w", stderr) != 0) {
+                throw std::runtime_error("Cannot open hidden-console stderr log.");
+            }
+            std::ios::sync_with_stdio(true);
+            return;
+        }
         if (!AttachConsole(ATTACH_PARENT_PROCESS)) {
             AllocConsole();
         }
@@ -712,18 +724,21 @@ namespace helengine::windows {
                 << " size=" << overlayWidth << "x" << overlayHeight << '.';
             std::string overlayBoundsMessage = overlayBoundsBuilder.str();
             WriteLifecycleLog(overlayBoundsMessage.c_str());
-        } else if (windowModeSettings.GetWindowMode() == Win32WindowMode::Desktop) {
+        } else if ((windowModeSettings.GetWindowMode() == Win32WindowMode::Desktop || windowModeSettings.GetWindowMode() == Win32WindowMode::Shell)) {
             const RECT& bounds = DesktopMonitorRectangles.front();
             MainWindow = std::make_unique<Win32Window>(L"HelEngine Desktop", bounds.left, bounds.top,
-                bounds.right - bounds.left, bounds.bottom - bounds.top, Win32WindowStyle::Desktop());
-            WriteLifecycleLog("Desktop mode configured: opaque wallpaper behind icons; monitor coverage fixed at startup.");
+                bounds.right - bounds.left, bounds.bottom - bounds.top, windowModeSettings.GetWindowMode() == Win32WindowMode::Shell ? Win32WindowStyle::Shell() : Win32WindowStyle::Desktop());
+            WriteLifecycleLog(windowModeSettings.GetWindowMode() == Win32WindowMode::Shell
+                ? "Shell mode configured: independent opaque background with direct input; no Explorer attachment."
+                : "Desktop mode configured: opaque wallpaper behind icons; monitor coverage fixed at startup.");
         } else {
             MainWindow = std::make_unique<Win32Window>(L"HelEngine Windows Host", CW_USEDEFAULT, CW_USEDEFAULT, profile.ResolutionWidth, profile.ResolutionHeight, Win32WindowStyle::Normal());
         }
+        // Display/DPI notifications must remain active even when idle frame pacing is disabled.
+        ActivityTracker = std::make_unique<Win32ActivityTracker>();
+        MainWindow->SetActivityTracker(ActivityTracker.get());
         if (idleThrottleSettings.IsEnabled()) {
-            ActivityTracker = std::make_unique<Win32ActivityTracker>();
             IdleFramePacer = std::make_unique<Win32IdleFramePacer>(idleThrottleSettings);
-            MainWindow->SetActivityTracker(ActivityTracker.get());
             std::string idleThrottleMessage = "Idle throttle configured: " + idleThrottleSettings.Describe();
             WriteLifecycleLog(idleThrottleMessage.c_str());
         }
@@ -750,7 +765,7 @@ namespace helengine::windows {
                 << '.';
             std::string message = messageBuilder.str();
             WriteLifecycleLog(message.c_str());
-        } else if (windowModeSettings.GetWindowMode() == Win32WindowMode::Desktop) {
+        } else if ((windowModeSettings.GetWindowMode() == Win32WindowMode::Desktop || windowModeSettings.GetWindowMode() == Win32WindowMode::Shell)) {
             std::string message = "Desktop client size: " + std::to_string(MainWindow->GetClientWidth())
                 + "x" + std::to_string(MainWindow->GetClientHeight()) + ".";
             WriteLifecycleLog(message.c_str());
@@ -902,7 +917,7 @@ namespace helengine::windows {
         FirstChanceCxxExceptionHandlerHandle = AddVectoredExceptionHandler(0, &Win32Application::HandleFirstChanceCxxException);
     }
 
-    /// Restores the previous unhandled-exception hook after the host exits normally.
+    /// Restores the previous unhandled-exception hook after owned engine teardown, before logging members are destroyed.
     void Win32Application::UninstallDebugCrashHandler() {
         if (ActiveCrashLoggingApplication != this) {
             return;
@@ -929,7 +944,7 @@ namespace helengine::windows {
 #endif
     }
 
-    /// Restores previous CRT and abort handlers after the host exits normally.
+    /// Restores previous CRT and abort handlers after owned engine teardown while their saved callbacks remain valid.
     void Win32Application::UninstallDebugAbortHandlers() {
 #if defined(_DEBUG)
         _CrtSetReportHook2(_CRT_RPTHOOK_REMOVE, &Win32Application::HandleDebugReport);
@@ -1902,6 +1917,7 @@ namespace helengine::windows {
             for (const auto& view : SecondaryWindows) { view->GetWindow().RethrowPendingException(); }
         }
 
+        if(ActivityTracker && ActivityTracker->ConsumeDisplayChange()) RefreshDesktopMonitorBounds();
         MainWindow->ValidateDesktopAttachment();
         for (const auto& view : SecondaryWindows) { view->GetWindow().ValidateDesktopAttachment(); }
         return true;
@@ -1910,8 +1926,21 @@ namespace helengine::windows {
     /// Renders and presents the current frame.
     void Win32Application::RenderFrame() {
         HELENGINE_TRACY_ZONE_N("Frame");
+        static Win32FrameRateLimit frameRateLimit;
+        { HELENGINE_TRACY_ZONE_N("Frame.RateLimit"); frameRateLimit.Wait(); }
         if (MultipleWindowsEnabled) {
-            RenderMultiWindowFrame();
+            BeginWindowsTracyProfilerFrame();
+            try {
+                RenderMultiWindowFrame();
+                EmitWindowsTracyProfilerPlots();
+#if defined(TRACY_ENABLE) && __has_include("IRuntimeCpuProfileSink.hpp")
+                FlushWindowsCpuProfileSink(EngineCore);
+#endif
+            } catch (...) {
+                CollectWindowsTracyProfilerGpu();
+                throw;
+            }
+            CollectWindowsTracyProfilerGpu();
             return;
         }
         int clientWidth = MainWindow->GetClientWidth();
@@ -3004,7 +3033,7 @@ namespace helengine::windows {
 #endif
     /// Resolves startup monitor coverage and validates automatic-view limits before creating native resources.
     void Win32Application::ConfigureDesktopMonitors(const Win32WindowModeSettings& windowModeSettings) {
-        if (windowModeSettings.GetWindowMode() == Win32WindowMode::Desktop) {
+        if ((windowModeSettings.GetWindowMode() == Win32WindowMode::Desktop || windowModeSettings.GetWindowMode() == Win32WindowMode::Shell)) {
             DesktopMonitorRectangles = Win32DesktopHost::GetMonitorRectangles();
             if (DesktopMonitorRectangles.size() + CommandLineOptions.GetAdditionalWindows().size() > 16) {
                 throw Win32ExitRequest(2, "Desktop monitors and explicit windows exceed the maximum of 16 views.");
@@ -3019,13 +3048,31 @@ namespace helengine::windows {
         }
     }
 
+    /// Re-enumerates only on native display events; rendering and layout already consume each window's refreshed size.
+    void Win32Application::RefreshDesktopMonitorBounds() {
+        if(DesktopMonitorRectangles.empty()) return;
+        const auto current=Win32DesktopHost::GetMonitorRectangles();
+        for(const auto& view : SecondaryWindows) {
+            HWND window=view->GetWindow().GetHandle();
+            if(!window || (view->GetMode()!=Win32WindowMode::Overlay && view->GetMode()!=Win32WindowMode::Desktop && view->GetMode()!=Win32WindowMode::Shell)) continue;
+            RECT previous=Win32DesktopHost::ReadPhysicalWindowRectangle(window),target{};
+            if(Win32DesktopHost::RemapMonitorRectangle(DesktopMonitorRectangles,current,previous,target))
+                view->GetWindow().SetPhysicalBounds(target);
+        }
+        MainWindow->SetPhysicalBounds(current.front());
+        DesktopMonitorRectangles=current;
+        std::string message="Display event applied: primary="+std::to_string(current.front().right-current.front().left)
+            +"x"+std::to_string(current.front().bottom-current.front().top);
+        WriteLifecycleLog(message.c_str());
+    }
+
     /// Creates independent secondary presentation resources after process DPI and the primary device are ready.
     void Win32Application::CreateSecondaryWindows() {
         std::vector<Win32AdditionalWindowSettings> windows = CommandLineOptions.GetAdditionalWindows();
         for (size_t index = 1; index < DesktopMonitorRectangles.size(); index++) {
             const RECT& bounds = DesktopMonitorRectangles[index];
             windows.push_back(Win32AdditionalWindowSettings::Parse("desktop-monitor-" + std::to_string(index + 1)
-                + ",desktop," + std::to_string(bounds.left) + "," + std::to_string(bounds.top)
+                + (WindowModeSettings->GetWindowMode() == Win32WindowMode::Shell ? ",shell," : ",desktop,") + std::to_string(bounds.left) + "," + std::to_string(bounds.top)
                 + "," + std::to_string(bounds.right - bounds.left) + "," + std::to_string(bounds.bottom - bounds.top)));
         }
         if (windows.empty()) { return; }
@@ -3061,10 +3108,25 @@ namespace helengine::windows {
         EngineInputBackend->SelectWindow(*selected);
         HWND keyboardWindow = selected->GetHandle();
         POINT cursor {};
-        HWND hitWindow = GetCursorPos(&cursor) ? WindowFromPoint(cursor) : nullptr;
+        const bool hasCursor = GetCursorPos(&cursor) != FALSE;
+        HWND hitWindow = hasCursor ? WindowFromPoint(cursor) : nullptr;
+        bool retainedPointer = MainWindow->HasPendingPointerInput();
+        if (retainedPointer || (hasCursor && MainWindow->UsesMessagePointer()
+            && Win32PointerWindowRouting::IsPointerTarget(MainWindow->GetHandle(), hitWindow))) {
+            selected = MainWindow.get(); EngineInputBackend->SelectPointerWindow(*selected);
+        }
         for (const auto& view : SecondaryWindows) {
-            if (view->GetMode() == Win32WindowMode::Overlay
-                && Win32PointerWindowRouting::IsPointerTarget(view->GetWindow().GetHandle(), hitWindow)) {
+            if (!retainedPointer && view->GetWindow().HasPendingPointerInput()) {
+                selected = &view->GetWindow(); EngineInputBackend->SelectPointerWindow(*selected);
+                retainedPointer = true; break;
+            }
+        }
+        for (const auto& view : SecondaryWindows) {
+            if (retainedPointer || !hasCursor || (view->GetMode() != Win32WindowMode::Overlay && view->GetMode() != Win32WindowMode::Shell)) { continue; }
+            const POINT pointer = Win32PointerWindowRouting::ResolveScreenPoint(view->GetWindow().GetHandle(), cursor);
+            const HWND candidateHit = WindowFromPoint(pointer);
+            if (Win32PointerWindowRouting::IsPointerTarget(view->GetWindow().GetHandle(), candidateHit)) {
+                hitWindow = candidateHit;
                 selected = &view->GetWindow();
                 EngineInputBackend->SelectPointerWindow(*selected);
                 break;
@@ -3083,6 +3145,7 @@ namespace helengine::windows {
 
     /// Records the blocking boundary and monotonic time when the first multi-window frame fails to finish.
     void Win32Application::TraceFirstMultiWindowFrame(const char* stage,const char* tag) const {
+        Win32FrameStageTimings::Observe(stage, tag);
         if(HasCompletedFirstMultiWindowFrame) return;
         std::string message="First multi-window frame: window="+std::string(tag)+" stage="+stage+" tick="+std::to_string(GetTickCount64());
         WriteLifecycleLog(message.c_str());

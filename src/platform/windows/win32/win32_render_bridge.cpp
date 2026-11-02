@@ -1,6 +1,8 @@
 #include "platform/windows/win32/win32_render_bridge.hpp"
 
 #include <d3dcompiler.h>
+#include "platform/windows/win32/win32_shadow_shader_source.hpp"
+#include "platform/windows/win32/win32_shadow_rasterizer_state.hpp"
 
 #include <DirectXMath.h>
 
@@ -20,6 +22,8 @@
 
 #include "MaterialLayoutBuilder.hpp"
 #include "platform/windows/directx11/directx11_bootstrap.hpp"
+#include "platform/windows/directx11/directx11_output_color_shader.hpp"
+#include "platform/windows/win32/win32_ui_output_shader.hpp"
 #include "platform/windows/runtime/runtime_render_diagnostics.hpp"
 #include "platform/windows/runtime/windows_tracy_profiler.hpp"
 
@@ -38,6 +42,7 @@
 #endif
 #include "IRenderQueue2D.hpp"
 #include "IRenderQueue3D.hpp"
+#include "RenderList3D.hpp"
 #include "LightComponent.hpp"
 #include "LightDirectionUtility.hpp"
 #if __has_include("ModelSubmeshResolver.hpp")
@@ -47,10 +52,14 @@
 #include "MaterialPropertyBlock.hpp"
 #endif
 #include "MaterialLayoutBinding.hpp"
+#include "MaterialRenderState.hpp"
+#include "MaterialCullMode.hpp"
+#include "MaterialBlendMode.hpp"
 #if __has_include("MaterialConstantBufferAsset.hpp")
 #include "MaterialConstantBufferAsset.hpp"
 #endif
 #include "PointLightComponent.hpp"
+#include "platform/windows/win32/win32_point_shadow_layout.hpp"
 #if __has_include("RuntimeDiagnosticsService.hpp")
 #include "RuntimeDiagnosticsService.hpp"
 #endif
@@ -315,6 +324,16 @@ namespace helengine::windows {
             Win32ShadowLightSlotConstants Light1;
             Win32ShadowLightSlotConstants Light2;
             Win32ShadowLightSlotConstants Light3;
+            /// <summary>Appends the second ink projection without changing the legacy 400-byte prefix.</summary>
+            DirectX::XMFLOAT4X4 CascadeWorldToShadowClip;
+            /// <summary>Stores the far tile offset and scale in the shared horizontal atlas.</summary>
+            DirectX::XMFLOAT4 CascadeAtlasRect;
+            /// <summary>Measures positive original scene-camera depth for all presentation and cube views.</summary>
+            DirectX::XMFLOAT4 CascadeDepthPlane;
+            /// <summary>Stores near, split, far depths and the active cascade count.</summary>
+            DirectX::XMFLOAT4 CascadeDepths;
+            /// <summary>Stores six perspective transforms per packed forward light for ink point shadows.</summary>
+            std::array<DirectX::XMFLOAT4X4,24> PointShadowMatrices;
         };
 
         /// Stores the transform constants consumed by the directional shadow depth pass.
@@ -328,11 +347,12 @@ namespace helengine::windows {
         static_assert(sizeof(Win32ForwardLightSlotConstants) == 64);
         static_assert(sizeof(Win32ForwardLightConstants) == 288);
         static_assert(sizeof(Win32ShadowLightSlotConstants) == 96);
-        static_assert(sizeof(Win32ShadowConstants) == 400);
+        static_assert(offsetof(Win32ShadowConstants, CascadeWorldToShadowClip) == 400);
+        static_assert(sizeof(Win32ShadowConstants) == 2048);
         static_assert(sizeof(Win32ShadowTransformConstants) == 64);
 
         /// Stores the fixed resolution used by the first native directional shadow map.
-        constexpr UINT DirectionalShadowMapResolution = 1024;
+        constexpr UINT DirectionalShadowMapResolution = 2048;
 
         /// Minimum directional shadow distance used by the native player so zero or invalid authored shadow distances still produce a valid shadow volume.
         constexpr float MinimumDirectionalShadowDistance = 1.0f;
@@ -340,11 +360,6 @@ namespace helengine::windows {
         /// Stores the fraction of the authored shadow distance used to focus directional shadow coverage ahead of the camera.
         constexpr float DirectionalShadowFocusDistanceFactor = 0.5f;
 
-        /// Constant depth bias applied while rendering directional shadow casters so simple rotating meshes do not collapse into self-shadowing.
-        constexpr int ShadowDepthBias = 1000;
-
-        /// Slope-scaled depth bias applied while rendering directional shadow casters so grazing-angle receivers remain lit consistently.
-        constexpr float ShadowSlopeScaledDepthBias = 1.0f;
 
         /// Built-in generated model id used by the infinite-thin ground plane primitive.
         constexpr const char* BuiltInPlaneModelId = "engine:model:plane";
@@ -408,7 +423,7 @@ PSInput VSMain(VSInput input) {
 )";
 
         /// Pixel shader used by the first native 3D Windows pass.
-        constexpr const char* PixelShaderSource = R"(
+        const std::string PixelShaderSource = DirectX11OutputUiShader+R"(
 cbuffer TransformBuffer : register(b0) {
     float4x4 World;
     float4x4 WorldViewProjection;
@@ -455,6 +470,11 @@ cbuffer ShadowBuffer : register(b2) {
     float4 ShadowLight3AtlasRect;
     float4 ShadowLight3Metadata;
     float4x4 ShadowLight3WorldToShadowClip;
+    float4x4 CascadeWorldToShadowClip;
+    float4 CascadeAtlasRect;
+    float4 CascadeDepthPlane;
+    float4 CascadeDepths;
+    float4x4 PointShadowMatrices[24];
 };
 
 cbuffer BaseColorBuffer : register(b3) {
@@ -470,11 +490,35 @@ struct PSInput {
     float3 WorldNormal : TEXCOORD1;
 };
 
+// Compare against the receiver plane at the loaded texel center instead of displacing caster slopes.
+// World derivatives precede cascade selection so adjacent pixels may select different matrices safely.
+float2 HardShadowReceiverPlane(float3 worldDx,float3 worldDy,float4 clip,float4x4 shadowTransform,float4 rect,float2 atlasUv,float2 centerUv,float2 texel) {
+    float3 ndc=clip.xyz/clip.w;
+    float4 clipDx=mul(float4(worldDx,0),shadowTransform),clipDy=mul(float4(worldDy,0),shadowTransform);
+    float3 ndcDx=(clipDx.xyz-ndc*clipDx.w)/clip.w,ndcDy=(clipDy.xyz-ndc*clipDy.w)/clip.w;
+    float2 uvDx=ndcDx.xy*float2(0.5,-0.5)*rect.zw,uvDy=ndcDy.xy*float2(0.5,-0.5)*rect.zw;
+    float determinant=uvDx.x*uvDy.y-uvDx.y*uvDy.x;
+    float scale=max(dot(uvDx,uvDx),dot(uvDy,uvDy));
+    // FP32 roundoff allowance validated in the near/far fixtures; the depth floor guards small normalized values.
+    float roundoff=8.0*1.192092896e-7*max(abs(ndc.z),0.25);
+    // Degenerate footprints retain finite depth and FP32 tolerance without a large constant bias.
+    if(scale<=1e-30 || abs(determinant)<=scale*1e-6) return float2(ndc.z,roundoff);
+    float2 gradient=float2(ndcDx.z*uvDy.y-uvDx.y*ndcDy.z,uvDx.x*ndcDy.z-ndcDx.z*uvDy.x)/determinant;
+    float receiverDepth=ndc.z+dot(gradient,centerUv-atlasUv);
+    // D3D11 snaps XY to eight fractional bits: each axis can move by half of 1/256 shadow pixel.
+    float rasterError=dot(abs(gradient),texel)*(1.0/512.0);
+    roundoff=8.0*1.192092896e-7*max(abs(receiverDepth),0.25);
+    return float2(receiverDepth,rasterError+roundoff);
+}
 float EvaluateShadow(float4 atlasRect, float4 shadowMetadata, float4x4 worldToShadowClip, float3 worldPosition) {
-    if (shadowMetadata.x <= 0.5f || shadowMetadata.z >= 1.5f || ShadowMetadata.x <= 0.5f) {
+    float3 worldDx=ddx(worldPosition),worldDy=ddy(worldPosition);
+    if (shadowMetadata.x <= 0.5f || ShadowMetadata.x <= 0.5f) {
         return 1.0f;
     }
 
+    if(shadowMetadata.z<1.5 && CascadeDepths.w>1.5 && dot(float4(worldPosition,1),CascadeDepthPlane)>CascadeDepths.y) {
+        worldToShadowClip=CascadeWorldToShadowClip;atlasRect=CascadeAtlasRect;
+    }
     float4 shadowClip = mul(float4(worldPosition, 1.0f), worldToShadowClip);
     if (abs(shadowClip.w) <= 0.0001f) {
         return 1.0f;
@@ -487,9 +531,18 @@ float EvaluateShadow(float4 atlasRect, float4 shadowMetadata, float4x4 worldToSh
     }
 
     float2 atlasUv = atlasRect.xy + (shadowUv * atlasRect.zw);
-    float sampledDepth = ShadowAtlasTexture.Sample(ShadowAtlasSampler, atlasUv).r;
-    float shadowBias = 0.01f;
-    float visibility = (shadowNdc.z - shadowBias) <= sampledDepth ? 1.0f : 0.0f;
+    float sampledDepth;
+    float receiverDepth=shadowNdc.z;
+    float shadowBias=0.01f;
+    if(CascadeDepths.w>1.5) {
+        uint width,height;ShadowAtlasTexture.GetDimensions(width,height);
+        int2 lower=int2(atlasRect.xy*float2(width,height)),upper=int2((atlasRect.xy+atlasRect.zw)*float2(width,height))-1;
+        int2 pixel=clamp(int2(atlasUv*float2(width,height)),lower,upper);
+        sampledDepth=ShadowAtlasTexture.Load(int3(pixel,0)).r;
+        float2 receiverPlane=HardShadowReceiverPlane(worldDx,worldDy,shadowClip,worldToShadowClip,atlasRect,atlasUv,(float2(pixel)+0.5)/float2(width,height),float2(1.0/width,1.0/height));
+        receiverDepth=receiverPlane.x;shadowBias=receiverPlane.y;
+    } else sampledDepth=ShadowAtlasTexture.Sample(ShadowAtlasSampler, atlasUv).r;
+    float visibility = (receiverDepth - shadowBias) <= sampledDepth ? 1.0f : 0.0f;
     return lerp(1.0f, visibility, shadowMetadata.y);
 }
 
@@ -576,40 +629,15 @@ float4 PSMain(PSInput input) : SV_TARGET {
         color += EvaluateForwardLight(Light3ColorAndType, Light3DirectionAndShadow, Light3PositionAndRange, Light3SpotAngles, ShadowLight3AtlasRect, ShadowLight3Metadata, ShadowLight3WorldToShadowClip, surfaceColor, input.WorldPosition, normal, viewDirection);
     }
 
-    return float4(saturate(color), sampledBaseColor.a);
+    return float4(NativeOutput.x>0.5 ? OutputSceneScRgb(color) : saturate(color), sampledBaseColor.a);
 }
 )";
 
         /// Vertex shader used by the directional shadow depth pass.
-        constexpr const char* ShadowVertexShaderSource = R"(
-cbuffer ShadowTransformBuffer : register(b0) {
-    float4x4 WorldViewProjection;
-};
 
-struct VSInput {
-    float3 Position : POSITION;
-};
-
-struct VSOutput {
-    float4 Position : SV_POSITION;
-};
-
-VSOutput VSMain(VSInput input) {
-    VSOutput output;
-    output.Position = mul(float4(input.Position, 1.0f), WorldViewProjection);
-    return output;
-}
-)";
 
         /// Pixel shader used by the directional shadow depth pass.
-        constexpr const char* ShadowPixelShaderSource = R"(
-struct VSOutput {
-    float4 Position : SV_POSITION;
-};
 
-void PSMain(VSOutput input) {
-}
-)";
 
         /// Vertex shader used by the fullscreen diagnostic pass.
         constexpr const char* DiagnosticVertexShaderSource = R"(
@@ -677,37 +705,7 @@ PSInput VSMain(VSInput input) {
 )";
 
         /// Pixel shader used by the native 2D quad pass.
-        constexpr const char* QuadPixelShaderSource = R"(
-Texture2D DiffuseTexture : register(t0);
-SamplerState DiffuseSampler : register(s0);
-
-struct PSInput {
-    float4 Position : SV_POSITION;
-    float2 UV : TEXCOORD0;
-    float4 Color : COLOR0;
-};
-
-float4 PSMain(PSInput input) : SV_TARGET {
-    return DiffuseTexture.Sample(DiffuseSampler, input.UV) * input.Color;
-}
-
-float4 FontGrayscalePS(PSInput input) : SV_TARGET {
-    return float4(input.Color.rgb, DiffuseTexture.Sample(DiffuseSampler, input.UV).a * input.Color.a);
-}
-
-struct FontBlendOutput {
-    float4 Foreground : SV_Target0;
-    float4 Coverage : SV_Target1;
-};
-
-FontBlendOutput FontClearTypePS(PSInput input) {
-    float4 mask = DiffuseTexture.Sample(DiffuseSampler, input.UV) * input.Color.a;
-    FontBlendOutput output;
-    output.Foreground = float4(input.Color.rgb * mask.rgb, mask.a);
-    output.Coverage = mask;
-    return output;
-}
-)";
+        const std::string& QuadPixelShaderSource = NativeUiQuadShader;
 
         /// Vertex shader used by the native rounded-rect SDF pass.
         constexpr const char* RoundedRectVertexShaderSource = R"(
@@ -738,74 +736,7 @@ PSInput VSMain(VSInput input) {
 )";
 
         /// Pixel shader used by the native rounded-rect SDF pass.
-        constexpr const char* RoundedRectPixelShaderSource = R"(
-cbuffer RoundedRectBuffer : register(b0) {
-    float4 DestRect;
-    float4 Params1;
-    float4 FillColor;
-    float4 BorderColor;
-};
-
-float sdRoundRectMasked(float2 p, float2 halfSize, float radius, uint cornerMask) {
-    radius = min(radius, min(halfSize.x, halfSize.y));
-    float2 ap = abs(p);
-    float2 d = ap - halfSize;
-    float baseDist = length(max(d, 0.0f)) + min(max(d.x, d.y), 0.0f);
-
-    if (radius <= 0.0f) {
-        return baseDist;
-    }
-
-    float2 inner = halfSize - radius;
-    if (ap.x <= inner.x || ap.y <= inner.y) {
-        return baseDist;
-    }
-
-    uint cornerBit;
-    if (p.x < 0.0f && p.y >= 0.0f) {
-        cornerBit = 1u;
-    } else if (p.x >= 0.0f && p.y >= 0.0f) {
-        cornerBit = 2u;
-    } else if (p.x < 0.0f && p.y < 0.0f) {
-        cornerBit = 4u;
-    } else {
-        cornerBit = 8u;
-    }
-
-    if ((cornerMask & cornerBit) == 0u) {
-        return baseDist;
-    }
-
-    return length(ap - inner) - radius;
-}
-
-float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) : SV_TARGET {
-    float radius = Params1.x;
-    float border = max(Params1.y, 0.0f);
-    float aa = max(Params1.z, 0.5f);
-    uint cornerMask = (uint)(Params1.w + 0.5f);
-    float2 halfSize = 0.5f * DestRect.zw;
-
-    float dOuter = sdRoundRectMasked(localPosition, halfSize, radius, cornerMask);
-    float alphaFill = 1.0f - smoothstep(-aa, aa, dOuter);
-
-    float innerRadius = max(radius - border, 0.0f);
-    float2 innerHalf = float2(max(halfSize.x - border, 0.0f), max(halfSize.y - border, 0.0f));
-    float dInner = sdRoundRectMasked(localPosition, innerHalf, innerRadius, cornerMask);
-    float alphaInner = 1.0f - smoothstep(-aa, aa, dInner);
-    float alphaBorder = saturate(alphaFill - alphaInner);
-
-    float4 colFill = FillColor * alphaFill;
-    float4 colBorder = BorderColor * alphaBorder;
-    float alpha = colFill.a + colBorder.a * (1.0f - colFill.a);
-    float3 rgb = float3(0.0f, 0.0f, 0.0f);
-    if (alpha > 0.0001f) {
-        rgb = (colBorder.rgb * colBorder.a + colFill.rgb * colFill.a * (1.0f - colBorder.a)) / alpha;
-    }
-
-    return float4(rgb, alpha);
-}
-)";
+        const std::string& RoundedRectPixelShaderSource = NativeUiRoundedRectShader;
 
         /// Throws when one native DirectX operation fails.
         void ThrowIfFailed(HRESULT result, const char* message) {
@@ -1067,6 +998,259 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
         IsAlphaModeConfigured = true;
     }
 
+#ifdef HELENGINE_VOXEL_GI
+    /// <summary>Reuses equal transport settings and replaces changed volumes only after complete resource initialization.</summary>
+    void Win32RenderManager3D::ConfigureSceneGi(Core* owner, DirectionalLightComponent* sun, const helgi::Config& config, std::uint32_t workItems) {
+        ClearSceneInk();
+        ClearSceneSsgi();
+        if(SceneGi && SceneGi->Matches(config)) {SceneGi->Reconfigure(owner,sun,workItems);return;}
+        auto replacement=std::make_unique<Win32SceneGi>(Bootstrap.GetDevice(),owner,sun,config,workItems);
+        ClearSceneGi();
+        SceneGi=std::move(replacement);
+    }
+
+    namespace {
+        /// <summary>Requires explicit zero/one launch flags and preserves malformed environment values as visible errors.</summary>
+        bool ReadSceneGiDebugFlag(const wchar_t* name,const char* displayName) {
+            wchar_t value[2]{};SetLastError(ERROR_SUCCESS);
+            const DWORD length=GetEnvironmentVariableW(name,value,2);const DWORD error=GetLastError();
+            if(length==0 && error==ERROR_ENVVAR_NOT_FOUND) return false;
+            if(length==1 && (value[0]==L'0' || value[0]==L'1')) return value[0]==L'1';
+            throw std::invalid_argument(std::string(displayName)+" must be unset, 0 or 1.");
+        }
+    }
+
+    /// <summary>Activates explicit renderer-only diagnostics while retaining the original live camera identities.</summary>
+    void Win32RenderManager3D::ConfigureSceneGiDebugCameras(ICamera* mainCamera,ICamera* glassCamera) {
+        const bool spheres=ReadSceneGiDebugFlag(L"HELENGINE_GI_DEBUG_SPHERES","HELENGINE_GI_DEBUG_SPHERES");
+        const bool indirectOnly=ReadSceneGiDebugFlag(L"HELENGINE_GI_INDIRECT_ONLY","HELENGINE_GI_INDIRECT_ONLY");
+        if(spheres && indirectOnly) throw std::invalid_argument("Voxel sphere and indirect-only diagnostics cannot run concurrently.");
+        if(!SceneGi) throw std::logic_error("ConfigureSceneGi must precede diagnostic camera registration.");
+        const bool enabled=spheres || indirectOnly;
+        if(enabled && (!mainCamera || !glassCamera || mainCamera==glassCamera || !mainCamera->get_Parent() || !glassCamera->get_Parent())) throw std::invalid_argument("Voxel diagnostics require the original distinct live cameras.");
+        const bool changed=SceneGi->IsDebugSpheresEnabled()!=spheres || SceneGi->IsIndirectOnly()!=indirectOnly || GiDebugMainCamera!=(enabled?mainCamera:nullptr) || GiDebugGlassCamera!=(enabled?glassCamera:nullptr);
+        SceneGi->ConfigureDebugSpheres(spheres);SceneGi->ConfigureIndirectOnly(Bootstrap.GetDeviceContext(),indirectOnly);
+        GiDebugMainCamera=enabled?mainCamera:nullptr;GiDebugGlassCamera=enabled?glassCamera:nullptr;
+        if(changed) LastGiUsageUpdateSeconds=-1;
+        if(changed || !enabled) {
+            RuntimeRenderDiagnostics::WriteHostEvent("scene-gi-debug-spheres",spheres?"mode=1 state=awaiting_published_field filter=receiver_weight cameras=2 main=probes glass=2d_only":"mode=0 ordinary_rendering=1");
+            RuntimeRenderDiagnostics::WriteHostEvent("scene-gi-indirect-only",indirectOnly?"mode=1 output=rgb_irradiance_over_pi receiver=neutral source_albedo=preserved post=off direct=off":"mode=0");
+        }
+    }
+
+    /// <summary>Captures exact original-camera visibility and accepted sampler taps once per unchanged scene update.</summary>
+    void Win32RenderManager3D::UpdateSceneGiUsage() {
+        if(!SceneGi || !SceneGi->IsDebugSpheresEnabled()) return;
+        ICamera* cameras[]={GiDebugMainCamera,GiDebugGlassCamera};
+        if(!cameras[0] || !cameras[1]) throw std::logic_error("Sphere receiver tracking requires both original camera registrations.");
+        std::array<float,44> cameraState{};std::array<std::uint64_t,2> layers{};D3D11_VIEWPORT viewports[2]{};::float4x4 projections[2];bool enabled[2]{};
+        for(unsigned index=0;index<2;++index) {
+            auto* camera=cameras[index];enabled[index]=camera->get_Parent() && camera->get_Parent()->get_IsHierarchyEnabled() && camera->get_RenderTarget()==nullptr;
+            viewports[index]=ResolveSceneSsgiViewport(camera);
+            projections[index]=BuildSceneViewProjection(camera,viewports[index]);const auto stored=StoreMatrix(projections[index]);
+            std::memcpy(cameraState.data()+index*22,&stored,16*sizeof(float));cameraState[index*22+16]=viewports[index].TopLeftX;cameraState[index*22+17]=viewports[index].TopLeftY;cameraState[index*22+18]=viewports[index].Width;cameraState[index*22+19]=viewports[index].Height;cameraState[index*22+20]=enabled[index]?1.f:0.f;cameraState[index*22+21]=static_cast<float>(OutputBootstrap->GetSampleCount());layers[index]=static_cast<std::uint64_t>(camera->get_LayerMask());
+        }
+        const double update=SceneGi->GetSceneUpdateSeconds();const auto generation=SceneGi->GetPublishedGeneration();
+        if(update==LastGiUsageUpdateSeconds && generation==LastGiUsageGeneration && cameraState==LastGiUsageCameraState && layers==LastGiUsageLayers) return;
+        auto* usage=SceneGi->GetDebugUsage();const auto previousProjection=CurrentViewProjection;const auto previousPosition=CurrentCameraPosition;
+        SceneGi->BeginDebugUsage(Bootstrap.GetDeviceContext());
+        try {
+            if(generation>0) for(unsigned index=0;index<2;++index) {
+                if(!enabled[index]) continue;
+                auto* queue=cameras[index]->get_RenderQueue3D();if(!queue) continue;
+                CurrentViewProjection=projections[index];CurrentCameraPosition=cameras[index]->get_Parent()->get_Position();
+                usage->BeginCamera(viewports[index].Width,viewports[index].Height,OutputBootstrap->GetSampleCount());
+                ActiveGiUsage=usage;queue->VisitOrdered(this);usage->BeginReaders();queue->VisitOrdered(this);ActiveGiUsage=nullptr;
+            }
+        } catch(...) {ActiveGiUsage=nullptr;CurrentViewProjection=previousProjection;CurrentCameraPosition=previousPosition;usage->End();throw;}
+        CurrentViewProjection=previousProjection;CurrentCameraPosition=previousPosition;usage->End();
+        if(LastGiUsageUpdateSeconds<0 || LastGiUsageGeneration!=generation) RuntimeRenderDiagnostics::WriteHostEvent("scene-gi-debug-spheres","mode=1 filter=receiver_weight cameras=2 stage="+std::string(generation>0?"capture_ready":"awaiting_field")+" generation="+std::to_string(generation)+" samples="+std::to_string(OutputBootstrap->GetSampleCount()));
+        LastGiUsageUpdateSeconds=update;LastGiUsageGeneration=generation;LastGiUsageCameraState=cameraState;LastGiUsageLayers=layers;
+    }
+
+    /// <summary>Clears scene-specific device bindings before releasing the borrowed transport sources.</summary>
+    void Win32RenderManager3D::ClearSceneGi() {
+        auto* context=Bootstrap.GetDeviceContext();
+        if(context!=nullptr) {
+            ID3D11Buffer* buffer=nullptr;ID3D11ShaderResourceView* view=nullptr;
+            context->PSSetConstantBuffers(9,1,&buffer);context->PSSetShaderResources(17,1,&view);
+        }
+        GiDebugMainCamera=nullptr;GiDebugGlassCamera=nullptr;ActiveGiUsage=nullptr;LastGiUsageUpdateSeconds=-1;LastGiUsageGeneration=0;SceneGi.reset();
+    }
+#endif
+
+    /// <summary>Registers explicit scene identities and replaces prior transport only after validating both camera registrations.</summary>
+    void Win32RenderManager3D::ConfigureSceneSsgi(Core* owner, DirectionalLightComponent* sun, ICamera* firstCamera, ICamera* secondCamera, bool indirectOnly) {
+        ClearSceneInk();
+        if(!owner || !owner->get_ObjectManager() || !sun || !sun->get_Parent() || !firstCamera || !secondCamera || firstCamera==secondCamera || !firstCamera->get_Parent() || !secondCamera->get_Parent())
+            throw std::invalid_argument("Shared SSGI requires an initialized scene, authored sun and two distinct live cameras.");
+        if(CameraToonPasses.find(firstCamera)==CameraToonPasses.end() || CameraToonPasses.find(secondCamera)==CameraToonPasses.end())
+            throw std::logic_error("Both shared SSGI receivers require existing camera toon/effects registrations.");
+        auto replacement=std::make_unique<Win32SceneSsgi>(Bootstrap.GetDevice());
+        ClearSceneSsgi();
+#ifdef HELENGINE_VOXEL_GI
+        ClearSceneGi();
+#endif
+        SceneSsgi=std::move(replacement);SsgiOwner=owner;SsgiSun=sun;SsgiFirstCamera=firstCamera;SsgiSecondCamera=secondCamera;SsgiIndirectOnly=indirectOnly;
+        RuntimeRenderDiagnostics::WriteHostEvent("scene-ssgi-configure",std::string("shared_cameras=2 voxel=off indirect_only=")+(indirectOnly?"1":"0")+" capture_cap=960x540 rays=8 steps=24");
+    }
+    /// <summary>Clears reserved device bindings and borrowed scene identities during explicit teardown.</summary>
+    void Win32RenderManager3D::ClearSceneSsgi() {
+        if(Bootstrap.GetDeviceContext()) Win32SceneSsgi::ClearBindings(Bootstrap.GetDeviceContext());
+        SceneSsgi.reset();SsgiOwner=nullptr;SsgiSun=nullptr;SsgiFirstCamera=nullptr;SsgiSecondCamera=nullptr;SsgiCaptureActive=false;SsgiReceiverActive=false;SsgiIndirectOnly=false;LastSsgiUpdateSeconds=-1;SsgiSourceWidth=SsgiSourceHeight=0;
+    }
+    /// <summary>Uses the camera's actual layout output rather than whichever output is currently being presented.</summary>
+    D3D11_VIEWPORT Win32RenderManager3D::ResolveSceneSsgiViewport(ICamera* camera) {
+        const auto size=GetCameraLayoutSize(camera);const auto authored=camera->get_Viewport();
+        D3D11_VIEWPORT viewport{authored.X.ToSingle(),authored.Y.ToSingle(),authored.Z.ToSingle(),authored.W.ToSingle(),0,1};
+        if(viewport.Width>0 && viewport.Width<=1 && viewport.Height>0 && viewport.Height<=1) {
+            viewport.TopLeftX*=size.X;viewport.TopLeftY*=size.Y;viewport.Width*=size.X;viewport.Height*=size.Y;
+        }
+        if(viewport.Width<=0 || viewport.Height<=0) {viewport.TopLeftX=viewport.TopLeftY=0;viewport.Width=static_cast<float>(size.X);viewport.Height=static_cast<float>(size.Y);}
+        return viewport;
+    }
+    /// <summary>Uses the same right-handed perspective construction as ordinary output rendering.</summary>
+    ::float4x4 Win32RenderManager3D::BuildSceneViewProjection(ICamera* camera,const D3D11_VIEWPORT& viewport) {
+        float3 position=camera->get_Parent()->get_Position();const float4 orientation=camera->get_Parent()->get_Orientation();
+        float3 target=position+float4::RotateVector(float3(0,0,-1),orientation);float3 up=float4::RotateVector(float3(0,1,0),orientation);
+        ::float4x4 view,projection,result;float4x4::CreateLookAt__ref0_ref1_ref2_out3(position,target,up,view);
+        RealEvaluation nearPlane=camera->get_NearPlaneDistance(),farPlane=camera->get_FarPlaneDistance();
+        if(nearPlane<=0 || farPlane<=nearPlane) throw std::invalid_argument("Scene rendering requires valid authored camera clipping planes.");
+        float4x4::CreatePerspectiveFieldOfView__out4(camera->get_FieldOfView(),viewport.Width/viewport.Height,nearPlane,farPlane,projection);
+        float4x4::Multiply__ref0_ref1_out2(view,projection,result);return result;
+    }
+    /// <summary>Traverses authoritative scene drawables with union layer eligibility, independent of per-window render queues.</summary>
+    bool Win32RenderManager3D::UpdateSceneSsgi() {
+        if(!SceneSsgi) return true;
+        if(!SsgiSun->get_Parent() || !SsgiFirstCamera->get_Parent() || !SsgiSecondCamera->get_Parent()) throw std::logic_error("ClearSceneSsgi must precede destruction of its registered scene sources.");
+        if(!SceneSsgi->TryPrepare()) return false;
+        const D3D11_VIEWPORT viewport=ResolveSceneSsgiViewport(SsgiFirstCamera),otherViewport=ResolveSceneSsgiViewport(SsgiSecondCamera);
+        if(viewport.Width<=0 || viewport.Height<=0 || viewport.Width!=otherViewport.Width || viewport.Height!=otherViewport.Height) {
+            // Window resize messages can arrive separately. Await synchronized layouts without displaying a stale field.
+            LastSsgiUpdateSeconds=-1;return false;
+        }
+        ::float4x4 projection=BuildSceneViewProjection(SsgiFirstCamera,viewport),otherProjection=BuildSceneViewProjection(SsgiSecondCamera,otherViewport);
+        const auto first=StoreMatrix(projection),second=StoreMatrix(otherProjection);
+        const float* firstValues=&first._11;const float* secondValues=&second._11;
+        for(unsigned index=0;index<16;++index) if(std::abs(firstValues[index]-secondValues[index])>0.00001f)
+            throw std::logic_error("Shared SSGI cameras must retain the same pose and projection.");
+        const UINT width=static_cast<UINT>(std::ceil(viewport.Width)),height=static_cast<UINT>(std::ceil(viewport.Height));
+        const double updateSeconds=SsgiOwner->get_TotalElapsedSeconds();
+        if(LastSsgiUpdateSeconds==updateSeconds && width==SsgiSourceWidth && height==SsgiSourceHeight) return true;
+        ::float4x4 transposed;float4x4::Transpose__ref0_out1(projection,transposed);const auto matrix=StoreMatrix(transposed);
+        std::array<float,36> parameters{};std::memcpy(parameters.data(),&matrix,16*sizeof(float));parameters[19]=SsgiIndirectOnly?1.0f:0.0f;
+        const auto position=SsgiFirstCamera->get_Parent()->get_Position();const auto forward=float4::RotateVector(float3(0,0,-1),SsgiFirstCamera->get_Parent()->get_Orientation());
+        parameters[20]=position.X.ToSingle();parameters[21]=position.Y.ToSingle();parameters[22]=position.Z.ToSingle();parameters[24]=forward.X.ToSingle();parameters[25]=forward.Y.ToSingle();parameters[26]=forward.Z.ToSingle();
+        const auto sunDirection=LightDirectionUtility::GetEntityForwardDirection(SsgiSun->get_Parent());const auto sunColor=SsgiSun->get_Color();
+        const float intensity=SsgiSun->get_Parent()->get_IsHierarchyEnabled()?SsgiSun->get_Intensity():0;
+        parameters[28]=sunDirection.X.ToSingle();parameters[29]=sunDirection.Y.ToSingle();parameters[30]=sunDirection.Z.ToSingle();parameters[32]=sunColor.X.ToSingle()*intensity;parameters[33]=sunColor.Y.ToSingle()*intensity;parameters[34]=sunColor.Z.ToSingle()*intensity;
+        auto* context=Bootstrap.GetDeviceContext();SceneSsgi->BeginCapture(context,width,height,parameters);CurrentViewProjection=projection;CurrentCameraPosition=position;
+        ID3D11Buffer* transform=TransformBuffer.Get();context->VSSetConstantBuffers(0,1,&transform);context->PSSetConstantBuffers(0,1,&transform);
+        auto* drawables=SsgiOwner->get_ObjectManager()->get_Drawables3D();const auto layers=SsgiFirstCamera->get_LayerMask()|SsgiSecondCamera->get_LayerMask();unsigned contributors=0;
+        SsgiCaptureActive=true;
+        try {
+            for(int index=0;index<drawables->Count();++index) {
+                auto* drawable=(*drawables)[index];if(!drawable || !drawable->get_Parent() || !drawable->get_Parent()->get_IsHierarchyEnabled() || (drawable->get_Parent()->get_LayerMask()&layers)==0) continue;
+                Visit(drawable);++contributors;
+            }
+        } catch(...) {SsgiCaptureActive=false;Win32SceneSsgi::ClearBindings(context);throw;}
+        SsgiCaptureActive=false;SceneSsgi->EndCapture(context);
+        if(LastSsgiUpdateSeconds<0 || width!=SsgiSourceWidth || height!=SsgiSourceHeight)
+            RuntimeRenderDiagnostics::WriteHostEvent("scene-ssgi-capture","shared_cameras=2 contributors="+std::to_string(contributors)+" source="+std::to_string(width)+"x"+std::to_string(height)+" source_feedback=0");
+        LastSsgiUpdateSeconds=updateSeconds;SsgiSourceWidth=width;SsgiSourceHeight=height;return true;
+    }
+
+    /// <summary>Prepares complete live resources before replacing explicitly selected legacy transport.</summary>
+    void Win32RenderManager3D::ConfigureSceneInk(Core* owner,DirectionalLightComponent* sun,DirectionalLightComponent* moon,ICamera* firstCamera,ICamera* secondCamera,const Win32SceneInkConfiguration& configuration) {
+        if(!owner || !sun || !moon || sun==moon || !firstCamera || !secondCamera || firstCamera==secondCamera || !sun->get_Parent() || !moon->get_Parent() || !firstCamera->get_Parent() || !secondCamera->get_Parent()) throw std::invalid_argument("Realtime ink requires a live scene, distinct sun/moon sources and two distinct live cameras.");
+        if(SceneInk) throw std::logic_error("ClearSceneInk must precede realtime scene reconfiguration.");
+        if(CameraToonPasses.find(firstCamera)==CameraToonPasses.end() || CameraToonPasses.find(secondCamera)==CameraToonPasses.end()) throw std::logic_error("Realtime ink requires prior toon registration for both scene cameras.");
+        auto replacement=std::make_unique<Win32SceneInk>(Bootstrap.GetDevice(),configuration);
+        ClearSceneSsgi();
+#ifdef HELENGINE_LIGHTMAP
+        ClearSceneLightmap();
+#endif
+#ifdef HELENGINE_VOXEL_GI
+        ClearSceneGi();
+#endif
+        SceneInk=std::move(replacement);InkOwner=owner;InkSun=sun;InkMoon=moon;InkFirstCamera=firstCamera;InkSecondCamera=secondCamera;
+        LastInkShadowSeconds=LastInkBudgetSeconds=-1;LastInkShadowLight=nullptr;InkShadowDraws=0;InkShadowCascades={};InkShadowCasters.clear();InkShadowGeometry.clear();
+        RuntimeRenderDiagnostics::WriteHostEvent("scene-ink-configure","profile=realtime face_edge=128 face_interval="+std::to_string(configuration.FaceIntervalSeconds)+" shadow_edge=1024 max_shadow_lights=1 raster_only=1 indirect_trace=0");
+    }
+
+    /// <summary>Requires explicit configuration before changing any live palette or reflection volume inputs.</summary>
+    void Win32RenderManager3D::UpdateSceneInk(const Win32SceneInkConfiguration& configuration) {
+        if(!SceneInk) throw std::logic_error("ConfigureSceneInk must precede palette updates.");SceneInk->Update(configuration);
+    }
+
+    /// <summary>Releases live bindings and borrowed source identities without reconstructing a legacy profile.</summary>
+    void Win32RenderManager3D::ClearSceneInk() {
+        if(InkCaptureActive) throw std::logic_error("Cannot remove realtime ink during its active capture.");
+        if(SceneInk) Win32SceneInk::Unbind(Bootstrap.GetDeviceContext());SceneInk.reset();InkOwner=nullptr;InkSun=InkMoon=nullptr;InkFirstCamera=InkSecondCamera=nullptr;LastInkShadowSeconds=LastInkBudgetSeconds=-1;LastInkShadowLight=nullptr;InkShadowDraws=0;InkShadowCascades={};InkShadowCasters.clear();InkShadowGeometry.clear();
+    }
+
+    /// <summary>Uses the actual live sun/moon and their existing enabled flags for all room output and reflection draws.</summary>
+    std::vector<LightComponent*> Win32RenderManager3D::SnapshotInkLights() const {
+        std::vector<LightComponent*> result;
+        // Reserve three local-light slots and use the dominant celestial source in the fourth.
+        auto* celestial=InkSun->get_Intensity()>=InkMoon->get_Intensity()?InkSun:InkMoon;
+        if(celestial->get_Parent()->get_IsHierarchyEnabled()) result.push_back(celestial);
+        auto* points=InkOwner->get_ObjectManager()->get_PointLights();
+        for(int index=0;index<points->Count();++index) {
+            auto* point=(*points)[index];
+            if(point && point->get_Parent() && point->get_Parent()->get_IsHierarchyEnabled() && point->get_Intensity()>0
+                && (point->get_Parent()->get_LayerMask()&(InkFirstCamera->get_LayerMask()|InkSecondCamera->get_LayerMask()))!=0 && result.size()<4) result.push_back(point);
+        }
+        auto* spots=InkOwner->get_ObjectManager()->get_SpotLights();
+        for(int index=0;index<spots->Count();++index) {
+            auto* spot=(*spots)[index];
+            if(spot && spot->get_Parent() && spot->get_Parent()->get_IsHierarchyEnabled() && spot->get_Intensity()>0
+                && (spot->get_Parent()->get_LayerMask()&(InkFirstCamera->get_LayerMask()|InkSecondCamera->get_LayerMask()))!=0) result.push_back(spot);
+        }
+        return result;
+    }
+
+    /// <summary>Rasterizes the authoritative 3D drawable union once per due face with no 2D or receiver feedback.</summary>
+    bool Win32RenderManager3D::UpdateSceneInkCapture() {
+        if(!SceneInk) return true;
+        if(!InkFirstCamera->get_Parent() || !InkSecondCamera->get_Parent()) throw std::logic_error("ClearSceneInk must precede destruction of its registered cameras.");
+        auto* first=CameraToonPasses.at(InkFirstCamera).get();auto* second=CameraToonPasses.at(InkSecondCamera).get();
+        if(!first->TryPrepare() || !second->TryPrepare()) return false;
+        const double seconds=InkOwner->get_TotalElapsedSeconds();
+        if(!SceneInk->IsFaceDue(seconds)) return true;
+        auto* context=Bootstrap.GetDeviceContext();Win32SceneInkGpuState previousGpu(context);
+        const auto previousProjection=CurrentViewProjection;const auto previousPosition=CurrentCameraPosition;auto* previousToon=ActiveToonPass;
+        try {
+            const auto lights=SnapshotInkLights();PrepareForwardLightState(lights);PrepareShadowState(InkFirstCamera,lights);
+            const auto& configuration=SceneInk->GetCaptureConfiguration();const unsigned face=SceneInk->GetNextFace();
+            const float directions[6][3]={{1,0,0},{-1,0,0},{0,1,0},{0,-1,0},{0,0,1},{0,0,-1}};
+            const float ups[6][3]={{0,1,0},{0,1,0},{0,0,-1},{0,0,1},{0,1,0},{0,1,0}};
+            float3 position(configuration.Position[0],configuration.Position[1],configuration.Position[2]);float3 target=position+float3(directions[face][0],directions[face][1],directions[face][2]);float3 up(ups[face][0],ups[face][1],ups[face][2]);
+            ::float4x4 view,projection;float4x4::CreateLookAt__ref0_ref1_ref2_out3(position,target,up,view);
+            if(InkFirstCamera->get_FarPlaneDistance()<=0.02f) throw std::logic_error("Ink capture requires a valid room camera far plane.");
+            float4x4::CreatePerspectiveFieldOfView__out4(std::numbers::pi/2,1,0.02f,InkFirstCamera->get_FarPlaneDistance(),projection);
+            // Direct3D cube coordinates require a left-handed face basis. Mirror the ordinary right-handed horizontal projection and preserve authored culling below.
+            projection.M11=-projection.M11;
+            float4x4::Multiply__ref0_ref1_out2(view,projection,CurrentViewProjection);CurrentCameraPosition=position;
+            SceneInk->BeginFace(context);InkCaptureActive=true;
+            auto* transform=TransformBuffer.Get();context->VSSetConstantBuffers(0,1,&transform);context->PSSetConstantBuffers(0,1,&transform);
+            auto* drawables=InkOwner->get_ObjectManager()->get_Drawables3D();const auto layers=InkFirstCamera->get_LayerMask()|InkSecondCamera->get_LayerMask();std::unordered_set<IDrawable3D*> visited;
+            for(auto* camera:{InkFirstCamera,InkSecondCamera}) {
+                ActiveToonPass=camera==InkFirstCamera?first:second;
+                for(int index=0;index<drawables->Count();++index) {
+                    auto* drawable=(*drawables)[index];if(!drawable || !drawable->get_Parent() || !drawable->get_Parent()->get_IsHierarchyEnabled() || (drawable->get_Parent()->get_LayerMask()&camera->get_LayerMask()&layers)==0 || !visited.insert(drawable).second) continue;
+                    Visit(drawable);
+                }
+            }
+            InkCaptureActive=false;SceneInk->EndFace(context,seconds);
+        } catch(...) {InkCaptureActive=false;SceneInk->CancelFace();ActiveToonPass=previousToon;CurrentViewProjection=previousProjection;CurrentCameraPosition=previousPosition;throw;}
+        ActiveToonPass=previousToon;CurrentViewProjection=previousProjection;CurrentCameraPosition=previousPosition;
+        if(LastInkBudgetSeconds<0 || seconds-LastInkBudgetSeconds>=1) {
+            RuntimeRenderDiagnostics::WriteHostEvent("scene-ink-budget","captured_faces="+std::to_string(SceneInk->GetCapturedFaces())+" published_cycles="+std::to_string(SceneInk->GetPublishedCycles())+" shadow_passes="+std::to_string(InkShadowDraws)+" face_edge=128 shadow_edge=1024 shadow_cascades=2 shadow_atlas=2048x1792 spot_shadow_edge=512 point_face_edge=256 local_shadow_lights=3 max_faces_per_update=1 max_shadow_lights=4 gpu_timing=unmeasured");LastInkBudgetSeconds=seconds;
+        }
+        return true;
+    }
+
     /// Returns the number of uploaded texture resources currently cached by the Windows bridge.
     std::size_t Win32RenderManager3D::GetTextureResourceCount() const {
         return TextureResources.size();
@@ -1102,10 +1286,51 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
         return LiveMaterialConstantBufferBytes;
     }
 
+#ifdef HELENGINE_LIGHTMAP
+    void Win32RenderManager3D::ConfigureSceneLightmap(Core* owner,DirectionalLightComponent* sun,ICamera* mainCamera,ICamera* glassCamera,const std::string& path,bool exportMode,const hellm::ProbeSettings& probe) {
+        if(SceneLightmap) throw std::logic_error("ClearSceneLightmap must precede reconfiguration.");
+        ClearSceneInk();
+        ClearSceneSsgi();
+#ifdef HELENGINE_VOXEL_GI
+        ClearSceneGi();
+#endif
+        SceneLightmap=std::make_unique<Win32SceneLightmap>(owner,sun,mainCamera,glassCamera,*RenderManager2DBridge,*this,path,exportMode,probe);
+    }
+    float Win32RenderManager3D::GetSceneLightmapMetallic(ICamera* mainCamera,ICamera* glassCamera,RuntimeMaterial* material) const {
+        const auto main=CameraToonPasses.find(mainCamera),glass=CameraToonPasses.find(glassCamera);
+        if(main==CameraToonPasses.end() || glass==CameraToonPasses.end()) throw std::logic_error("Static material capture requires both registered scene cameras.");
+        const float value=main->second->GetMaterialMetallic(material);
+        if(value!=glass->second->GetMaterialMetallic(material)) throw std::logic_error("Static metallic transport must agree between scene cameras.");
+        return value;
+    }
+    void Win32RenderManager3D::ClearSceneLightmap() {
+        Win32SceneLightmap::Unbind(Bootstrap.GetDeviceContext());SceneLightmap.reset();
+    }
+    hellm::Texture Win32RenderManager2D::GetLightmapTexture(RuntimeTexture* texture) const {
+        if(!texture) return {};
+        const auto found=RuntimeTextureResourceOwners.find(texture);
+        if(found==RuntimeTextureResourceOwners.end() || !found->second) throw std::logic_error("Lightmap diffuse texture has no retained upload resource.");
+        const auto& resource=*found->second;
+        if(resource.LightmapRgba.size()!=static_cast<std::size_t>(resource.Width)*resource.Height*4) throw std::logic_error("Lightmap diffuse texture has no retained RGBA8 pixels.");
+        hellm::Texture result;result.Width=resource.Width;result.Height=resource.Height;result.Pixels.reserve(resource.LightmapRgba.size()/4);
+        for(std::size_t index=0;index<resource.LightmapRgba.size();index+=4) {
+            if(resource.LightmapRgba[index+3]!=255) throw std::invalid_argument("Static lightmap transport does not support alpha-cutout diffuse textures.");
+            result.Pixels.push_back({resource.LightmapRgba[index]/255.0f,resource.LightmapRgba[index+1]/255.0f,resource.LightmapRgba[index+2]/255.0f});
+        }
+        return result;
+    }
+#endif
+
     /// Builds a GPU-ready runtime model from raw mesh asset metadata.
     RuntimeModel* Win32RenderManager3D::BuildModelFromRaw(ModelAsset* data) {
         Win32RuntimeModel* runtimeModel = new Win32RuntimeModel();
         if (data != nullptr) {
+#ifdef HELENGINE_VOXEL_GI
+            runtimeModel->GiMesh=Win32SceneGi::CaptureMesh(data);
+#endif
+#ifdef HELENGINE_LIGHTMAP
+            runtimeModel->LightmapMesh=Win32SceneLightmap::CaptureMesh(data);
+#endif
             HeCppString modelId = data->get_Id();
             runtimeModel->set_Id(modelId);
 #if __has_include("ModelSubmeshResolver.hpp")
@@ -1454,6 +1679,14 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
 
     /// Releases Windows renderer-owned 3D resources.
     void Win32RenderManager3D::Dispose() {
+        ClearSceneInk();
+#ifdef HELENGINE_LIGHTMAP
+        ClearSceneLightmap();
+#endif
+        ClearSceneSsgi();
+#ifdef HELENGINE_VOXEL_GI
+        ClearSceneGi();
+#endif
         ShaderCompilation.reset();
         PipelinePrepared=false;
         ActiveToonPass = nullptr;
@@ -1478,10 +1711,11 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
         TransformBuffer.Reset();
         ShadowTransformBuffer.Reset();
         DebugTriangleBuffer.Reset();
-        RasterizerState.Reset();
-        MultisampleRasterizerState.Reset();
+        MaterialRasterizers.Reset();
+        MaterialOutputs.Reset();
         DepthStencilState.Reset();
         ShadowRasterizerState.Reset();
+        InkShadowRasterizerState.Reset();
         ShadowDepthStencilState.Reset();
         ShadowVertexShader.Reset();
         ShadowPixelShader.Reset();
@@ -1497,7 +1731,19 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
         }
 
         RenderManager3D::Draw();
-        OutputReadiness.Begin(EnsurePipelineState());
+#ifdef HELENGINE_LIGHTMAP
+        if(SceneLightmap) SceneLightmap->Update(Bootstrap.GetDevice());
+#endif
+#ifdef HELENGINE_VOXEL_GI
+        if(SceneGi) SceneGi->Update(Bootstrap.GetDeviceContext());
+#endif
+        const bool pipelineReady=EnsurePipelineState();
+        const bool ssgiReady=!pipelineReady || UpdateSceneSsgi();
+        const bool inkReady=!pipelineReady || UpdateSceneInkCapture();
+#ifdef HELENGINE_VOXEL_GI
+        if(pipelineReady) UpdateSceneGiUsage();
+#endif
+        OutputReadiness.Begin(pipelineReady && ssgiReady && inkReady);
         if (!HasWrittenRenderSnapshot) {
             AppendRenderSnapshotLine("draw begin");
             AppendRenderDiagnosticsLine("3d.draw begin");
@@ -1812,10 +2058,12 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
                 constants.WorldViewProjection = StoreMatrix(transposedWorldViewProjection);
                 constants.WorldNormal = StoreMatrix(uploadedNormalMatrix);
                 constants.CameraPosition = DirectX::XMFLOAT4(CurrentCameraPosition.X.ToSingle(), CurrentCameraPosition.Y.ToSingle(), CurrentCameraPosition.Z.ToSingle(), 0.0f);
+                if(runtimeMaterial!=nullptr && runtimeMaterial->get_RenderState()==nullptr)
+                    throw new InvalidOperationException("Runtime materials require render state before drawing.");
                 constants.MaterialFlags = DirectX::XMFLOAT4(
                     runtimeMaterial != nullptr && runtimeMaterial->get_ReceivesShadows() ? 1.0f : 0.0f,
                     runtimeMaterial != nullptr && runtimeMaterial->get_SupportsEmissive() ? 1.0f : 0.0f,
-                    0.0f,
+                    runtimeMaterial != nullptr && runtimeMaterial->get_RenderState()->get_BlendMode()==MaterialBlendMode::AlphaBlend ? 1.0f : 0.0f,
                     0.0f);
                 constants.LightDirection = DirectX::XMFLOAT4(-0.35f, -0.65f, -0.55f, 0.0f);
                 constants.LightColor = DirectX::XMFLOAT4(1.0f, 1.0f, 1.0f, 1.0f);
@@ -1844,6 +2092,7 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
                     context->PSSetSamplers(2, 1, &pointShadowSamplerState);
                 } else {
                     visitStage = "bind_default_pipeline";
+                    RenderManager2DBridge->BindOutputEncoding();
                     context->IASetInputLayout(InputLayout.Get());
                     context->VSSetShader(VertexShader.Get(), nullptr, 0);
                     context->PSSetShader(PixelShader.Get(), nullptr, 0);
@@ -1859,15 +2108,44 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
                     if (rootMaterial == nullptr) {
                         throw std::logic_error("Camera toon geometry requires a packaged standard material.");
                     }
-                    ActiveToonPass->BindRegisteredGeometry(context,runtimeMaterial);
+                    const bool inkGeometry=SceneInk && (InkCaptureActive || ActiveToonPass==CameraToonPasses.at(InkFirstCamera).get() || ActiveToonPass==CameraToonPasses.at(InkSecondCamera).get());
+                    if(InkCaptureActive) ActiveToonPass->BindCaptureGeometry(context,runtimeMaterial);
+                    else ActiveToonPass->BindRegisteredGeometry(context,runtimeMaterial,inkGeometry,constants.MaterialFlags.z>0.5f,drawable);
+                    if(inkGeometry) SceneInk->Bind(context,InkCaptureActive);
                 }
 
+                if(SsgiCaptureActive) {
+                    if(rootMaterial==nullptr) throw std::logic_error("Shared SSGI capture requires authored standard material reflectance.");
+                    SceneSsgi->BindCaptureGeometry(context);
+                } else if(SceneSsgi && SsgiReceiverActive && ActiveToonPass!=nullptr) SceneSsgi->BindReceiver(context);
+
+#ifdef HELENGINE_VOXEL_GI
+                if(ActiveGiUsage) {
+                    if(!rootMaterial) throw std::logic_error("Receiver usage requires the ordinary authored material alpha coverage.");
+                    ActiveGiUsage->BindGeometry();
+                }
+#endif
                 int32_t startElement = ResolveRuntimeSubmeshStart(submesh);
                 int32_t elementCount = ResolveRuntimeSubmeshElementCount(submesh, model);
                 if (elementCount <= 0) {
                     continue;
                 }
 
+#ifdef HELENGINE_VOXEL_GI
+                if(ActiveToonPass!=nullptr) {
+                    if(SceneGi) SceneGi->Bind(context);
+                    else {
+                        ID3D11Buffer* noGiBuffer=nullptr;ID3D11ShaderResourceView* noGiView=nullptr;
+                        context->PSSetConstantBuffers(9,1,&noGiBuffer);context->PSSetShaderResources(17,1,&noGiView);
+                    }
+                }
+#endif
+                ApplyMaterialRasterizer(runtimeMaterial);
+                if(!SsgiCaptureActive) ApplyMaterialOutput(runtimeMaterial);
+#ifdef HELENGINE_LIGHTMAP
+                const auto* lightmapDraw=SceneLightmap && ActiveToonPass && !IsShadowPassActive && !SsgiCaptureActive ? SceneLightmap->Bind(context,CurrentLightmapCamera,drawable,submeshIndex) : nullptr;
+                if(lightmapDraw) {ActiveToonPass->BindLightmapGeometry(context,runtimeMaterial);context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);context->Draw(lightmapDraw->Count,0);Win32SceneLightmap::Unbind(context);context->IASetVertexBuffers(0,1,&vertexBuffer,&stride,&offset);continue;}
+#endif
                 context->IASetPrimitiveTopology(ResolveDirectXTopology(submesh));
                 visitStage = model->IndexBuffer && model->IndexCount > 0 ? "draw_indexed" : "draw_vertices";
                 if (model->IndexBuffer && model->IndexCount > 0) {
@@ -1875,6 +2153,12 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
                 } else {
                     context->Draw(static_cast<UINT>(elementCount), static_cast<UINT>(startElement));
                 }
+#ifdef HELENGINE_VOXEL_GI
+                if(ActiveToonPass!=nullptr) {
+                    ID3D11Buffer* noGiBuffer=nullptr;ID3D11ShaderResourceView* noGiView=nullptr;
+                    context->PSSetConstantBuffers(9,1,&noGiBuffer);context->PSSetShaderResources(17,1,&noGiView);
+                }
+#endif
             }
         } catch (const std::bad_alloc&) {
             std::string materialId = snapshotRootMaterial != nullptr ? snapshotRootMaterial->get_Id().raw() : std::string("<null>");
@@ -1943,18 +2227,8 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
             EnsureTextureSamplerState();
             EnsureWhiteTextureFallbackResource();
 
-            D3D11_RASTERIZER_DESC rasterizerDescription {};
-            rasterizerDescription.FillMode = D3D11_FILL_SOLID;
-            rasterizerDescription.CullMode = D3D11_CULL_NONE;
-            rasterizerDescription.FrontCounterClockwise = TRUE;
-            rasterizerDescription.DepthClipEnable = TRUE;
-
-            ThrowIfFailed(
-                Bootstrap.GetDevice()->CreateRasterizerState(&rasterizerDescription, RasterizerState.GetAddressOf()),
-                "ID3D11Device::CreateRasterizerState failed for the Windows bridge.");
-            rasterizerDescription.MultisampleEnable = TRUE;
-            ThrowIfFailed(Bootstrap.GetDevice()->CreateRasterizerState(&rasterizerDescription, MultisampleRasterizerState.GetAddressOf()),
-                "Create multisampled Windows 3D rasterizer state failed.");
+            MaterialRasterizers.Initialize(Bootstrap.GetDevice());
+            MaterialOutputs.Initialize(Bootstrap.GetDevice());
 
             D3D11_DEPTH_STENCIL_DESC depthStencilDescription {};
             depthStencilDescription.DepthEnable = TRUE;
@@ -2056,34 +2330,7 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
             Bootstrap.GetDevice()->CreateBuffer(&shadowTransformBufferDescription, nullptr, ShadowTransformBuffer.GetAddressOf()),
             "ID3D11Device::CreateBuffer failed for the Windows bridge shadow transform buffer.");
 
-        D3D11_TEXTURE2D_DESC shadowTextureDescription {};
-        shadowTextureDescription.Width = DirectionalShadowMapResolution;
-        shadowTextureDescription.Height = DirectionalShadowMapResolution;
-        shadowTextureDescription.MipLevels = 1;
-        shadowTextureDescription.ArraySize = 1;
-        shadowTextureDescription.Format = DXGI_FORMAT_R32_TYPELESS;
-        shadowTextureDescription.SampleDesc.Count = 1;
-        shadowTextureDescription.Usage = D3D11_USAGE_DEFAULT;
-        shadowTextureDescription.BindFlags = D3D11_BIND_DEPTH_STENCIL | D3D11_BIND_SHADER_RESOURCE;
-        ThrowIfFailed(
-            Bootstrap.GetDevice()->CreateTexture2D(&shadowTextureDescription, nullptr, ShadowMapTexture.GetAddressOf()),
-            "ID3D11Device::CreateTexture2D failed for the Windows bridge shadow map.");
-
-        D3D11_DEPTH_STENCIL_VIEW_DESC shadowDepthStencilViewDescription {};
-        shadowDepthStencilViewDescription.Format = DXGI_FORMAT_D32_FLOAT;
-        shadowDepthStencilViewDescription.ViewDimension = D3D11_DSV_DIMENSION_TEXTURE2D;
-        ThrowIfFailed(
-            Bootstrap.GetDevice()->CreateDepthStencilView(ShadowMapTexture.Get(), &shadowDepthStencilViewDescription, ShadowMapDepthStencilView.GetAddressOf()),
-            "ID3D11Device::CreateDepthStencilView failed for the Windows bridge shadow depth buffer.");
-
-        D3D11_SHADER_RESOURCE_VIEW_DESC shadowShaderResourceViewDescription {};
-        shadowShaderResourceViewDescription.Format = DXGI_FORMAT_R32_FLOAT;
-        shadowShaderResourceViewDescription.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
-        shadowShaderResourceViewDescription.Texture2D.MipLevels = 1;
-        shadowShaderResourceViewDescription.Texture2D.MostDetailedMip = 0;
-        ThrowIfFailed(
-            Bootstrap.GetDevice()->CreateShaderResourceView(ShadowMapTexture.Get(), &shadowShaderResourceViewDescription, ShadowMapShaderResourceView.GetAddressOf()),
-            "ID3D11Device::CreateShaderResourceView failed for the Windows bridge shadow map.");
+        ResizeDirectionalShadowMap(DirectionalShadowMapResolution,SceneInk?1024:DirectionalShadowMapResolution);
 
         D3D11_SAMPLER_DESC shadowSamplerDescription {};
         shadowSamplerDescription.Filter = D3D11_FILTER_MIN_MAG_MIP_LINEAR;
@@ -2096,16 +2343,14 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
             Bootstrap.GetDevice()->CreateSamplerState(&shadowSamplerDescription, ShadowSamplerState.GetAddressOf()),
             "ID3D11Device::CreateSamplerState failed for the Windows bridge shadow sampler.");
 
-        D3D11_RASTERIZER_DESC shadowRasterizerDescription {};
-        shadowRasterizerDescription.FillMode = D3D11_FILL_SOLID;
-        shadowRasterizerDescription.CullMode = D3D11_CULL_NONE;
-        shadowRasterizerDescription.FrontCounterClockwise = TRUE;
-        shadowRasterizerDescription.DepthClipEnable = TRUE;
-        shadowRasterizerDescription.DepthBias = ShadowDepthBias;
-        shadowRasterizerDescription.SlopeScaledDepthBias = ShadowSlopeScaledDepthBias;
+        auto shadowRasterizerDescription=Win32ShadowRasterizerState::Describe(false);
         ThrowIfFailed(
             Bootstrap.GetDevice()->CreateRasterizerState(&shadowRasterizerDescription, ShadowRasterizerState.GetAddressOf()),
             "ID3D11Device::CreateRasterizerState failed for the Windows bridge shadow rasterizer state.");
+        shadowRasterizerDescription=Win32ShadowRasterizerState::Describe(true);
+        ThrowIfFailed(
+            Bootstrap.GetDevice()->CreateRasterizerState(&shadowRasterizerDescription,InkShadowRasterizerState.GetAddressOf()),
+            "ID3D11Device::CreateRasterizerState failed for the Windows bridge hard ink shadow rasterizer state.");
 
         D3D11_DEPTH_STENCIL_DESC shadowDepthStencilDescription {};
         shadowDepthStencilDescription.DepthEnable = TRUE;
@@ -2114,6 +2359,43 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
         ThrowIfFailed(
             Bootstrap.GetDevice()->CreateDepthStencilState(&shadowDepthStencilDescription, ShadowDepthStencilState.GetAddressOf()),
             "ID3D11Device::CreateDepthStencilState failed for the Windows bridge shadow depth state.");
+    }
+
+    /// <summary>Creates all replacement depth views before replacing the last complete shadow allocation.</summary>
+    void Win32RenderManager3D::ResizeDirectionalShadowMap(UINT edge,UINT height) {
+        if(ShadowMapTexture && ShadowMapEdge==edge && ShadowMapHeight==height) return;
+        Microsoft::WRL::ComPtr<ID3D11Texture2D> texture;Microsoft::WRL::ComPtr<ID3D11DepthStencilView> depth;Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> view;
+        D3D11_TEXTURE2D_DESC shadowTextureDescription {};
+        shadowTextureDescription.Width = edge;
+        shadowTextureDescription.Height = height;
+        shadowTextureDescription.MipLevels = 1;
+        shadowTextureDescription.ArraySize = 1;
+        shadowTextureDescription.Format = DXGI_FORMAT_R32_TYPELESS;
+        shadowTextureDescription.SampleDesc.Count = 1;
+        shadowTextureDescription.Usage = D3D11_USAGE_DEFAULT;
+        shadowTextureDescription.BindFlags = D3D11_BIND_DEPTH_STENCIL | D3D11_BIND_SHADER_RESOURCE;
+        ThrowIfFailed(
+            Bootstrap.GetDevice()->CreateTexture2D(&shadowTextureDescription, nullptr, texture.GetAddressOf()),
+            "ID3D11Device::CreateTexture2D failed for the Windows bridge shadow map.");
+
+        D3D11_DEPTH_STENCIL_VIEW_DESC shadowDepthStencilViewDescription {};
+        shadowDepthStencilViewDescription.Format = DXGI_FORMAT_D32_FLOAT;
+        shadowDepthStencilViewDescription.ViewDimension = D3D11_DSV_DIMENSION_TEXTURE2D;
+        ThrowIfFailed(
+            Bootstrap.GetDevice()->CreateDepthStencilView(texture.Get(), &shadowDepthStencilViewDescription, depth.GetAddressOf()),
+            "ID3D11Device::CreateDepthStencilView failed for the Windows bridge shadow depth buffer.");
+
+        D3D11_SHADER_RESOURCE_VIEW_DESC shadowShaderResourceViewDescription {};
+        shadowShaderResourceViewDescription.Format = DXGI_FORMAT_R32_FLOAT;
+        shadowShaderResourceViewDescription.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
+        shadowShaderResourceViewDescription.Texture2D.MipLevels = 1;
+        shadowShaderResourceViewDescription.Texture2D.MostDetailedMip = 0;
+        ThrowIfFailed(
+            Bootstrap.GetDevice()->CreateShaderResourceView(texture.Get(), &shadowShaderResourceViewDescription, view.GetAddressOf()),
+            "ID3D11Device::CreateShaderResourceView failed for the Windows bridge shadow map.");
+
+        ID3D11ShaderResourceView* empty=nullptr;Bootstrap.GetDeviceContext()->PSSetShaderResources(1,1,&empty);
+        ShadowMapTexture=std::move(texture);ShadowMapDepthStencilView=std::move(depth);ShadowMapShaderResourceView=std::move(view);ShadowMapEdge=edge;ShadowMapHeight=height;LastInkShadowSeconds=-1;
     }
 
     /// Creates the default sampler used by material texture bindings.
@@ -2215,6 +2497,11 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
         }
     }
 
+    void Win32RenderManager3D::ConfigureCameraSelection(ICamera* camera,int rgb,float radius,float left,float top,float right,float bottom) {
+        ConfigureCameraToon(camera,true,0,0,3);
+        CameraToonPasses.at(camera)->ConfigureSelection(((rgb>>16)&255)/255.0f,((rgb>>8)&255)/255.0f,(rgb&255)/255.0f,radius,left,top,right,bottom);
+    }
+
     /// Requires existing camera registration so optional effects never invent outline settings.
     void Win32RenderManager3D::ConfigureCameraToonEffects(ICamera* camera, const CameraToonEffectsConfiguration& configuration) {
         auto found=CameraToonPasses.find(camera);
@@ -2223,10 +2510,10 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
     }
 
     /// Borrows the exact material instance submitted by the camera's drawable.
-    void Win32RenderManager3D::ConfigureCameraToonMaterialEffects(ICamera* camera, RuntimeMaterial* material, float reflectivity, float bloomWeight, bool pearlSurface) {
+    void Win32RenderManager3D::ConfigureCameraToonMaterialEffects(ICamera* camera, RuntimeMaterial* material, float reflectivity, float bloomWeight, bool pearlSurface, bool toonSurface, float outlineScale, float metallic, bool outlineOnly) {
         auto found=CameraToonPasses.find(camera);
         if(found==CameraToonPasses.end()) throw std::invalid_argument("Camera material effects require prior ConfigureCameraToon registration.");
-        found->second->ConfigureMaterialEffects(material,reflectivity,bloomWeight,pearlSurface);
+        found->second->ConfigureMaterialEffects(material,reflectivity,bloomWeight,pearlSurface,toonSurface,outlineScale,metallic,outlineOnly);
     }
 
     /// Performs the explicitly requested environment upload on the renderer's immediate context.
@@ -2236,9 +2523,20 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
         found->second->SetEnvironment(Bootstrap.GetDeviceContext(),width,height,rgbaBytes,byteCount);
     }
 
+    /// Explicitly pairs queues without changing visibility or borrowing any foreign scene objects.
+    void Win32RenderManager3D::ConfigureCameraShadowPeer(ICamera* camera, ICamera* peer) {
+        if (camera == nullptr || peer == nullptr || camera == peer) throw std::invalid_argument("Shadow sharing requires two distinct cameras.");
+        CameraShadowPeers[camera] = peer;
+    }
+
     /// Removes exact camera identity without dereferencing a camera during entity teardown.
     void Win32RenderManager3D::ClearCameraToon(ICamera* camera) {
         if (camera == nullptr) throw std::invalid_argument("Camera toon removal requires a camera identity.");
+        CameraShadowPeers.erase(camera);
+        for (auto entry = CameraShadowPeers.begin(); entry != CameraShadowPeers.end();) {
+            if (entry->second == camera) entry = CameraShadowPeers.erase(entry);
+            else ++entry;
+        }
         auto existing = CameraToonPasses.find(camera);
         if (existing != CameraToonPasses.end()) {
             if (ActiveToonPass == existing->second.get()) throw std::logic_error("Cannot remove camera toon settings during its active geometry pass.");
@@ -2248,10 +2546,23 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
 
     /// Clears the selected camera and finishes its optional toon composition before any 2D draw.
     bool Win32RenderManager3D::RenderCamera(ICamera* camera, bool clearColorBuffer) {
+#ifdef HELENGINE_LIGHTMAP
+        CurrentLightmapCamera=camera;Win32SceneLightmap::Unbind(Bootstrap.GetDeviceContext());
+#endif
         HELENGINE_TRACY_ZONE_N("D3D11.RenderCamera");
+#ifdef HELENGINE_VOXEL_GI
+        const bool debugMain=SceneGi && SceneGi->IsDebugSpheresEnabled() && camera==GiDebugMainCamera;
+        const bool debugGlass=SceneGi && SceneGi->IsDebugSpheresEnabled() && camera==GiDebugGlassCamera;
+#endif
+        bool indirectOnly=false;
+#ifdef HELENGINE_VOXEL_GI
+        indirectOnly=SceneGi && SceneGi->IsIndirectOnly() && (camera==GiDebugMainCamera || camera==GiDebugGlassCamera);
+#endif
+        Win32SceneInk::Unbind(Bootstrap.GetDeviceContext());
         auto toonRegistration=CameraToonPasses.find(camera);
         Win32CameraToonPass* toonPass=toonRegistration!=CameraToonPasses.end() ? toonRegistration->second.get() : nullptr;
-        const bool toonReady=toonPass==nullptr || toonPass->TryPrepare();
+        const bool sharedReceiver=SceneSsgi && (camera==SsgiFirstCamera || camera==SsgiSecondCamera);
+        Win32SceneSsgi::ClearBindings(Bootstrap.GetDeviceContext());
         ID3D11DeviceContext* context = Bootstrap.GetDeviceContext();
         ID3D11RenderTargetView* renderTargetView = OutputBootstrap->GetRenderTargetView();
         ID3D11DepthStencilView* depthStencilView = OutputBootstrap->GetDepthStencilView();
@@ -2259,11 +2570,24 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
         context->OMSetRenderTargets(1, &renderTargetView, depthStencilView);
 
         CameraClearSettings clearSettings = camera->get_ClearSettings();
-        if (clearColorBuffer) {
+        bool shouldClearColor=clearColorBuffer;
+#ifdef HELENGINE_VOXEL_GI
+        shouldClearColor=shouldClearColor || debugMain;
+#endif
+        if (shouldClearColor) {
             float4 clearColor = clearSettings.get_ClearColorEnabled() ? clearSettings.get_ClearColor() : float4(0.0f, 0.0f, 0.0f, 1.0f);
+#ifdef HELENGINE_VOXEL_GI
+            if(debugMain) clearColor=float4(0.08f,0.08f,0.08f,1);
+#endif
+            if(indirectOnly || (sharedReceiver && SsgiIndirectOnly)) clearColor=float4(0,0,0,clearColor.W);
+            if(OutputBootstrap->IsHdrOutput()) clearColor=float4(DirectX11OutputColorState::DecodeSrgb(clearColor.X.ToSingle()),DirectX11OutputColorState::DecodeSrgb(clearColor.Y.ToSingle()),DirectX11OutputColorState::DecodeSrgb(clearColor.Z.ToSingle()),clearColor.W);
             const float clearColorValues[] = { clearColor.X.ToSingle(), clearColor.Y.ToSingle(), clearColor.Z.ToSingle(), clearColor.W.ToSingle() };
             if (AlphaMode == Win32RenderAlphaMode::Premultiplied) {
                 float4 premultipliedClearColor = ResolvePremultipliedClearColor(clearColor);
+#ifdef HELENGINE_VOXEL_GI
+                if(debugMain) premultipliedClearColor=clearColor;
+#endif
+                if(indirectOnly || (sharedReceiver && SsgiIndirectOnly)) premultipliedClearColor=float4(0,0,0,premultipliedClearColor.W);
                 const float premultipliedClearColorValues[] = { premultipliedClearColor.X.ToSingle(), premultipliedClearColor.Y.ToSingle(), premultipliedClearColor.Z.ToSingle(), premultipliedClearColor.W.ToSingle() };
                 context->ClearRenderTargetView(renderTargetView, premultipliedClearColorValues);
             } else {
@@ -2282,6 +2606,20 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
             context->ClearDepthStencilView(depthStencilView, clearFlags, clearSettings.get_ClearDepth(), clearSettings.get_ClearStencil());
         }
 
+#ifdef HELENGINE_VOXEL_GI
+        if(debugMain || debugGlass) {
+            const D3D11_VIEWPORT viewport=ResolveViewport(camera);context->RSSetViewports(1,&viewport);
+            if(debugMain) {
+                if(!depthStencilView) throw std::logic_error("Voxel sphere diagnostics require the output depth attachment.");
+                context->ClearDepthStencilView(depthStencilView,D3D11_CLEAR_DEPTH,1,0);
+                const auto projection=StoreMatrix(BuildSceneViewProjection(camera,viewport));
+                SceneGi->DrawDebugSpheres(context,&projection._11);
+            }
+            RenderManager2DBridge->RenderCamera(camera);OutputReadiness.ObservePass(RenderManager2DBridge->IsPipelineReady());return true;
+        }
+#endif
+
+        const bool toonReady=(toonPass==nullptr || toonPass->TryPrepare()) && (!sharedReceiver || LastSsgiUpdateSeconds==SsgiOwner->get_TotalElapsedSeconds());
         if(!PipelinePrepared || !toonReady) {
             OutputReadiness.ObservePass(false);
             RenderManager2DBridge->RenderCamera(camera);
@@ -2293,7 +2631,7 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
         ID3D11Buffer* transformBuffer = TransformBuffer.Get();
         context->VSSetConstantBuffers(0, 1, &transformBuffer);
         context->PSSetConstantBuffers(0, 1, &transformBuffer);
-        context->RSSetState(OutputBootstrap->GetSampleCount() == 4 ? MultisampleRasterizerState.Get() : RasterizerState.Get());
+        MaterialRasterizers.Bind(context, D3D11_CULL_NONE, OutputBootstrap->GetSampleCount() == 4);
         context->OMSetDepthStencilState(DepthStencilState.Get(), 0);
 
         const D3D11_VIEWPORT viewport = ResolveViewport(camera);
@@ -2333,7 +2671,7 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
         float4x4::CreatePerspectiveFieldOfView__out4(CameraFieldOfViewRadians, aspectRatio, nearPlaneDistance, farPlaneDistance, projection);
         float4x4::Multiply__ref0_ref1_out2(view, projection, CurrentViewProjection);
 
-        std::vector<LightComponent*> visibleLights = SnapshotVisibleLights(camera);
+        std::vector<LightComponent*> visibleLights = SceneInk && (camera==InkFirstCamera || camera==InkSecondCamera) ? SnapshotInkLights() : SnapshotVisibleLights(camera);
         if (!HasWrittenRenderSnapshot) {
             AppendRenderDiagnosticsLine("3d.visible_lights=" + std::to_string(visibleLights.size()));
         }
@@ -2341,7 +2679,7 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
         PrepareShadowState(camera, visibleLights);
         context->OMSetRenderTargets(1, &renderTargetView, depthStencilView);
         context->RSSetViewports(1, &viewport);
-        context->RSSetState(OutputBootstrap->GetSampleCount() == 4 ? MultisampleRasterizerState.Get() : RasterizerState.Get());
+        MaterialRasterizers.Bind(context, D3D11_CULL_NONE, OutputBootstrap->GetSampleCount() == 4);
         context->OMSetDepthStencilState(DepthStencilState.Get(), 0);
         context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
         if (AlphaMode == Win32RenderAlphaMode::Premultiplied) {
@@ -2372,23 +2710,36 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
                     + std::to_string(viewport.TopLeftY) + "," + std::to_string(viewport.Width) + "," + std::to_string(viewport.Height)
                     + " samples=" + std::to_string(OutputBootstrap->GetSampleCount()));
             }
-            toonPass->Begin(context, viewport, OutputBootstrap->GetSampleCount());
+            // Native UI and ink share b13 across separate shader passes; each camera starts with ink disabled.
+            Win32SceneInk::Unbind(context);
+            toonPass->Begin(context, viewport, OutputBootstrap->GetSampleCount(), static_cast<float>(nearPlaneDistance.ToDouble()), static_cast<float>(farPlaneDistance.ToDouble()));
         }
         if (renderQueue != nullptr) {
             HELENGINE_TRACY_ZONE_N("Render.ExtractAndBuild");
-            ActiveToonPass = toonPass;
+            ActiveToonPass = toonPass;SsgiReceiverActive=sharedReceiver;
+            if(SceneSsgi && !sharedReceiver) Win32SceneSsgi::ClearBindings(context);
             try {
-                renderQueue->VisitOrdered(this);
+                if(auto* orderedQueue=dynamic_cast<RenderList3D*>(renderQueue)) orderedQueue->VisitCameraOrdered(this,camera);
+                else renderQueue->VisitOrdered(this);
             } catch (...) {
-                ActiveToonPass = nullptr;
+                ActiveToonPass = nullptr;SsgiReceiverActive=false;Win32SceneSsgi::ClearBindings(context);
                 throw;
             }
-            ActiveToonPass = nullptr;
+            ActiveToonPass = nullptr;SsgiReceiverActive=false;
         }
         if (toonPass != nullptr) {
-            toonPass->Composite(context, renderTargetView, depthStencilView, viewport);
+            if(sharedReceiver) SceneSsgi->BindReceiver(context);
+#ifdef HELENGINE_VOXEL_GI
+            if(indirectOnly) SceneGi->Bind(context);
+#endif
+            toonPass->Composite(context, renderTargetView, depthStencilView, viewport, indirectOnly);
+#ifdef HELENGINE_VOXEL_GI
+            if(indirectOnly) {ID3D11Buffer* buffer=nullptr;ID3D11ShaderResourceView* view=nullptr;context->PSSetConstantBuffers(9,1,&buffer);context->PSSetShaderResources(17,1,&view);}
+#endif
+            Win32SceneSsgi::ClearBindings(context);
         }
 
+        Win32SceneInk::Unbind(context);
         RenderManager2DBridge->RenderCamera(camera);
         OutputReadiness.ObservePass(RenderManager2DBridge->IsPipelineReady());
         return true;
@@ -2547,7 +2898,19 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
         }
 
 
+        const bool inkReceiver=SceneInk && (camera==InkFirstCamera || camera==InkSecondCamera);
+        if(inkReceiver) camera=InkFirstCamera;
         DirectionalLightComponent* light = FindPrimaryDirectionalShadowLight(lights);
+        bool localReceiver=false;
+        if(!inkReceiver && light==nullptr && get_ShadowsEnabled()) {
+            for(auto* candidate : lights) {
+                if(candidate && candidate->get_ShadowsEnabled()
+                    && (dynamic_cast<PointLightComponent*>(candidate) || dynamic_cast<SpotLightComponent*>(candidate))) {
+                    localReceiver=true;break;
+                }
+            }
+        }
+        ResizeDirectionalShadowMap(DirectionalShadowMapResolution,(inkReceiver || localReceiver)?1792:DirectionalShadowMapResolution);
         if (!HasWrittenRenderSnapshot) {
             AppendRenderDiagnosticsLine(std::string("3d.shadow_light=") + (light != nullptr ? "directional" : "none"));
             if (light != nullptr) {
@@ -2556,23 +2919,46 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
                     + " distance=" + std::to_string(light->get_ShadowDistance()));
             }
         }
-        if (light != nullptr) {
-            RenderDirectionalShadowMap(camera, light);
+        if (!inkReceiver) {
+            if(light) RenderDirectionalShadowMap(camera,light);
+            else if(localReceiver) {
+                RenderLocalShadows(camera,lights,true,camera->get_LayerMask());
+                // This camera reused the atlas; a later shared output must regenerate its own cached depths.
+                LastInkShadowSeconds=-1;LastInkShadowLight=nullptr;
+            }
+        } else if(LastInkShadowSeconds!=InkOwner->get_TotalElapsedSeconds() || LastInkShadowLight!=light) {
+            bool directionalRendered=false;
+            if(light) {
+                BuildInkShadowCascades(light);
+                if(InkShadowCascades.HasReceivers) {RenderDirectionalShadowMap(camera,light);InkShadowDraws+=2;directionalRendered=true;}
+            }
+            RenderLocalShadows(camera,lights,!directionalRendered,InkFirstCamera->get_LayerMask()|InkSecondCamera->get_LayerMask());
+            LastInkShadowSeconds=InkOwner->get_TotalElapsedSeconds();LastInkShadowLight=light;
         }
+        if(inkReceiver && !InkShadowCascades.HasReceivers) light=nullptr;
 
         Win32ShadowConstants constants {};
         if (light != nullptr) {
-            ::float4x4 worldToShadowClip = BuildDirectionalShadowViewProjection(camera, light);
+            ::float4x4 worldToShadowClip = inkReceiver?InkShadowMatrices[0]:BuildDirectionalShadowViewProjection(camera, light);
             ::float4x4 transposedWorldToShadowClip;
             float4x4::Transpose__ref0_out1(worldToShadowClip, transposedWorldToShadowClip);
 
             constants.ShadowMetadata = DirectX::XMFLOAT4(
                 1.0f,
-                1.0f / static_cast<float>(DirectionalShadowMapResolution),
-                1.0f / static_cast<float>(DirectionalShadowMapResolution),
+                1.0f / static_cast<float>(ShadowMapEdge),
+                1.0f / static_cast<float>(ShadowMapHeight),
                 1.0f);
             Win32ShadowLightSlotConstants slot {};
-            slot.AtlasRect = DirectX::XMFLOAT4(0.0f, 0.0f, 1.0f, 1.0f);
+            slot.AtlasRect = DirectX::XMFLOAT4(0.0f, 0.0f, inkReceiver?.5f:1.0f, inkReceiver?1024.0f/1792.0f:1.0f);
+            if(inkReceiver) {
+                ::float4x4 secondTranspose;
+                float4x4::Transpose__ref0_out1(InkShadowMatrices[1],secondTranspose);
+                constants.CascadeWorldToShadowClip=StoreMatrix(secondTranspose);
+                constants.CascadeAtlasRect=DirectX::XMFLOAT4(.5f,0,.5f,1024.0f/1792.0f);
+                const auto& plane=InkShadowCascades.DepthPlane;const auto& depths=InkShadowCascades.Depths;
+                constants.CascadeDepthPlane=DirectX::XMFLOAT4(plane[0].ToSingle(),plane[1].ToSingle(),plane[2].ToSingle(),plane[3].ToSingle());
+                constants.CascadeDepths=DirectX::XMFLOAT4(depths[0].ToSingle(),depths[1].ToSingle(),depths[2].ToSingle(),2);
+            }
             slot.Metadata = DirectX::XMFLOAT4(1.0f, light->get_ShadowStrength(), 1.0f, 0.0f);
             slot.WorldToShadowClip = StoreMatrix(transposedWorldToShadowClip);
             int32_t packedIndex=0;
@@ -2588,14 +2974,50 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
             else throw std::logic_error("Directional shadow light must belong to a packed forward-light slot.");
         }
 
+        if(inkReceiver || localReceiver) {
+            constants.ShadowMetadata=DirectX::XMFLOAT4(1,1.0f/ShadowMapEdge,1.0f/ShadowMapHeight,1);
+            unsigned tile=0;
+            for(unsigned index=0;index<lights.size() && index<4;++index) {
+                auto* point=dynamic_cast<PointLightComponent*>(lights[index]);
+                auto* spot=dynamic_cast<SpotLightComponent*>(lights[index]);
+                if(point) {
+                    if(point->get_ShadowsEnabled() && get_ShadowsEnabled()) {
+                        Win32ShadowLightSlotConstants slot{};
+                        slot.AtlasRect=DirectX::XMFLOAT4(tile*.25f,1024.0f/1792.0f,.25f,768.0f/1792.0f);
+                        slot.Metadata=DirectX::XMFLOAT4(1,point->get_ShadowStrength(),3,0);
+                        for(unsigned face=0;face<6;++face) {
+                            auto matrix=BuildPointShadowViewProjection(point,face);::float4x4 transposed;
+                            float4x4::Transpose__ref0_out1(matrix,transposed);
+                            constants.PointShadowMatrices[index*6+face]=StoreMatrix(transposed);
+                        }
+                        if(index==0) constants.Light0=slot;else if(index==1) constants.Light1=slot;
+                        else if(index==2) constants.Light2=slot;else constants.Light3=slot;
+                    }
+                    ++tile;continue;
+                }
+                if(!spot) continue;
+                if(spot->get_ShadowsEnabled() && get_ShadowsEnabled()) {
+                    auto matrix=BuildSpotShadowViewProjection(spot);::float4x4 transposed;
+                    float4x4::Transpose__ref0_out1(matrix,transposed);
+                    Win32ShadowLightSlotConstants slot{};
+                    slot.AtlasRect=DirectX::XMFLOAT4(tile*.25f,1024.0f/1792.0f,.25f,512.0f/1792.0f);
+                    slot.Metadata=DirectX::XMFLOAT4(1,spot->get_ShadowStrength(),2,0);
+                    slot.WorldToShadowClip=StoreMatrix(transposed);
+                    if(index==0) constants.Light0=slot;else if(index==1) constants.Light1=slot;
+                    else if(index==2) constants.Light2=slot;else constants.Light3=slot;
+                }
+                ++tile;
+            }
+        }
+
         ID3D11DeviceContext* context = Bootstrap.GetDeviceContext();
         context->UpdateSubresource(ShadowConstantBuffer.Get(), 0, nullptr, &constants, 0, 0);
         ID3D11Buffer* buffer = ShadowConstantBuffer.Get();
         context->PSSetConstantBuffers(2, 1, &buffer);
 
-        ID3D11ShaderResourceView* shadowShaderResourceView = light != nullptr ? ShadowMapShaderResourceView.Get() : nullptr;
+        ID3D11ShaderResourceView* shadowShaderResourceView = (light != nullptr || inkReceiver || localReceiver) ? ShadowMapShaderResourceView.Get() : nullptr;
         context->PSSetShaderResources(1, 1, &shadowShaderResourceView);
-        ID3D11SamplerState* shadowSamplerState = light != nullptr ? ShadowSamplerState.Get() : nullptr;
+        ID3D11SamplerState* shadowSamplerState = (light != nullptr || inkReceiver || localReceiver) ? ShadowSamplerState.Get() : nullptr;
         context->PSSetSamplers(1, 1, &shadowSamplerState);
         ID3D11ShaderResourceView* pointShadowShaderResources[4] = { nullptr, nullptr, nullptr, nullptr };
         context->PSSetShaderResources(2, 4, pointShadowShaderResources);
@@ -2627,6 +3049,79 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
         return nullptr;
     }
 
+    /// <summary>Fits enabled bounds from both output masks while keeping off-slice upstream caster depth.</summary>
+    void Win32RenderManager3D::BuildInkShadowCascades(DirectionalLightComponent* light) {
+        using Point=InkShadowFitter::Point;
+        using Plane=InkShadowFitter::Plane;
+        auto& geometry=InkShadowGeometry;geometry.clear();
+        auto* drawables=InkOwner->get_ObjectManager()->get_Drawables3D();
+        geometry.reserve(drawables->Count());InkShadowCasters.clear();InkShadowCasters.reserve(drawables->Count());
+        const auto layers=InkFirstCamera->get_LayerMask()|InkSecondCamera->get_LayerMask();
+        for(int index=0;index<drawables->Count();++index) {
+            auto* drawable=(*drawables)[index];
+            if(!drawable || !drawable->get_Parent() || !drawable->get_Parent()->get_IsHierarchyEnabled() || (drawable->get_Parent()->get_LayerMask()&layers)==0) continue;
+            auto* model=drawable->get_Model();if(!model) continue;
+            auto* nativeModel=static_cast<Win32RuntimeModel*>(model);if(!nativeModel->VertexBuffer || nativeModel->VertexCount==0) continue;
+            const auto minimum=model->get_BoundsMin(),maximum=model->get_BoundsMax();const auto world=drawable->get_Parent()->get_WorldTransformMatrix();
+            InkShadowFitter::Geometry bounds{};bounds.Layers=drawable->get_Parent()->get_LayerMask();bounds.Identity=drawable;bounds.ModelIdentity=model;
+            bounds.StructuralState={minimum.X,minimum.Y,minimum.Z,maximum.X,maximum.Y,maximum.Z,
+                RealMath::Sqrt(world.M11*world.M11+world.M12*world.M12+world.M13*world.M13),
+                RealMath::Sqrt(world.M21*world.M21+world.M22*world.M22+world.M23*world.M23),
+                RealMath::Sqrt(world.M31*world.M31+world.M32*world.M32+world.M33*world.M33),world.M41,world.M42,world.M43};
+            for(unsigned corner=0;corner<8;++corner) {
+                const Real x=(corner&1)?maximum.X:minimum.X,y=(corner&2)?maximum.Y:minimum.Y,z=(corner&4)?maximum.Z:minimum.Z;
+                bounds.Corners[corner]={x*world.M11+y*world.M21+z*world.M31+world.M41,
+                    x*world.M12+y*world.M22+z*world.M32+world.M42,x*world.M13+y*world.M23+z*world.M33+world.M43};
+            }
+            geometry.push_back(bounds);InkShadowCasters.push_back(drawable);
+        }
+        std::array<InkShadowFitter::Camera,2> cameras{};
+        unsigned cameraIndex=0;
+        for(auto* camera:{InkFirstCamera,InkSecondCamera}) {
+            const auto viewport=ResolveSceneSsgiViewport(camera);
+            const auto matrix=BuildSceneViewProjection(camera,viewport);auto& target=cameras[cameraIndex++];target.Layers=camera->get_LayerMask();
+            target.Planes={Plane{matrix.M14+matrix.M11,matrix.M24+matrix.M21,matrix.M34+matrix.M31,matrix.M44+matrix.M41},
+                Plane{matrix.M14-matrix.M11,matrix.M24-matrix.M21,matrix.M34-matrix.M31,matrix.M44-matrix.M41},
+                Plane{matrix.M14+matrix.M12,matrix.M24+matrix.M22,matrix.M34+matrix.M32,matrix.M44+matrix.M42},
+                Plane{matrix.M14-matrix.M12,matrix.M24-matrix.M22,matrix.M34-matrix.M32,matrix.M44-matrix.M42},
+                Plane{matrix.M13,matrix.M23,matrix.M33,matrix.M43},Plane{matrix.M14-matrix.M13,matrix.M24-matrix.M23,matrix.M34-matrix.M33,matrix.M44-matrix.M43}};
+            const auto position=camera->get_Parent()->get_Position();const auto orientation=camera->get_Parent()->get_Orientation();
+            const auto forward=float4::RotateVector(float3(0,0,-1),orientation),up=float4::RotateVector(float3(0,1,0),orientation),right=float4::RotateVector(float3(1,0,0),orientation);
+            const Real tangent=RealMath::Tan(camera->get_FieldOfView()*Real(.5)),aspect=Real(viewport.Width)/Real(viewport.Height);
+            for(unsigned corner=0;corner<8;++corner) {
+                const Real distance=(corner&4)?camera->get_FarPlaneDistance():camera->get_NearPlaneDistance();
+                const Real horizontal=((corner&1)?Real(1):Real(-1))*distance*tangent*aspect,vertical=((corner&2)?Real(1):Real(-1))*distance*tangent;
+                target.Corners[corner]={position.X+forward.X*distance+right.X*horizontal+up.X*vertical,
+                    position.Y+forward.Y*distance+right.Y*horizontal+up.Y*vertical,position.Z+forward.Z*distance+right.Z*horizontal+up.Z*vertical};
+            }
+        }
+        const auto position=InkFirstCamera->get_Parent()->get_Position();
+        const auto forward=float4::RotateVector(float3(0,0,-1),InkFirstCamera->get_Parent()->get_Orientation());
+        const Plane depth{forward.X,forward.Y,forward.Z,-float3::Dot(forward,position)};
+        const auto lightForward=LightDirectionUtility::GetEntityForwardDirection(light->get_Parent());
+        InkShadowCascades=InkShadowFitter::Fit(geometry,cameras,depth,InkFirstCamera->get_NearPlaneDistance(),InkFirstCamera->get_FarPlaneDistance(),Point{lightForward.X,lightForward.Y,lightForward.Z},InkShadowCascades);
+        if(!InkShadowCascades.HasReceivers) {
+            if(LastInkBudgetSeconds<0 || InkOwner->get_TotalElapsedSeconds()-LastInkBudgetSeconds>=1)
+                RuntimeRenderDiagnostics::WriteHostEvent("scene-ink-cascades","count=0 reason=no_visible_receivers shadow_passes="+std::to_string(InkShadowDraws)+" passes_per_update=0 shared_outputs=2 shared_cube=1");
+            return;
+        }
+        for(unsigned cascade=0;cascade<2;++cascade) {
+            const auto& matrix=InkShadowCascades.Cascades[cascade].Matrix;auto& target=InkShadowMatrices[cascade];
+            target.M11=matrix[0];target.M12=matrix[1];target.M13=matrix[2];target.M14=matrix[3];
+            target.M21=matrix[4];target.M22=matrix[5];target.M23=matrix[6];target.M24=matrix[7];
+            target.M31=matrix[8];target.M32=matrix[9];target.M33=matrix[10];target.M34=matrix[11];
+            target.M41=matrix[12];target.M42=matrix[13];target.M43=matrix[14];target.M44=matrix[15];
+        }
+        const double seconds=InkOwner->get_TotalElapsedSeconds();
+        if(LastInkBudgetSeconds<0 || seconds-LastInkBudgetSeconds>=1) {
+            const auto& nearCascade=InkShadowCascades.Cascades[0];const auto& farCascade=InkShadowCascades.Cascades[1];const auto& depths=InkShadowCascades.Depths;
+            RuntimeRenderDiagnostics::WriteHostEvent("scene-ink-cascades","count=2 tile_edge=1024 atlas=2048x1024 splits="+std::to_string(depths[0].ToDouble())+","+std::to_string(depths[1].ToDouble())+","+std::to_string(depths[2].ToDouble())
+                +" extents="+std::to_string(nearCascade.Extent.ToDouble())+","+std::to_string(farCascade.Extent.ToDouble())+" world_texel="+std::to_string(nearCascade.WorldTexel.ToDouble())+","+std::to_string(farCascade.WorldTexel.ToDouble())
+                +" incoming="+std::to_string(lightForward.X.ToDouble())+","+std::to_string(lightForward.Y.ToDouble())+","+std::to_string(lightForward.Z.ToDouble())+" ceiling_cos="+std::to_string(lightForward.Y.ToDouble())
+                +" shadow_passes="+std::to_string(InkShadowDraws+2)+" directional_passes_per_update=2 shared_outputs=2 shared_cube=1");
+        }
+    }
+
     /// Renders the current scene depth from the active directional light into the shared shadow map.
     void Win32RenderManager3D::RenderDirectionalShadowMap(ICamera* camera, DirectionalLightComponent* light) {
         if (camera == nullptr) {
@@ -2647,12 +3142,13 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
         D3D11_VIEWPORT viewport {};
         viewport.TopLeftX = 0.0f;
         viewport.TopLeftY = 0.0f;
-        viewport.Width = static_cast<float>(DirectionalShadowMapResolution);
-        viewport.Height = static_cast<float>(DirectionalShadowMapResolution);
+        viewport.Width = static_cast<float>(ShadowMapEdge);
+        viewport.Height = static_cast<float>(ShadowMapHeight);
         viewport.MinDepth = 0.0f;
         viewport.MaxDepth = 1.0f;
         context->RSSetViewports(1, &viewport);
-        context->RSSetState(ShadowRasterizerState.Get());
+        const bool inkReceiver=SceneInk && camera==InkFirstCamera;
+        context->RSSetState(inkReceiver?InkShadowRasterizerState.Get():ShadowRasterizerState.Get());
         context->OMSetDepthStencilState(ShadowDepthStencilState.Get(), 0);
         context->IASetInputLayout(ShadowInputLayout.Get());
         context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
@@ -2661,19 +3157,100 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
         ID3D11Buffer* transformBuffer = ShadowTransformBuffer.Get();
         context->VSSetConstantBuffers(0, 1, &transformBuffer);
 
-        CurrentShadowViewProjection = BuildDirectionalShadowViewProjection(camera, light);
+        CurrentShadowViewProjection = inkReceiver?InkShadowMatrices[0]:BuildDirectionalShadowViewProjection(camera, light);
+        ActiveShadowCasters.clear();
         IsShadowPassActive = true;
         try {
+            if(inkReceiver) {
+                viewport.Width=viewport.Height=1024;
+                for(unsigned cascade=0;cascade<2;++cascade) {
+                    viewport.TopLeftX=static_cast<float>(cascade*1024);context->RSSetViewports(1,&viewport);
+                    CurrentShadowViewProjection=InkShadowMatrices[cascade];ActiveShadowCasters.clear();
+                    for(auto* drawable:InkShadowCasters) DrawDirectionalShadowCaster(drawable,CurrentShadowViewProjection);
+                }
+            } else {
             IRenderQueue3D* renderQueue = camera->get_RenderQueue3D();
             if (renderQueue != nullptr) {
                 renderQueue->VisitOrdered(this);
             }
+            auto peer = CameraShadowPeers.find(camera);
+            if (peer != CameraShadowPeers.end() && peer->second->get_Parent()->get_IsHierarchyEnabled()) {
+                IRenderQueue3D* peerQueue = peer->second->get_RenderQueue3D();
+                if (peerQueue != nullptr) peerQueue->VisitOrdered(this);
+            }
+            }
         } catch (...) {
+            ActiveShadowCasters.clear();
             IsShadowPassActive = false;
             throw;
         }
 
         IsShadowPassActive = false;
+        ActiveShadowCasters.clear();
+        // The atlas becomes a sampled texture immediately after this pass; release its depth output first.
+        context->OMSetRenderTargets(0, nullptr, nullptr);
+    }
+
+    /// <summary>Projects one spot's authored cone from its current world transform into a finite perspective depth map.</summary>
+    ::float4x4 Win32RenderManager3D::BuildSpotShadowViewProjection(SpotLightComponent* light) const {
+        const double angle=light->get_OuterConeAngleDegrees();
+        if(!(angle>0 && angle<89 && light->get_Range()>.02f)) throw std::logic_error("Spot shadow cone and range must define a finite perspective frustum.");
+        auto position=light->get_Parent()->get_Position();
+        auto forward=LightDirectionUtility::GetEntityForwardDirection(light->get_Parent());
+        auto target=position+forward;
+        float3 up=std::abs(forward.Y.ToDouble())>.95?float3(0,0,1):float3(0,1,0);
+        ::float4x4 view,projection,result;
+        float4x4::CreateLookAt__ref0_ref1_ref2_out3(position,target,up,view);
+        float4x4::CreatePerspectiveFieldOfView__out4(angle*2*std::numbers::pi/180,1,.02f,light->get_Range(),projection);
+        float4x4::Multiply__ref0_ref1_out2(view,projection,result);return result;
+    }
+
+    /// <summary>Projects a point-light face with the same dominant-axis convention used by ink receivers.</summary>
+    ::float4x4 Win32RenderManager3D::BuildPointShadowViewProjection(PointLightComponent* light,unsigned face) const {
+        if(!(light->get_Range()>.02f)) throw std::logic_error("Point shadow range must exceed its near plane.");
+        auto axis=Win32PointShadowLayout::Direction(face),upAxis=Win32PointShadowLayout::Up(face);
+        auto position=light->get_Parent()->get_Position();auto target=position+float3(axis[0],axis[1],axis[2]);
+        float3 up(upAxis[0],upAxis[1],upAxis[2]);::float4x4 view,projection,result;
+        float4x4::CreateLookAt__ref0_ref1_ref2_out3(position,target,up,view);
+        float4x4::CreatePerspectiveFieldOfView__out4(std::numbers::pi/2,1,.02f,light->get_Range(),projection);
+        float4x4::Multiply__ref0_ref1_out2(view,projection,result);return result;
+    }
+
+    /// <summary>Draws local-light shadow faces for the supplied camera's scene and explicit caster layers.</summary>
+    void Win32RenderManager3D::RenderLocalShadows(ICamera* camera,const std::vector<LightComponent*>& lights,bool clearAtlas,uint16_t casterLayers) {
+        auto* context=Bootstrap.GetDeviceContext();ID3D11ShaderResourceView* empty=nullptr;context->PSSetShaderResources(1,1,&empty);
+        context->OMSetRenderTargets(0,nullptr,ShadowMapDepthStencilView.Get());
+        if(clearAtlas) context->ClearDepthStencilView(ShadowMapDepthStencilView.Get(),D3D11_CLEAR_DEPTH,1,0);
+        context->RSSetState(InkShadowRasterizerState.Get());context->OMSetDepthStencilState(ShadowDepthStencilState.Get(),0);
+        context->IASetInputLayout(ShadowInputLayout.Get());context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+        context->VSSetShader(ShadowVertexShader.Get(),nullptr,0);context->PSSetShader(ShadowPixelShader.Get(),nullptr,0);
+        auto* buffer=ShadowTransformBuffer.Get();context->VSSetConstantBuffers(0,1,&buffer);
+        auto* drawables=camera->get_Parent()->get_OwnerCore()->get_ObjectManager()->get_Drawables3D();unsigned tile=0;
+        try {
+            for(unsigned index=0;index<lights.size() && index<4;++index) {
+                auto* point=dynamic_cast<PointLightComponent*>(lights[index]);
+                auto* spot=dynamic_cast<SpotLightComponent*>(lights[index]);if(!point && !spot) continue;
+                const unsigned localTile=tile++;
+                if(!lights[index]->get_ShadowsEnabled() || !get_ShadowsEnabled()) continue;
+                for(unsigned face=0;face<(point?6u:1u);++face) {
+                    D3D11_VIEWPORT viewport{};viewport.MaxDepth=1;
+                    if(point) {
+                        auto rect=Win32PointShadowLayout::Rectangle(localTile,face);
+                        viewport.TopLeftX=static_cast<float>(rect[0]);viewport.TopLeftY=static_cast<float>(rect[1]);viewport.Width=viewport.Height=256;
+                    } else {viewport.TopLeftX=localTile*512.0f;viewport.TopLeftY=1024;viewport.Width=viewport.Height=512;}
+                    context->RSSetViewports(1,&viewport);
+                    auto matrix=point?BuildPointShadowViewProjection(point,face):BuildSpotShadowViewProjection(spot);
+                    ActiveShadowCasters.clear();++InkShadowDraws;
+                    for(int item=0;item<drawables->Count();++item) {
+                        auto* drawable=(*drawables)[item];
+                        if(drawable && drawable->get_Parent() && (drawable->get_Parent()->get_LayerMask()&casterLayers)!=0)
+                            DrawDirectionalShadowCaster(drawable,matrix);
+                    }
+                }
+            }
+        } catch(...) {ActiveShadowCasters.clear();context->OMSetRenderTargets(0,nullptr,nullptr);throw;}
+        ActiveShadowCasters.clear();context->OMSetRenderTargets(0,nullptr,nullptr);
+        if(!HasWrittenRenderSnapshot) AppendRenderDiagnosticsLine("local_shadows="+std::to_string(tile)+" spot_resolution=512 point_face_resolution=256 caster_layers="+std::to_string(casterLayers));
     }
 
     /// Draws one shadow-casting mesh into the active directional shadow map.
@@ -2683,6 +3260,8 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
         if (drawable == nullptr || drawable->get_Parent() == nullptr || !drawable->get_Parent()->get_IsHierarchyEnabled()) {
             return;
         }
+
+        if (!ActiveShadowCasters.insert(drawable).second) return;
 
         Array<RuntimeMaterial*>* runtimeMaterials = drawable->get_Materials();
 
@@ -2797,6 +3376,7 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
     /// Draws one clip-space triangle with an identity transform to validate the native draw pipeline.
     void Win32RenderManager3D::DrawDebugTriangle() {
         EnsureDebugTriangleBuffer();
+        RenderManager2DBridge->BindOutputEncoding();
 
         ID3D11DeviceContext* context = Bootstrap.GetDeviceContext();
         const UINT stride = sizeof(Win32VertexPositionNormalUV);
@@ -3031,6 +3611,43 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
         }
 
         throw new InvalidOperationException(std::string("Unsupported shader vertex element format: ") + format);
+    }
+
+    /// <summary>Applies the visible material winding choice before both indexed and seam-expanded baked draws.</summary>
+    void Win32RenderManager3D::ApplyMaterialRasterizer(RuntimeMaterial* material) {
+        D3D11_CULL_MODE mode = D3D11_CULL_NONE;
+        if(material != nullptr) {
+            MaterialRenderState* renderState = material->get_RenderState();
+            if(renderState == nullptr) throw new InvalidOperationException("Runtime materials require render state before drawing.");
+            switch(renderState->get_CullMode()) {
+                case MaterialCullMode::None: mode = D3D11_CULL_NONE; break;
+                case MaterialCullMode::Front: mode = D3D11_CULL_FRONT; break;
+                case MaterialCullMode::Back: mode = D3D11_CULL_BACK; break;
+                default: throw new InvalidOperationException("Unsupported runtime material cull mode.");
+            }
+        }
+        if(InkCaptureActive) {
+            if(mode==D3D11_CULL_FRONT) mode=D3D11_CULL_BACK;
+            else if(mode==D3D11_CULL_BACK) mode=D3D11_CULL_FRONT;
+        }
+        MaterialRasterizers.Bind(Bootstrap.GetDeviceContext(), mode, OutputBootstrap->GetSampleCount() == 4);
+    }
+
+    /// <summary>Binds fixed-function scene output using the existing material render-state contract.</summary>
+    void Win32RenderManager3D::ApplyMaterialOutput(RuntimeMaterial* material) {
+        bool alphaBlend=false;bool depthTest=true;bool depthWrite=true;
+        if(material!=nullptr) {
+            MaterialRenderState* state=material->get_RenderState();
+            if(state==nullptr) throw new InvalidOperationException("Runtime materials require render state before drawing.");
+            switch(state->get_BlendMode()) {
+                case MaterialBlendMode::Opaque: break;
+                case MaterialBlendMode::AlphaBlend: alphaBlend=true;break;
+                default: throw new InvalidOperationException("Unsupported runtime material blend mode.");
+            }
+            depthTest=state->get_DepthTestEnabled();depthWrite=state->get_DepthWriteEnabled();
+        }
+        MaterialOutputs.Bind(Bootstrap.GetDeviceContext(),alphaBlend,depthTest,depthWrite,ActiveToonPass!=nullptr,
+            ActiveToonPass==nullptr || ActiveToonPass->WritesAuxiliaryContours(material));
     }
 
     /// Applies the shader and resource bindings for one runtime material.
@@ -3322,6 +3939,7 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
     /// Returns whether one constant-buffer binding is owned by the renderer instead of material-authored property data.
     bool Win32RenderManager3D::IsEngineManagedConstantBufferBinding(HeCppString bindingName) {
         return bindingName == "TransformBuffer"
+            || bindingName == "GlobalIlluminationBuffer"
             || bindingName == "ForwardLightBuffer"
             || bindingName == "ShadowBuffer";
     }
@@ -3329,6 +3947,7 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
     /// Returns whether one texture binding is owned by the renderer instead of material-authored property data.
     bool Win32RenderManager3D::IsEngineManagedTextureBinding(HeCppString bindingName) {
         return bindingName == ShadowAtlasTextureBindingName
+            || bindingName == "GlobalIlluminationAtlas"
             || bindingName == PointShadowTextureBindingName0
             || bindingName == PointShadowTextureBindingName1
             || bindingName == PointShadowTextureBindingName2
@@ -3346,6 +3965,7 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
 
     /// Clears the back buffer to a solid fallback color when nothing else renders.
     void Win32RenderManager3D::ClearBackBuffer(float red, float green, float blue, float alpha) {
+        if(OutputBootstrap->IsHdrOutput()) {red=DirectX11OutputColorState::DecodeSrgb(red);green=DirectX11OutputColorState::DecodeSrgb(green);blue=DirectX11OutputColorState::DecodeSrgb(blue);}
         ID3D11RenderTargetView* renderTargetView = OutputBootstrap->GetRenderTargetView();
         ID3D11DepthStencilView* depthStencilView = OutputBootstrap->GetDepthStencilView();
         ID3D11DeviceContext* context = Bootstrap.GetDeviceContext();
@@ -3689,6 +4309,7 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
     /// Skips a pending quad/font pipeline before changing context state; otherwise prepares the actual draw.
     bool Win32RenderManager2D::PrepareTexturedQuadDraw(ID3D11ShaderResourceView* textureView, bool rgbFontCoverage, bool allowClearType) {
         if(!EnsurePipelineState()) return false;
+        BindOutputEncoding();
 
         ID3D11DeviceContext* context = Bootstrap.GetDeviceContext();
         ID3D11RenderTargetView* renderTargetView = OutputBootstrap->GetRenderTargetView();
@@ -3726,9 +4347,21 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
         return true;
     }
 
+    /// Binds this view's transfer and Windows UI white without altering shader coverage or scene exposure.
+    void Win32RenderManager2D::BindOutputEncoding() {
+        if(!OutputEncodingBuffer) {
+            D3D11_BUFFER_DESC description{};description.ByteWidth=16;description.BindFlags=D3D11_BIND_CONSTANT_BUFFER;
+            ThrowIfFailed(Bootstrap.GetDevice()->CreateBuffer(&description,nullptr,&OutputEncodingBuffer),"Create native output encoding constants failed.");
+        }
+        const float values[4]={OutputBootstrap->IsHdrOutput()?1.f:0.f,OutputBootstrap->GetSdrWhiteScale(),0,0};
+        auto* context=Bootstrap.GetDeviceContext();context->UpdateSubresource(OutputEncodingBuffer.Get(),0,nullptr,values,0,0);
+        auto* buffer=OutputEncodingBuffer.Get();context->PSSetConstantBuffers(13,1,&buffer);
+    }
+
     /// Configures the DirectX11 state used by one rounded-rect SDF draw.
     bool Win32RenderManager2D::PrepareRoundedRectDraw() {
         if(!EnsurePipelineState()) return false;
+        BindOutputEncoding();
 
         ID3D11DeviceContext* context = Bootstrap.GetDeviceContext();
         ID3D11RenderTargetView* renderTargetView = OutputBootstrap->GetRenderTargetView();
@@ -4322,6 +4955,9 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
         textureData.SysMemPitch = static_cast<UINT>(static_cast<UINT64>(data->Width) * 4ULL);
 
         Win32TextureResource textureResource;
+#ifdef HELENGINE_LIGHTMAP
+        textureResource.LightmapRgba.assign(data->Colors->Data,data->Colors->Data+data->Colors->Length);
+#endif
         textureResource.Width = data->Width;
         textureResource.Height = data->Height;
         textureResource.OwnerCount = 1;
@@ -4569,6 +5205,7 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
         WhiteTexture.Reset();
         WhiteShaderResourceView.Reset();
         RoundedRectConstantBuffer.Reset();
+        OutputEncodingBuffer.Reset();
         ClipRectStack.clear();
         CommandListBuilder.reset();
         HasActiveViewport = false;
@@ -4645,13 +5282,10 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
 
         const float3 position = text->get_Parent()->get_Position();
         const double baseX = std::round(position.X.ToDouble());
-        const bool rgbFontCoverage = font->get_Texture()->get_UsesRgbFontCoverage();
         const double fontScale = std::max(static_cast<double>(text->get_FontScale()), 0.0001);
         const bool allowClearType = std::abs(fontScale - 1.0) < 0.00001;
         const double baseY = std::round(position.Y.ToDouble());
         const double lineHeight = std::max(static_cast<double>(font->get_LineHeight()) * fontScale, 1.0);
-        const float atlasWidth = static_cast<float>(std::max(font->get_AtlasWidth(), 1));
-        const float atlasHeight = static_cast<float>(std::max(font->get_AtlasHeight(), 1));
         const float spaceWidth = font->get_FontInfo() != nullptr ? font->get_FontInfo()->get_SpaceWidth() : 0.0f;
         double offsetX = 0.0;
         double offsetY = 0.0;
@@ -4673,6 +5307,13 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
                 continue;
             }
 
+            RuntimeTexture* pageTexture = font->ResolvePageTexture(glyph.PageIndex);
+            if (pageTexture == nullptr) { throw std::runtime_error("Font glyph has no resident atlas after resolution."); }
+            textureView = ResolveTextureResourceView(pageTexture);
+            if (textureView == nullptr) { throw std::runtime_error("Font atlas upload has no shader resource view."); }
+            const bool rgbFontCoverage = pageTexture->get_UsesRgbFontCoverage();
+            const float atlasWidth = static_cast<float>(pageTexture->get_Width());
+            const float atlasHeight = static_cast<float>(pageTexture->get_Height());
             const float4 sourceRect = glyph.SourceRect;
             const float glyphWidth = static_cast<float>(sourceRect.Z * atlasWidth * fontScale);
             const float glyphHeight = static_cast<float>(sourceRect.W * atlasHeight * fontScale);
@@ -4739,6 +5380,7 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
         if (!IsAlphaModeConfigured || output.GetDevice() != Bootstrap.GetDevice()) {
             throw std::logic_error("Output selection requires an initialized renderer and a shared DirectX11 device.");
         }
+        output.RefreshOutputColorState();
         SelectRenderWindow(windowHandle);
         OutputBootstrap = &output;
         AlphaMode = alphaMode;
@@ -4751,8 +5393,10 @@ float4 PSMain(float4 position : SV_POSITION, float2 localPosition : TEXCOORD0) :
         if (!IsAlphaModeConfigured || output.GetDevice() != Bootstrap.GetDevice()) {
             throw std::logic_error("Output selection requires an initialized renderer and a shared DirectX11 device.");
         }
+        output.RefreshOutputColorState();
         OutputBootstrap = &output;
         AlphaMode = alphaMode;
+        BindOutputEncoding();
         EnsureBlendStates();
         Bootstrap.GetDeviceContext()->OMSetBlendState(alphaMode == Win32RenderAlphaMode::Premultiplied
             ? PremultipliedDestinationBlendState.Get() : AlphaBlendState.Get(), nullptr, 0xFFFFFFFFu);

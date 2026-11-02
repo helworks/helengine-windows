@@ -243,10 +243,26 @@ namespace helengine::windows {
         PointerWrapDeltaOffset = int2(0, 0);
 
         POINT cursorPoint {};
-        if (!::GetCursorPos(&cursorPoint)) {
+        const bool hasCursor = ::GetCursorPos(&cursorPoint) != FALSE;
+        if (Window->UsesMessagePointer()) {
+            if (hasCursor) {
+                cursorPoint = Win32PointerWindowRouting::ResolveScreenPoint(windowHandle, cursorPoint);
+                if (!::ScreenToClient(windowHandle, &cursorPoint)) { throw std::runtime_error("Unable to map overlay pointer coordinates."); }
+            } else { Window->CancelPointerInput(); cursorPoint = POINT {-1, -1}; }
+            const std::uint32_t buttons = Window->CaptureMessagePointer(cursorPoint);
+            // Keep cross-view held-button suppression synchronized, but native delivery already authorized this overlay gesture.
+            PointerButtons.Capture(buttons, true, windowHandle);
+            State.set_X(cursorPoint.x); State.set_Y(cursorPoint.y);
+            State.set_LeftButton(ToButtonState(buttons, 1u << 0));
+            State.set_MiddleButton(ToButtonState(buttons, 1u << 1));
+            State.set_RightButton(ToButtonState(buttons, 1u << 2));
+            State.set_XButton1(ToButtonState(buttons, 1u << 3));
+            State.set_XButton2(ToButtonState(buttons, 1u << 4));
             return State;
         }
+        if (!hasCursor) { return State; }
 
+        cursorPoint = Win32PointerWindowRouting::ResolveScreenPoint(windowHandle, cursorPoint);
         bool passivePointerTarget = Window != KeyboardWindow
             && Win32PointerWindowRouting::IsPointerTarget(windowHandle, ::WindowFromPoint(cursorPoint));
         ::ScreenToClient(windowHandle, &cursorPoint);

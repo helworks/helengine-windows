@@ -2,11 +2,14 @@
 #include "camera_toon_radio_fixture.hpp"
 #include "platform/windows/win32/win32_camera_toon_effects_configuration.hpp"
 #include <d3dcompiler.h>
+#include <DirectXPackedVector.h>
+#include "platform/windows/win32/win32_material_output_state.hpp"
 #include <array>
 #include <chrono>
 #include <thread>
 #include "platform/windows/win32/win32_camera_toon_shader_source.hpp"
 #include "platform/windows/win32/win32_pearl_surface_shader.hpp"
+#include <algorithm>
 #include <cmath>
 #include <cstring>
 #include <fstream>
@@ -90,28 +93,168 @@ namespace helengine::windows {
             TestAsyncCompilation();
         }
 
+        /// <summary>Runs only the normal-crease attachment regressions without a presentation surface.</summary>
+        void RunCreases() { for(UINT samples : {1u,4u}) { TestCreaseJunctions(samples); TestCreaseWidthAtAngles(samples); TestCreaseBackgroundIndependence(samples); TestNormalCreases(samples); } }
+
+        /// <summary>Checks the low-cost normal layer on sharp, smooth, coplanar, excluded and occluded meshes at both sample counts.</summary>
+        void RunNormalLayer() {
+            for(UINT samples : {1u,4u}) for(int mode=0;mode<6;++mode) {
+                Win32CameraToonPass pass(Device.Get(),2,0,3);WaitForShaders(pass);
+                CameraToonEffectsConfiguration effects;effects.CreaseAngleDegrees=mode==4 ? 180.f : 45.f;
+                pass.ConfigureEffects(effects);PrepareMaterial(true,1,0,true);
+                auto destination=CreateDestination();auto emission=CreateAlbum(true);auto* view=emission.Get();Context->PSSetShaderResources(7,1,&view);
+                D3D11_VIEWPORT viewport{0,0,64,48,0,1};pass.Begin(Context.Get(),viewport,samples);
+                DrawCreasePanel(pass,0,mode==1,mode==2,mode!=3,0,1,true);
+                if(mode==5) DrawRectangle(pass,-.3f,.8f,.3f,-.8f,0,1,.1f);
+                pass.Composite(Context.Get(),destination.Get(),nullptr,viewport);Readback(destination.Get());
+                bool ink=Pixels[(24*DestinationWidth+31)*4]<15 || Pixels[(24*DestinationWidth+32)*4]<15;
+                Require(ink==(mode==0),"Normal layer must affect only visible sharp eligible creases.");
+                Require(Pixels[(18*DestinationWidth+18)*4]>230,"Normal layer marked a coplanar triangle interior.");
+                std::cout << "Normal layer " << samples << "x mode=" << mode << " passed." << std::endl;
+            }
+        }
+
+        /// <summary>Requires thin cloth to outline against a nearby wall without marking coplanar mesh or material boundaries.</summary>
+        void RunThinSurface() {
+            for(UINT samples : {1u,4u}) for(bool gap : {false,true}) for(bool perspective : {false,true}) {
+                Win32CameraToonPass pass(Device.Get(),2,0,3);WaitForShaders(pass);
+                auto destination=CreateDestination();PrepareMaterial(false,1);
+                D3D11_VIEWPORT viewport{0,0,64,48,0,1};pass.Begin(Context.Get(),viewport,samples,perspective ? .1f : 0.f,perspective ? 100.f : 1.f);
+                const float wall=perspective ? (100.f-10.f/3.7f)/99.9f : .5f;
+                const float cloth=gap ? (perspective ? (100.f-10.f/3.688f)/99.9f : .498f) : wall;
+                int wallOwner=0,clothOwner=0;
+                DrawRectangle(pass,-.9f,.9f,.9f,-.9f,0,1,wall,0,0,nullptr,&wallOwner);
+                DrawRectangle(pass,-.5f,.5f,0,-.5f,0,1,cloth,0,0,nullptr,&clothOwner);
+                DrawRectangle(pass,0,.5f,.5f,-.5f,0,1,cloth,0,0,nullptr,&clothOwner);
+                pass.Composite(Context.Get(),destination.Get(),nullptr,viewport);Readback(destination.Get());
+                Require((Pixels[(24*DestinationWidth+16)*4]<15)==gap,"Thin cloth depth gap must outline; coplanar identities must remain unmarked.");
+                Require(Pixels[(24*DestinationWidth+31)*4]>=15,"Cloth material slots must not acquire a stripe seam.");
+                Require(Pixels[(24*DestinationWidth+15)*4]>=15,"Thin cloth ink must stay on the foreground side.");
+                std::cout << "Thin surface " << samples << "x gap=" << gap << " perspective=" << perspective << " passed." << std::endl;
+            }
+        }
+
+        /// <summary>Checks unilateral depth edges independently of mesh IDs and excludes coplanar material seams.</summary>
+        void RunDepthSobel() {
+            RunDepthOpening();RunSilhouetteBounds();
+            for(UINT samples : {1u,4u}) for(bool sameMesh : {false,true}) for(bool stepped : {false,true}) {
+                Win32CameraToonPass pass(Device.Get(),3,5,3);WaitForShaders(pass);
+                auto destination=CreateDestination();PrepareMaterial(false,1);
+                D3D11_VIEWPORT viewport{0,0,64,48,0,1};pass.Begin(Context.Get(),viewport,samples);
+                int firstOwner=0,secondOwner=0;
+                DrawRectangle(pass,-.75f,.75f,0,-.75f,0,1,.2f,0,0,nullptr,&firstOwner);
+                DrawRectangle(pass,0,.75f,.75f,-.75f,0,1,stepped ? .8f : .2f,0,0,nullptr,sameMesh ? &firstOwner : &secondOwner);
+                pass.Composite(Context.Get(),destination.Get(),nullptr,viewport);Readback(destination.Get());
+                bool ink=Pixels[(24*DestinationWidth+31)*4]<15;
+                Require(ink==stepped,"Depth edges must ignore mesh ownership and reject coplanar seams.");
+                Require(Pixels[(24*DestinationWidth+9)*4]<15,"Mesh exterior lost its outline.");
+                std::cout << "Depth Sobel " << samples << "x shared-mesh=" << sameMesh << " passed." << std::endl;
+            }
+        }
+
+        /// <summary>Requires an opening edge between parallel same-material surfaces but rejects a continuous sloped plane.</summary>
+        void RunDepthOpening() {
+            for(UINT samples : {1u,4u}) for(bool stepped : {false,true}) for(bool translated : {false,true}) for(bool perspective : {false,true}) {
+                Win32CameraToonPass pass(Device.Get(),2,0,3);WaitForShaders(pass);
+                auto destination=CreateDestination();PrepareMaterial(false,1);
+                if(translated) {
+                    std::array<float,76> transform{};
+                    for(int matrix=0;matrix<3;++matrix) for(int diagonal=0;diagonal<4;++diagonal) transform[matrix*16+diagonal*5]=1;
+                    transform[3]=8.2f;transform[7]=2.3f;transform[11]=8.2f;transform[50]=2;
+                    Context->UpdateSubresource(Transforms.Get(),0,nullptr,transform.data(),0,0);
+                }
+                D3D11_VIEWPORT viewport{0,0,64,48,0,1};pass.Begin(Context.Get(),viewport,samples,perspective ? .1f : 0.f,perspective ? 100.f : 1.f);
+                float vertices[96]{};
+                const float coordinates[]={-.75f,.75f,0,.75f,-.75f,-.75f,-.75f,-.75f,0,.75f,0,-.75f,0,.75f,.75f,.75f,0,-.75f,0,-.75f,.75f,.75f,.75f,-.75f};
+                for(int index=0;index<12;++index) {
+                    float x=coordinates[index*2];vertices[index*8]=x;vertices[index*8+1]=coordinates[index*2+1];
+                    vertices[index*8+2]=stepped ? (index<6 ? .2f : .8f) : .5f+x*.3f;
+                    vertices[index*8+3]=stepped ? 0 : -.28734789f;vertices[index*8+5]=stepped ? 1 : .95782629f;
+                }
+                D3D11_BUFFER_DESC desc{};desc.ByteWidth=sizeof(vertices);desc.BindFlags=D3D11_BIND_VERTEX_BUFFER;
+                D3D11_SUBRESOURCE_DATA data{vertices,0,0};Microsoft::WRL::ComPtr<ID3D11Buffer> buffer;
+                Check(Device->CreateBuffer(&desc,&data,&buffer),"Create same-part depth opening");
+                ID3D11Buffer* raw=buffer.Get();UINT stride=32,offset=0;Context->IASetVertexBuffers(0,1,&raw,&stride,&offset);
+                Context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);pass.BindGeometry(Context.Get(),0,0);Context->Draw(12,0);
+                pass.Composite(Context.Get(),destination.Get(),nullptr,viewport);Readback(destination.Get());
+                bool ink=Pixels[(24*DestinationWidth+31)*4]<15 || Pixels[(24*DestinationWidth+32)*4]<15;
+                Require(ink==stepped,"Depth Sobel must detect a same-mesh opening and reject continuous slopes.");
+                if(!stepped) for(int y=10;y<38;++y) for(int x=12;x<52;++x)
+                    Require(Pixels[(y*DestinationWidth+x)*4]>=15,"Position quantization introduced false ink on a continuous surface.");
+                std::cout << "Depth opening " << samples << "x stepped=" << stepped << " passed." << std::endl;
+            }
+        }
+
+        /// <summary>Rejects ink beyond the configured radius around acute finite triangle edges.</summary>
+        void RunSilhouetteBounds() {
+            for(UINT samples : {1u,4u}) for(bool shade : {false,true}) {
+                Win32CameraToonPass pass(Device.Get(),4,0,3); WaitForShaders(pass);
+                D3D11_VIEWPORT viewport{0,0,64,48,0,1};
+                auto destination=CreateDestination(); PrepareMaterial(true,1); pass.Begin(Context.Get(),viewport,samples);
+                const std::vector<float> points=shade ? std::vector<float>{20,40,28,16,36,16,44,40,38,37,26,37} : std::vector<float>{20,18,42,19,29,40};
+                const std::vector<int> indices=shade ? std::vector<int>{0,1,2,0,2,5,5,2,4,4,2,3} : std::vector<int>{0,1,2};
+                std::vector<float> vertices(indices.size()*8,0);
+                for(size_t i=0;i<indices.size();++i) { int source=indices[i];vertices[i*8]=points[source*2]/32-1;vertices[i*8+1]=1-points[source*2+1]/24;vertices[i*8+2]=.5f;vertices[i*8+5]=1; }
+                D3D11_BUFFER_DESC descriptor{};descriptor.ByteWidth=static_cast<UINT>(vertices.size()*sizeof(float));descriptor.BindFlags=D3D11_BIND_VERTEX_BUFFER;
+                D3D11_SUBRESOURCE_DATA initial{vertices.data(),0,0};Microsoft::WRL::ComPtr<ID3D11Buffer> buffer;
+                Check(Device->CreateBuffer(&descriptor,&initial,&buffer),"Create acute silhouette fixture");
+                UINT stride=32,offset=0;ID3D11Buffer* raw=buffer.Get();Context->IASetVertexBuffers(0,1,&raw,&stride,&offset);
+                Context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);pass.BindGeometry(Context.Get(),0,0);Context->Draw(static_cast<UINT>(indices.size()),0);
+                pass.Composite(Context.Get(),destination.Get(),nullptr,viewport);Readback(destination.Get());
+                if(!OutputPath.empty() && shade && samples==4) SaveOwnedFixture(OutputPath);
+                int escaped=0;double furthest=0;
+                for(int y=0;y<48;++y) for(int x=0;x<64;++x) {
+                    double distance=1e9;bool inside=false;
+                    for(int edge=0;edge<static_cast<int>(points.size()/2);++edge) {
+                        int next=(edge+1)%static_cast<int>(points.size()/2);double ax=points[edge*2],ay=points[edge*2+1],dx=points[next*2]-ax,dy=points[next*2+1]-ay;
+                        double px=x+.5-ax,py=y+.5-ay,t=std::clamp((px*dx+py*dy)/(dx*dx+dy*dy),0.0,1.0);
+                        distance=std::min(distance,std::hypot(px-t*dx,py-t*dy));if((ay>y+.5)!=(ay+dy>y+.5) && x+.5<ax+dx*py/dy) inside=!inside;
+                    }
+                    if(!inside && Pixels[(y*DestinationWidth+x)*4+3]>16) { furthest=std::max(furthest,distance);if(distance>4.71) ++escaped; }
+                }
+                std::cout << "Silhouette radius " << samples << "x shade=" << shade << ": maximum=" << furthest << " escaped=" << escaped << std::endl;
+                Require(escaped==0,"Finite silhouette expansion produced corner spikes beyond its four-pixel radius.");
+            }
+        }
+
+        /// <summary>Checks adjacent registered wall corners and the existing sofa eligibility contract without creating a window.</summary>
+        void RunWallInk() {
+            for(UINT samples : {1u,4u}) {
+                TestRegisteredWallCorners(samples);
+                TestRegisteredToonSurface(samples);
+                std::cout << "Registered wall corners and sofa contours " << samples << "x passed.\n";
+            }
+        }
+
+        /// <summary>Runs dynamic occlusion and radiance separation on both supported sample counts.</summary>
+        void RunGtao() { for(UINT samples : {1u,4u}) { TestAoPreservesDirectAndEmission(samples); TestContactOcclusion(samples); TestGtaoCameraAndMotion(samples); TestGtaoHdrAndGlass(samples); } TestGtaoGpuTime(); }
+
         /// Verifies settings, independent outlines, lighting, emission, depth, alpha, target resize and context restoration.
         void Run() {
             TestInvalidSettings();
+            RunDepthSobel();
             Win32CameraToonPass pass(Device.Get(), 3.0f, 1.0f, 3);
             WaitForShaders(pass);
             for (UINT samples : { 4u, 1u }) {
+                TestHdrDisplayAndAlpha(samples);
+                TestContactOcclusion(samples);
+                TestAoPreservesDirectAndEmission(samples);
+                TestGtaoCameraAndMotion(samples);
+                TestGtaoHdrAndGlass(samples);
+                TestRegisteredToonSurface(samples);
                 TestSelectedEffects(samples);
                 TestPearlSurface(samples);
                 TestShadowDirectOnly(samples);
                 TestPartIdentity(pass, samples);
                 TestOutlineAndEmission(pass, samples);
                 TestLightingBands(pass, samples);
-                TestInternalEdges(pass, samples);
-                TestNarrowRibAndDepth(pass, samples);
-                TestSubpixelStrokeWidths(pass, samples);
                 TestAuthoredAlpha(pass,samples);
                 TestOverlap(pass, samples);
                 TestSmallAndMovedViewport(pass, samples);
                 TestObliqueCoverage(pass, samples);
-                TestComposedContourCoverage(pass, samples);
                 TestFollowingStandardPass(pass, samples);
-                std::cout << "Camera toon hardware " << samples << "x: emission, album color, alpha, outside/inside widths, bands, depth, resize and state passed.\n";
+                TestSequentialScratchSharing(pass,samples);
+                std::cout << "Camera toon hardware " << samples << "x: emission, album color, alpha, external silhouettes, bands, depth, resize and state passed.\n";
             }
             TestViewportGpuTime(pass);
         }
@@ -199,10 +342,10 @@ namespace helengine::windows {
             return view;
         }
         /// Creates an entirely owned RGBA destination initialized to transparent background.
-        Microsoft::WRL::ComPtr<ID3D11RenderTargetView> CreateDestination(UINT samples = 1) {
+        Microsoft::WRL::ComPtr<ID3D11RenderTargetView> CreateDestination(UINT samples = 1, DXGI_FORMAT format = DXGI_FORMAT_R8G8B8A8_UNORM) {
             D3D11_TEXTURE2D_DESC descriptor {};
             descriptor.Width = DestinationWidth; descriptor.Height = DestinationHeight;
-            descriptor.MipLevels = 1; descriptor.ArraySize = 1; descriptor.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+            descriptor.MipLevels = 1; descriptor.ArraySize = 1; descriptor.Format = format;
             descriptor.SampleDesc.Count = samples; descriptor.BindFlags = D3D11_BIND_RENDER_TARGET;
             Microsoft::WRL::ComPtr<ID3D11Texture2D> texture;
             Microsoft::WRL::ComPtr<ID3D11RenderTargetView> view;
@@ -244,7 +387,7 @@ namespace helengine::windows {
             Context->OMSetBlendState(nullptr, nullptr, 0xFFFFFFFFu);
         }
         /// Draws two coplanar triangles sharing normal data; no triangle boundary should be outlined.
-        void DrawRectangle(Win32CameraToonPass& pass, float left, float top, float right, float bottom, float normalX = 0.0f, float normalZ = 1.0f, float depth = 0.5f, float reflectivity = 0.0f, float bloomWeight = 0.0f, const void* material = nullptr) {
+        void DrawRectangle(Win32CameraToonPass& pass, float left, float top, float right, float bottom, float normalX = 0.0f, float normalZ = 1.0f, float depth = 0.5f, float reflectivity = 0.0f, float bloomWeight = 0.0f, const void* material = nullptr, const void* owner = nullptr) {
             const float vertices[] = {
                 left,top,depth, normalX,0,normalZ, 0,0, right,top,depth, normalX,0,normalZ, 1,0, left,bottom,depth, normalX,0,normalZ, 0,1,
                 left,bottom,depth, normalX,0,normalZ, 0,1, right,top,depth, normalX,0,normalZ, 1,0, right,bottom,depth, normalX,0,normalZ, 1,1
@@ -257,9 +400,464 @@ namespace helengine::windows {
             ID3D11Buffer* buffer = vertexBuffer.Get(); UINT stride = 32, offset = 0;
             Context->IASetVertexBuffers(0, 1, &buffer, &stride, &offset);
             Context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-            if(material!=nullptr) pass.BindRegisteredGeometry(Context.Get(),material);
-            else pass.BindGeometry(Context.Get(), reflectivity, bloomWeight);
+            if(material!=nullptr) pass.BindRegisteredGeometry(Context.Get(),material,false,false,owner);
+            else pass.BindGeometry(Context.Get(), reflectivity, bloomWeight,false,false,1,0,false,owner);
             Context->Draw(6, 0);
+        }
+
+        /// <summary>Draws both visible faces in one mesh submission so the shared crease cannot use distinct part IDs.</summary>
+        void DrawCreasePanel(Win32CameraToonPass& pass, float offset, bool smooth, bool coplanar, bool outlined, float angle=0, float scale=1, bool flatDepth=false) {
+            const float n=0.70710678f;
+            float x0=offset-0.6f,x1=offset,x2=offset+0.6f;
+            float z0=coplanar || flatDepth ? 0.2f : 0.8f,z1=0.2f;
+            float leftX=coplanar ? 0.0f : -n,rightX=coplanar ? 0.0f : n;
+            float outerZ=coplanar ? 1.0f : n;
+            float vertices[]={
+                x0,0.75f,z0,leftX,0,outerZ,0,0, x1,0.75f,z1,smooth ? 0.0f:leftX,0,smooth ? 1.0f:outerZ,0,0, x0,-0.75f,z0,leftX,0,outerZ,0,0,
+                x0,-0.75f,z0,leftX,0,outerZ,0,0, x1,0.75f,z1,smooth ? 0.0f:leftX,0,smooth ? 1.0f:outerZ,0,0, x1,-0.75f,z1,smooth ? 0.0f:leftX,0,smooth ? 1.0f:outerZ,0,0,
+                x1,0.75f,z1,smooth ? 0.0f:rightX,0,smooth ? 1.0f:outerZ,0,0, x2,0.75f,z0,rightX,0,outerZ,0,0, x1,-0.75f,z1,smooth ? 0.0f:rightX,0,smooth ? 1.0f:outerZ,0,0,
+                x1,-0.75f,z1,smooth ? 0.0f:rightX,0,smooth ? 1.0f:outerZ,0,0, x2,0.75f,z0,rightX,0,outerZ,0,0, x2,-0.75f,z0,rightX,0,outerZ,0,0
+            };
+            for(int vertex=0;vertex<12;++vertex) {
+                float x=vertices[vertex*8],y=vertices[vertex*8+1];
+                vertices[vertex*8]=scale*(x*std::cos(angle)-y*std::sin(angle));
+                vertices[vertex*8+1]=scale*(x*std::sin(angle)+y*std::cos(angle));
+            }
+            D3D11_BUFFER_DESC descriptor{};descriptor.ByteWidth=sizeof(vertices);descriptor.BindFlags=D3D11_BIND_VERTEX_BUFFER;
+            D3D11_SUBRESOURCE_DATA initial{vertices,0,0};Microsoft::WRL::ComPtr<ID3D11Buffer> vertex;
+            Check(Device->CreateBuffer(&descriptor,&initial,&vertex),"Create one-part normal crease fixture");
+            auto* buffer=vertex.Get();UINT stride=32,start=0;Context->IASetVertexBuffers(0,1,&buffer,&stride,&start);
+            Context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+            pass.BindGeometry(Context.Get(),0,0,false,false,outlined ? 1.0f : 0.0f);Context->Draw(12,0);
+        }
+        /// <summary>Rejects lost crease shading, triangle seams, smooth-surface contours and hidden or ineligible edges on real attachments.</summary>
+        void TestNormalCreases(UINT samples) {
+            Win32CameraToonPass pass(Device.Get(),2,0,3);WaitForShaders(pass);
+            D3D11_VIEWPORT viewport{7,9,64,48,0,1};
+            CameraToonEffectsConfiguration effects;
+            for(float invalid : {-1.0f,181.0f,std::numeric_limits<float>::quiet_NaN(),std::numeric_limits<float>::infinity()}) {
+                effects.CreaseAngleDegrees=invalid;bool rejected=false;
+                try { pass.ConfigureEffects(effects); } catch(const std::invalid_argument&) { rejected=true; }
+                Require(rejected,"Invalid normal-crease angle was accepted");
+            }
+            for(int mode=0;mode<10;++mode) {
+                effects.CreaseAngleDegrees=mode==1 ? 80.0f : mode==2 ? 0.1f : mode==3 ? 0.0f : mode==6 ? 100.0f : mode==7 ? 180.0f : 45.0f;
+                pass.ConfigureEffects(effects);pass.Configure(0,mode==9 ? 1.0f : 2.0f,3);
+                PrepareMaterial(true,1,0,true);auto destination=CreateDestination(samples);
+                auto whiteEmission=CreateAlbum(true);auto* emissionView=whiteEmission.Get();Context->PSSetShaderResources(7,1,&emissionView);
+                pass.Begin(Context.Get(),viewport,samples);
+                float offset=mode==1 ? 0.015625f : 0.0f;
+                DrawCreasePanel(pass,offset,mode==2 || mode==8,mode==3,mode!=4);
+                if(mode==5) DrawRectangle(pass,-0.3f,0.8f,0.3f,-0.8f,0,1,0.1f);
+                pass.Composite(Context.Get(),destination.Get(),nullptr,viewport);Readback(destination.Get());
+                double ink=0;
+                for(UINT x=28;x<=36;++x) ink+=(255.0-Pixels[((9+24)*DestinationWidth+7+x)*4])/252.0;
+                if(mode<2 || mode==9) {
+                    Require(mode==9 ? ink>0.9 && ink<1.1 : ink>1.8 && ink<2.2,"Single-part 90-degree normal crease lost its physical width");
+                    ExpectChannel(7+24,9+24,0,255,"Normal crease contaminated a flat face interior");
+                } else Require(ink<0.02,"Normal creases outlined smooth, coplanar, ineligible or hidden geometry");
+                ExpectChannel(7+24,9+18,0,255,"Coplanar triangle diagonal received a normal crease");
+            }
+            std::cout << "Normal creases " << samples << "x: validated angle, 45/80/100/180-degree thresholds, one/two-pixel width, half-pixel phase, smooth/coplanar/hidden/disabled passed.\n";
+        }
+        /// <summary>Three faces meeting at a vertex must not turn their interiors into triangular ink patches.</summary>
+        void TestCreaseJunctions(UINT samples) {
+            Win32CameraToonPass pass(Device.Get(),2,0,3);WaitForShaders(pass);
+            D3D11_VIEWPORT viewport{7,9,64,48,0,1};
+            double worst=0;int outside=0;
+            for(float scale : {0.8f,0.35f,0.15f}) for(float angle : {0.0f,0.3f,0.7f,1.2f}) {
+                float vertices[72]{};double ends[3][2]{};
+                for(int face=0;face<3;++face) {
+                    double a=angle+face*6.283185307179586/3;
+                    ends[face][0]=32*scale*std::cos(a);ends[face][1]=-24*scale*std::sin(a);
+                    for(int corner=0;corner<3;++corner) {
+                        int vertex=(face*3+corner)*8;
+                        double direction=angle+(face+corner-1)*6.283185307179586/3;
+                        vertices[vertex]=corner==0 ? 0:static_cast<float>(scale*std::cos(direction));
+                        vertices[vertex+1]=corner==0 ? 0:static_cast<float>(scale*std::sin(direction));
+                        vertices[vertex+2]=.5f;vertices[vertex+3+face]=1;
+                    }
+                }
+                D3D11_BUFFER_DESC descriptor{};descriptor.ByteWidth=sizeof(vertices);descriptor.BindFlags=D3D11_BIND_VERTEX_BUFFER;
+                D3D11_SUBRESOURCE_DATA initial{vertices,0,0};Microsoft::WRL::ComPtr<ID3D11Buffer> geometry;
+                Check(Device->CreateBuffer(&descriptor,&initial,&geometry),"Create three-face crease junction");
+                PrepareMaterial(true,1,0,true);auto destination=CreateDestination(samples);
+                auto emission=CreateAlbum(true);auto* view=emission.Get();Context->PSSetShaderResources(7,1,&view);
+                pass.Begin(Context.Get(),viewport,samples);
+                auto* buffer=geometry.Get();UINT stride=32,start=0;Context->IASetVertexBuffers(0,1,&buffer,&stride,&start);
+                Context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);pass.BindGeometry(Context.Get());Context->Draw(9,0);
+                pass.Composite(Context.Get(),destination.Get(),nullptr,viewport);Readback(destination.Get());
+                for(UINT y=1;y<47;++y) for(UINT x=1;x<63;++x) {
+                    auto pixel=((9+y)*DestinationWidth+7+x)*4;
+                    if(Pixels[pixel+3]!=255 || Pixels[pixel]>=230) continue;
+                    double px=x+.5-32,py=y+.5-24,distance=1000;
+                    for(int edge=0;edge<3;++edge) {
+                        double dx=ends[edge][0],dy=ends[edge][1];
+                        double t=std::max(0.0,std::min(1.0,(px*dx+py*dy)/(dx*dx+dy*dy)));
+                        distance=std::min(distance,std::sqrt((px-t*dx)*(px-t*dx)+(py-t*dy)*(py-t*dy)));
+                    }
+                    worst=std::max(worst,distance);if(distance>1.75) ++outside;
+                }
+            }
+            std::cout<<"Crease junction "<<samples<<"x max-distance="<<worst<<" outside="<<outside<<"\n";
+            Require(outside==0,"Three-face corner produced triangular ink outside its edge footprint");
+        }
+        /// <summary>Bounds sharp-crease ink to the configured physical width for rotated and small foreground pieces.</summary>
+        void TestCreaseWidthAtAngles(UINT samples) {
+            Win32CameraToonPass pass(Device.Get(),2,0,3);WaitForShaders(pass);
+            D3D11_VIEWPORT viewport{7,9,64,48,0,1};
+            double worst=0;int outside=0;
+            for(float scale : {1.0f,0.25f,0.10f}) for(float angle : {0.0f,0.2f,0.4f,0.7f,0.9f,1.2f,1.57f}) {
+                PrepareMaterial(true,1,0,true);auto destination=CreateDestination(samples);
+                auto emission=CreateAlbum(true);auto* view=emission.Get();Context->PSSetShaderResources(7,1,&view);
+                pass.Begin(Context.Get(),viewport,samples);DrawCreasePanel(pass,0,false,false,true,angle,scale);
+                pass.Composite(Context.Get(),destination.Get(),nullptr,viewport);Readback(destination.Get());
+                double dx=-32*std::sin(angle),dy=-24*std::cos(angle),length=std::sqrt(dx*dx+dy*dy);
+                for(UINT y=1;y<47;++y) for(UINT x=1;x<63;++x) {
+                    auto pixel=((9+y)*DestinationWidth+7+x)*4;
+                    if(Pixels[pixel+3]!=255 || Pixels[pixel]>=230) continue;
+                    double distance=std::abs((x+.5-32)*dy-(y+.5-24)*dx)/length;
+                    worst=std::max(worst,distance);
+                    if(distance>1.75) ++outside;
+                }
+                if(!OutputPath.empty() && angle==0.7f && scale==0.25f) SaveOwnedFixture(OutputPath);
+            }
+            std::cout<<"Crease width "<<samples<<"x max-distance="<<worst<<" outside="<<outside<<"\n";
+            Require(outside==0,"Crease corners produce ink beyond their configured width and pixel footprint");
+        }
+        /// <summary>Changing unrelated background normals must not rotate or extend the foreground crease at its endpoints.</summary>
+        void TestCreaseBackgroundIndependence(UINT samples) {
+            Win32CameraToonPass pass(Device.Get(),2,0,3);WaitForShaders(pass);
+            D3D11_VIEWPORT viewport{7,9,64,48,0,1};
+            int backgroundIdentity=0;
+            pass.ConfigureMaterialEffects(&backgroundIdentity,0,0,false,true,0);
+            for(float scale : {1.0f,0.25f,0.10f}) for(float angle : {0.0f,0.4f,0.9f,1.57f}) {
+                std::vector<unsigned char> reference;
+                for(int variant=0;variant<3;++variant) {
+                    PrepareMaterial(true,1,0,true);auto destination=CreateDestination(samples);
+                    auto emission=CreateAlbum(true);auto* view=emission.Get();Context->PSSetShaderResources(7,1,&view);
+                    pass.Begin(Context.Get(),viewport,samples);
+                    DrawRectangle(pass,-1,1,1,-1,variant==1 ? 1.0f:variant==2 ? -1.0f:0.0f,variant==0 ? 1.0f:0.0f,0.95f,0,0,&backgroundIdentity);
+                    DrawCreasePanel(pass,0,false,false,true,angle,scale);
+                    pass.Composite(Context.Get(),destination.Get(),nullptr,viewport);Readback(destination.Get());
+                    if(variant==0) reference=Pixels;
+                    else {
+                        int changed=0;
+                        for(UINT y=1;y<47;++y) for(UINT x=1;x<63;++x) {
+                            auto pixel=((9+y)*DestinationWidth+7+x)*4;
+                            if(std::abs(int(Pixels[pixel])-int(reference[pixel]))>2) ++changed;
+                        }
+                        std::cout<<"Crease background independence "<<samples<<"x scale="<<scale<<" angle="<<angle<<" variant="<<variant<<" changed="<<changed<<"\n";
+                        Require(changed==0,"Unrelated background normals deform a foreground crease endpoint");
+                    }
+                }
+            }
+        }
+        /// Verifies compatible sequential cameras reuse actual GPU targets while overlapping camera passes remain independent.
+        void TestSequentialScratchSharing(Win32CameraToonPass& first, UINT samples) {
+            Win32CameraToonPass second(Device.Get(),0,0,3); WaitForShaders(second);
+            CameraToonEffectsConfiguration effects; effects.ToonEnabled=false; second.ConfigureEffects(effects);
+            D3D11_VIEWPORT viewport {7,9,64,48,0,1};
+            PrepareMaterial(false,1,0,true);
+            auto destination=CreateDestination(samples);
+            first.Begin(Context.Get(),viewport,samples);
+            Microsoft::WRL::ComPtr<ID3D11RenderTargetView> firstTarget;
+            Context->OMGetRenderTargets(1,&firstTarget,nullptr);
+            DrawRectangle(first,-0.5f,0.5f,0.5f,-0.5f);
+            first.Composite(Context.Get(),destination.Get(),nullptr,viewport);
+            second.Begin(Context.Get(),viewport,samples);
+            Microsoft::WRL::ComPtr<ID3D11RenderTargetView> secondTarget;
+            Context->OMGetRenderTargets(1,&secondTarget,nullptr);
+            Require(firstTarget.Get()==secondTarget.Get(),"Compatible sequential camera passes duplicated their viewport scratch targets.");
+            DrawRectangle(second,-0.5f,0.5f,0.5f,-0.5f);
+            second.Composite(Context.Get(),destination.Get(),nullptr,viewport);
+            first.Begin(Context.Get(),viewport,samples);
+            Context->OMGetRenderTargets(1,firstTarget.ReleaseAndGetAddressOf(),nullptr);
+            DrawRectangle(first,-0.5f,0.5f,0.5f,-0.5f);
+            second.Begin(Context.Get(),viewport,samples);
+            Context->OMGetRenderTargets(1,secondTarget.ReleaseAndGetAddressOf(),nullptr);
+            Require(firstTarget.Get()!=secondTarget.Get(),"Overlapping camera passes borrowed the same busy scratch targets.");
+            DrawRectangle(second,-0.25f,0.25f,0.25f,-0.25f);
+            second.Composite(Context.Get(),destination.Get(),nullptr,viewport);
+            first.Composite(Context.Get(),destination.Get(),nullptr,viewport);
+            Readback(destination.Get());
+            ExpectChannel(7+32,9+24,3,255,"Shared scratch ownership damaged final opaque coverage.");
+        }
+        /// Verifies radiance above one survives until exposure, with authored alpha and HDR bloom remaining premultiplied.
+        void TestHdrDisplayAndAlpha(UINT samples) {
+            Win32CameraToonPass pass(Device.Get(),0,0,3); WaitForShaders(pass);
+            CameraToonEffectsConfiguration effects; effects.ToonEnabled=false; effects.ToneMappingEnabled=true; effects.Exposure=0.25f;
+            pass.ConfigureEffects(effects);
+            D3D11_VIEWPORT viewport {7,9,64,48,0,1};
+            UINT center=((9+24)*DestinationWidth+7+32)*4;
+            PrepareMaterial(false,1,0,true);
+            std::array<float,72> lights {}; lights[0]=lights[1]=lights[2]=1;
+            Context->UpdateSubresource(Lights.Get(),0,nullptr,lights.data(),0,0);
+            auto destination=CreateDestination(samples);
+            pass.Begin(Context.Get(),viewport,samples); DrawRectangle(pass,-0.5f,0.5f,0.5f,-0.5f);
+            pass.Composite(Context.Get(),destination.Get(),nullptr,viewport); Readback(destination.Get());
+            int low=Pixels[center];
+            lights[0]=lights[1]=lights[2]=4; Context->UpdateSubresource(Lights.Get(),0,nullptr,lights.data(),0,0);
+            destination=CreateDestination(samples);
+            pass.Begin(Context.Get(),viewport,samples); DrawRectangle(pass,-0.5f,0.5f,0.5f,-0.5f);
+            pass.Composite(Context.Get(),destination.Get(),nullptr,viewport); Readback(destination.Get());
+            int high=Pixels[center];
+            Require(high>low+35 && high<250,"HDR radiance was clipped before exposure or filmic output lost highlight headroom.");
+            const float translucent[] {1,1,1,0.35f}; Context->UpdateSubresource(Base.Get(),0,nullptr,translucent,0,0);
+            destination=CreateDestination(samples);
+            pass.Begin(Context.Get(),viewport,samples); DrawRectangle(pass,-0.5f,0.5f,0.5f,-0.5f);
+            pass.Composite(Context.Get(),destination.Get(),nullptr,viewport); Readback(destination.Get());
+            Require(std::abs(static_cast<int>(Pixels[center+3])-89)<=1,"Tone mapping changed authored alpha.");
+            Require(std::abs(static_cast<int>(Pixels[center])-static_cast<int>(std::round(high*0.35)))<=2,"Tone mapping was applied to premultiplied radiance without unpremultiplication.");
+            effects.BloomEnabled=true; effects.BloomStrength=1; effects.BloomThreshold=1; effects.BloomRadius=12; pass.ConfigureEffects(effects);
+            const float emission[] {4,2,1,1}; Context->UpdateSubresource(Emission.Get(),0,nullptr,emission,0,0);
+            destination=CreateDestination(samples);
+            pass.Begin(Context.Get(),viewport,samples); DrawRectangle(pass,-0.125f,0.125f,0.125f,-0.125f,0,1,0.5f,0,1);
+            pass.Composite(Context.Get(),destination.Get(),nullptr,viewport); Readback(destination.Get());
+            UINT halo=((9+24)*DestinationWidth+7+39)*4;
+            Require(Pixels[halo+3]>0,"HDR selected emission did not produce a transparent bloom halo.");
+            for(UINT offset=0;offset<Pixels.size();offset+=4) {
+                Require(Pixels[offset]<=Pixels[offset+3] && Pixels[offset+1]<=Pixels[offset+3] && Pixels[offset+2]<=Pixels[offset+3],"HDR composite violated premultiplied-alpha bounds.");
+            }
+        }
+        /// <summary>Requires contact visibility to attenuate diffuse indirect light while retaining direct sun and emission.</summary>
+        void TestAoPreservesDirectAndEmission(UINT samples) {
+            Win32CameraToonPass pass(Device.Get(),0,0,3); WaitForShaders(pass);
+            CameraToonEffectsConfiguration effects; effects.ToonEnabled=false;
+            effects.AmbientOcclusionStrength=1; effects.AmbientOcclusionRadius=0.35f;
+            effects.AmbientOcclusionBias=0.01f; effects.AmbientOcclusionPixelRadius=12;
+            D3D11_VIEWPORT viewport {7,9,64,48,0,1};
+            UINT contact=((9+24)*DestinationWidth+7+30)*4;
+            for(int source=0;source<2;++source) {
+                PrepareMaterial(false,1,0,true);
+                std::array<float,72> lights {};
+                if(source==0) { lights[4]=1; lights[8]=lights[9]=lights[10]=1.25663706f; lights[14]=-1; }
+                Context->UpdateSubresource(Lights.Get(),0,nullptr,lights.data(),0,0);
+                const float emitted[]={0.4f,0.2f,0.1f,source==1 ? 1.0f : 0.0f};
+                Context->UpdateSubresource(Emission.Get(),0,nullptr,emitted,0,0);
+                std::vector<unsigned char> baseline;
+                for(int enabled=0;enabled<2;++enabled) {
+                    effects.AmbientOcclusionEnabled=enabled!=0; pass.ConfigureEffects(effects);
+                    auto destination=CreateDestination(samples);
+                    pass.Begin(Context.Get(),viewport,samples);
+                    DrawRectangle(pass,-0.75f,0.6f,0,-0.6f);
+                    DrawRectangle(pass,0,0.6f,0.75f,-0.6f,0,1,0.65f);
+                    pass.Composite(Context.Get(),destination.Get(),nullptr,viewport); Readback(destination.Get());
+                    if(enabled==0) baseline=Pixels;
+                    else for(UINT channel=0;channel<4;++channel) Require(std::abs(int(Pixels[contact+channel])-int(baseline[contact+channel]))<=1,
+                        source==0 ? "AO attenuated direct sunlight." : "AO attenuated emissive radiance.");
+                }
+            }
+        }
+        /// <summary>Reads one owned FP16 attachment pixel after resolving multisample values, preserving values above one.</summary>
+        std::array<float,4> ReadHdrPixel(ID3D11RenderTargetView* target,UINT x,UINT y) {
+            Microsoft::WRL::ComPtr<ID3D11Resource> resource;target->GetResource(&resource);
+            Microsoft::WRL::ComPtr<ID3D11Texture2D> texture;Check(resource.As(&texture),"Read HDR fixture texture");
+            D3D11_TEXTURE2D_DESC descriptor{};texture->GetDesc(&descriptor);
+            if(descriptor.SampleDesc.Count>1) {
+                descriptor.SampleDesc.Count=1;descriptor.BindFlags=0;
+                Microsoft::WRL::ComPtr<ID3D11Texture2D> resolved;Check(Device->CreateTexture2D(&descriptor,nullptr,&resolved),"Create HDR fixture resolve");
+                Context->ResolveSubresource(resolved.Get(),0,texture.Get(),0,descriptor.Format);texture=resolved;
+            }
+            descriptor.Usage=D3D11_USAGE_STAGING;descriptor.CPUAccessFlags=D3D11_CPU_ACCESS_READ;descriptor.BindFlags=0;
+            Microsoft::WRL::ComPtr<ID3D11Texture2D> staging;Check(Device->CreateTexture2D(&descriptor,nullptr,&staging),"Create HDR fixture readback");
+            Context->CopyResource(staging.Get(),texture.Get());D3D11_MAPPED_SUBRESOURCE mapped{};Check(Context->Map(staging.Get(),0,D3D11_MAP_READ,0,&mapped),"Map HDR fixture readback");
+            const auto* pixel=reinterpret_cast<const uint16_t*>(static_cast<const uint8_t*>(mapped.pData)+y*mapped.RowPitch)+x*4;
+            std::array<float,4> result{};for(UINT channel=0;channel<4;++channel) result[channel]=DirectX::PackedVector::XMConvertHalfToFloat(pixel[channel]);
+            Context->Unmap(staging.Get(),0);return result;
+        }
+        /// <summary>Requires independent FP16 indirect occlusion, unchanged direct/emissive alpha and correctly attenuated opaque lighting beneath glass.</summary>
+        void TestGtaoHdrAndGlass(UINT samples) {
+            Win32CameraToonPass pass(Device.Get(),0,0,3);WaitForShaders(pass);
+            CameraToonEffectsConfiguration effects;effects.ToonEnabled=false;effects.ToneMappingEnabled=true;
+            effects.AmbientOcclusionStrength=1;effects.AmbientOcclusionRadius=0.35f;effects.AmbientOcclusionBias=0.01f;effects.AmbientOcclusionPixelRadius=12;
+            D3D11_VIEWPORT viewport{7,9,64,48,0,1};Win32MaterialOutputState output;output.Initialize(Device.Get());
+            std::array<float,4> indirectBaseline{},indirectBlocked{},ambientUnblocked{},ambientBlocked{};
+            for(int source=0;source<4;++source) for(int enabled=0;enabled<2;++enabled) {
+                PrepareMaterial(false,1,0,true);
+                std::array<float,72> lights{};
+                if(source==0 || source==3) lights[0]=lights[1]=lights[2]=0.5f;
+                if(source==1) {lights[4]=1;lights[8]=lights[9]=lights[10]=12.5663706f;lights[14]=-1;}
+                Context->UpdateSubresource(Lights.Get(),0,nullptr,lights.data(),0,0);
+                const float emitted[]={4,2,1,source==2 ? 1.0f:0.0f};Context->UpdateSubresource(Emission.Get(),0,nullptr,emitted,0,0);
+                const float surface[]={1,1,1,source==1 || source==2 ? 0.35f:1.0f};Context->UpdateSubresource(Base.Get(),0,nullptr,surface,0,0);
+                effects.AmbientOcclusionEnabled=enabled!=0;pass.ConfigureEffects(effects);
+                auto sentinel=CreateAlbum();ID3D11ShaderResourceView* expectedViews[11]{};
+                for(UINT index=0;index<11;++index) expectedViews[index]=sentinel.Get();Context->PSSetShaderResources(17,11,expectedViews);
+                auto destination=CreateDestination(samples,DXGI_FORMAT_R16G16B16A16_FLOAT);pass.Begin(Context.Get(),viewport,samples);
+                DrawRectangle(pass,-1,1,0,-1);DrawRectangle(pass,0,1,1,-1,0,1,0.65f);
+                if(source==3) {
+                    Microsoft::WRL::ComPtr<ID3D11RenderTargetView> position,normal;ID3D11RenderTargetView* attachments[7]{};
+                    Context->OMGetRenderTargets(7,attachments,nullptr);
+                    for(UINT index=0;index<7;++index) {if(index==4) position.Attach(attachments[index]);else if(index==5) normal.Attach(attachments[index]);else if(attachments[index]) attachments[index]->Release();}
+                    auto originalPosition=ReadHdrPixel(position.Get(),30,24),originalNormal=ReadHdrPixel(normal.Get(),30,24);
+                    lights.fill(0);Context->UpdateSubresource(Lights.Get(),0,nullptr,lights.data(),0,0);
+                    const float glassEmission[]={2,1,0.5f,1};Context->UpdateSubresource(Emission.Get(),0,nullptr,glassEmission,0,0);
+                    const float glass[]={1,1,1,0.25f};Context->UpdateSubresource(Base.Get(),0,nullptr,glass,0,0);
+                    output.Bind(Context.Get(),true,true,true,true);DrawRectangle(pass,-1,1,1,-1,0,1,0.2f);
+                    Require(ReadHdrPixel(position.Get(),30,24)==originalPosition && ReadHdrPixel(normal.Get(),30,24)==originalNormal,"AO glass replaced the opaque occluder's geometry.");
+                }
+                pass.Composite(Context.Get(),destination.Get(),nullptr,viewport);
+                ID3D11ShaderResourceView* restoredViews[11]{};Context->PSGetShaderResources(17,11,restoredViews);
+                for(UINT index=0;index<11;++index) {bool same=restoredViews[index]==expectedViews[index];if(restoredViews[index]) restoredViews[index]->Release();Require(same,"GTAO leaked its SRVs or changed shared GI/probe slots17-27.");}
+                ID3D11ShaderResourceView* emptyViews[11]{};Context->PSSetShaderResources(17,11,emptyViews);
+                auto value=ReadHdrPixel(destination.Get(),37,33);
+                if(source==0) {
+                    if(enabled==0) {indirectBaseline=value;ambientUnblocked=value;}
+                    else {indirectBlocked=value;ambientBlocked=value;Require(value[0]<indirectBaseline[0]*0.9f,"FP16 AO failed to attenuate diffuse indirect radiance.");}
+                } else if(source==1 || source==2) {
+                    if(enabled==0) indirectBaseline=value;
+                    else for(UINT channel=0;channel<4;++channel) Require(std::abs(value[channel]-indirectBaseline[channel])<0.002f,"FP16 AO changed direct/emissive radiance or authored alpha.");
+                    Require(value[0]>value[3],"HDR fixture lost highlight radiance above premultiplied white.");
+                    Require(std::abs(value[3]-0.35f)<0.002f,"FP16 AO changed translucent surface alpha.");
+                } else {
+                    // All glass-case channels stay below the linear scene shoulder at one.
+                    if(enabled==0) indirectBaseline=value;
+                    else {
+                        Require(value[0]<indirectBaseline[0]-0.01f,"Glass discarded the opaque surface's indirect AO.");
+                        Require(value[0]>0.49f,"AO attenuated glass emission rather than only its transmitted indirect background.");
+                    }
+                    const auto& ambient=enabled==0 ? ambientUnblocked:ambientBlocked;
+                    const float glassRadiance[]={0.5f,0.25f,0.125f};
+                    for(UINT channel=0;channel<3;++channel) Require(std::abs(value[channel]-(ambient[channel]*0.75f+glassRadiance[channel]))<0.003f,"Glass AO failed indirect transmittance/emission separation.");
+                    Require(std::abs(value[3]-1)<0.002f,"AO glass changed accumulated opaque alpha.");
+                }
+            }
+        }
+        /// <summary>Requires translated camera equivalence, immediate occluder movement and clean viewport borders without temporal data.</summary>
+        void TestGtaoCameraAndMotion(UINT samples) {
+            Win32CameraToonPass pass(Device.Get(),0,0,3);WaitForShaders(pass);
+            CameraToonEffectsConfiguration effects;effects.ToonEnabled=false;effects.AmbientOcclusionEnabled=true;
+            effects.AmbientOcclusionStrength=1;effects.AmbientOcclusionRadius=0.35f;effects.AmbientOcclusionBias=0.01f;effects.AmbientOcclusionPixelRadius=12;
+            pass.ConfigureEffects(effects);D3D11_VIEWPORT viewport{7,9,64,48,0,1};
+            std::vector<unsigned char> reference;
+            UINT contact=((9+24)*DestinationWidth+7+30)*4;
+            int blocked=0;
+            for(int frame=0;frame<5;++frame) {
+                PrepareMaterial(false,1,0,true);
+                std::array<float,72> lights{};lights[0]=lights[1]=lights[2]=0.5f;
+                Context->UpdateSubresource(Lights.Get(),0,nullptr,lights.data(),0,0);
+                if(frame==1) {
+                    std::array<float,76> transforms{};
+                    for(UINT matrix=0;matrix<3;++matrix) for(UINT diagonal=0;diagonal<4;++diagonal) transforms[matrix*16+diagonal*5]=1;
+                    transforms[3]=2;transforms[7]=1;transforms[11]=2;
+                    transforms[48]=2;transforms[49]=1;transforms[50]=4;
+                    Context->UpdateSubresource(Transforms.Get(),0,nullptr,transforms.data(),0,0);
+                }
+                auto destination=CreateDestination(samples);pass.Begin(Context.Get(),viewport,samples);
+                DrawRectangle(pass,-1,1,0,-1);
+                if(frame<2 || frame==4) DrawRectangle(pass,0,1,1,-1,0,1,0.65f);
+                else if(frame==2) DrawRectangle(pass,0.6f,1,1,-1,0,1,0.65f);
+                pass.Composite(Context.Get(),destination.Get(),nullptr,viewport);Readback(destination.Get());
+                if(frame==0) {reference=Pixels;blocked=Pixels[contact];Require(blocked<119,"Dynamic corner was not visibly occluded.");}
+                if(frame==1) for(UINT channel=0;channel<4;++channel) Require(std::abs(int(Pixels[contact+channel])-int(reference[contact+channel]))<=2,"GTAO depends on the world origin instead of the active camera.");
+                if(frame==2 || frame==3) Require(Pixels[contact]>blocked+8,"Moved or removed occluder retained previous-frame AO.");
+                if(frame==4) Require(std::abs(int(Pixels[contact])-blocked)<=1,"Returning occluder did not produce same-frame visibility.");
+                UINT border=((9+24)*DestinationWidth+7)*4;
+                Require(std::abs(int(Pixels[border])-128)<=1,"Missing offscreen samples darkened a flat viewport border.");
+                UINT distant=((9+24)*DestinationWidth+7+12)*4;
+                Require(std::abs(int(Pixels[distant])-128)<=1,"Spatial denoising spread contact shadow beyond its bounded radius.");
+            }
+        }
+        /// <summary>Reports warmed synthetic 1080p GPU timings for enabled/disabled AO without predicting target-GPU frame rate.</summary>
+        void TestGtaoGpuTime() {
+            Win32CameraToonPass pass(Device.Get(),0,0,3);WaitForShaders(pass);
+            D3D11_TEXTURE2D_DESC descriptor{};descriptor.Width=1920;descriptor.Height=1080;descriptor.MipLevels=1;descriptor.ArraySize=1;
+            descriptor.Format=DXGI_FORMAT_R16G16B16A16_FLOAT;descriptor.SampleDesc.Count=1;descriptor.BindFlags=D3D11_BIND_RENDER_TARGET;
+            Microsoft::WRL::ComPtr<ID3D11Texture2D> texture;Microsoft::WRL::ComPtr<ID3D11RenderTargetView> destination;
+            Check(Device->CreateTexture2D(&descriptor,nullptr,&texture),"Create GTAO timing texture");Check(Device->CreateRenderTargetView(texture.Get(),nullptr,&destination),"Create GTAO timing output");
+            D3D11_VIEWPORT viewport{0,0,1920,1080,0,1};PrepareMaterial(false,1,0,true);
+            Microsoft::WRL::ComPtr<ID3D11Query> disjoint,start,end;D3D11_QUERY_DESC query{};query.Query=D3D11_QUERY_TIMESTAMP_DISJOINT;
+            Check(Device->CreateQuery(&query,&disjoint),"Create GTAO timing interval");query.Query=D3D11_QUERY_TIMESTAMP;
+            Check(Device->CreateQuery(&query,&start),"Create GTAO start timestamp");Check(Device->CreateQuery(&query,&end),"Create GTAO end timestamp");
+            for(UINT samples:{1u,4u}) for(int enabled=0;enabled<2;++enabled) {
+                CameraToonEffectsConfiguration effects;effects.ToonEnabled=false;effects.AmbientOcclusionEnabled=enabled!=0;
+                effects.AmbientOcclusionStrength=0.65f;effects.AmbientOcclusionRadius=0.22f;effects.AmbientOcclusionBias=0.008f;effects.AmbientOcclusionPixelRadius=24;
+                pass.ConfigureEffects(effects);
+                for(int iteration=0;iteration<4;++iteration) {
+                    if(iteration==3) {Context->Begin(disjoint.Get());Context->End(start.Get());}
+                    pass.Begin(Context.Get(),viewport,samples);DrawRectangle(pass,-1,1,0,-1);DrawRectangle(pass,0,1,1,-1,0,1,0.65f);
+                    pass.Composite(Context.Get(),destination.Get(),nullptr,viewport);
+                    if(iteration==3) {Context->End(end.Get());Context->End(disjoint.Get());}
+                }
+                Context->Flush();D3D11_QUERY_DATA_TIMESTAMP_DISJOINT interval{};HRESULT result;ULONGLONG deadline=GetTickCount64()+10000;
+                while((result=Context->GetData(disjoint.Get(),&interval,sizeof(interval),0))==S_FALSE) {Require(GetTickCount64()<deadline,"GTAO timing query timed out.");Sleep(0);}
+                Check(result,"Read GTAO timing interval");UINT64 first=0,last=0;
+                Require(Context->GetData(start.Get(),&first,sizeof(first),0)==S_OK && Context->GetData(end.Get(),&last,sizeof(last),0)==S_OK,"GTAO timestamps incomplete.");
+                Require(!interval.Disjoint && interval.Frequency>0,"GTAO timing frequency changed.");
+                std::cout<<"Synthetic1920x1080 "<<samples<<"x AO="<<enabled<<" GPU(ms): "<<1000.0*double(last-first)/double(interval.Frequency)<<" (whole camera pass; current GPU only).\n";
+            }
+        }
+        /// Compares a nearby depth step with coplanar, separated, disabled and empty-background controls.
+        void TestContactOcclusion(UINT samples) {
+            Win32CameraToonPass pass(Device.Get(),0,0,3); WaitForShaders(pass);
+            CameraToonEffectsConfiguration effects; effects.ToonEnabled=false;
+            effects.AmbientOcclusionStrength=1; effects.AmbientOcclusionRadius=0.35f;
+            effects.AmbientOcclusionBias=0.01f; effects.AmbientOcclusionPixelRadius=12;
+            D3D11_VIEWPORT viewport {7,9,64,48,0,1};
+            PrepareMaterial(false,1,0,true);
+            std::array<float,72> lights {}; lights[0]=lights[1]=lights[2]=0.5f;
+            Context->UpdateSubresource(Lights.Get(),0,nullptr,lights.data(),0,0);
+            UINT contact=((9+24)*DestinationWidth+7+30)*4;
+            UINT distant=((9+24)*DestinationWidth+7+12)*4;
+            int unoccluded=0,occluded=0;
+            for(int control=0;control<5;++control) {
+                effects.AmbientOcclusionEnabled=control!=0; pass.ConfigureEffects(effects);
+                auto destination=CreateDestination(samples);
+                pass.Begin(Context.Get(),viewport,samples);
+                DrawRectangle(pass,-0.75f,0.6f,0,-0.6f);
+                if(control!=4) DrawRectangle(pass,0,0.6f,0.75f,-0.6f,0,1,control==2 ? 0.5f : control==3 ? 0.99f : 0.65f);
+                pass.Composite(Context.Get(),destination.Get(),nullptr,viewport); Readback(destination.Get());
+                if(control==0) unoccluded=Pixels[contact];
+                else if(control==1) {
+                    occluded=Pixels[contact];
+                    Require(occluded+8<unoccluded,"Nearby depth geometry did not produce contact occlusion.");
+                    Require(Pixels[distant]>occluded+8,"Contact occlusion darkened a remote coplanar surface equally.");
+                } else Require(std::abs(static_cast<int>(Pixels[contact])-unoccluded)<=1,"AO occluded coplanar, distant or empty geometry.");
+                UINT background=((9+3)*DestinationWidth+7+60)*4;
+                Require(Pixels[background+3]==0 && Pixels[background]==0,"AO painted the empty transparent background.");
+            }
+        }
+        /// <summary>Proves distinct solid walls share a visible corner while their interiors and viewport border remain unmarked.</summary>
+        void TestRegisteredWallCorners(UINT samples) {
+            Win32CameraToonPass pass(Device.Get(),3,2,3);WaitForShaders(pass);
+            CameraToonEffectsConfiguration effects;effects.ToonEnabled=false;pass.ConfigureEffects(effects);
+            int back=0,left=0;pass.ConfigureMaterialEffects(&back,0,0,false,true,1.5f);pass.ConfigureMaterialEffects(&left,0,0,false,true,1.5f);
+            D3D11_VIEWPORT viewport{7,9,64,48,0,1};PrepareMaterial(false,1,0,true);auto destination=CreateDestination(samples);
+            pass.Begin(Context.Get(),viewport,samples);
+            DrawRectangle(pass,-1,1,0,-1,0,1,0.5f,0,0,&back);DrawRectangle(pass,0,1,1,-1,0,1,0.5f,0,0,&left);
+            pass.Composite(Context.Get(),destination.Get(),nullptr,viewport);Readback(destination.Get());
+            Require(Pixels[((9+24)*DestinationWidth+7+31)*4]<10 && Pixels[((9+24)*DestinationWidth+7+32)*4]<10,"Adjacent registered walls lost their shared ink corner.");
+            ExpectChannel(7+8,9+24,0,255,"Wall contour darkened a uniform interior.");
+            ExpectChannel(7+55,9+24,0,255,"Wall contour darkened the neighboring uniform interior.");
+            ExpectChannel(7,9+24,0,255,"Viewport border created a false room contour.");
+        }
+        /// Proves only an explicitly registered material receives quantization and thick contours over an ordinary room surface.
+        void TestRegisteredToonSurface(UINT samples) {
+            Win32CameraToonPass pass(Device.Get(),3,2,3); WaitForShaders(pass);
+            CameraToonEffectsConfiguration effects; effects.ToonEnabled=false; pass.ConfigureEffects(effects);
+            int sofa=0; pass.ConfigureMaterialEffects(&sofa,0,0,false,true,1.5f);
+            D3D11_VIEWPORT viewport {7,9,64,48,0,1};
+            PrepareMaterial(false,1,0,true);
+            auto destination=CreateDestination(samples);
+            pass.Begin(Context.Get(),viewport,samples);
+            DrawRectangle(pass,-0.7f,0.5f,-0.1f,-0.5f,0.8f,0.6f,0.5f,0,0,&sofa);
+            DrawRectangle(pass,0.1f,0.5f,0.7f,-0.5f,0.8f,0.6f);
+            pass.Composite(Context.Get(),destination.Get(),nullptr,viewport); Readback(destination.Get());
+            ExpectChannel(7+20,9+24,0,128,"Registered sofa did not use stepped light bands.");
+            ExpectChannel(7+44,9+24,0,153,"Unregistered room material was quantized.");
+            ExpectChannel(7+7,9+24,3,255,"Registered sofa thick outline did not extend beyond its geometry.");
+            ExpectChannel(7+57,9+24,3,0,"Unregistered room material received an outside contour.");
+            destination=CreateDestination(samples);
+            pass.Begin(Context.Get(),viewport,samples);
+            DrawRectangle(pass,-1,1,1,-1,0,1,0.7f);
+            DrawRectangle(pass,-0.7f,0.5f,-0.1f,-0.5f,0.8f,0.6f,0.3f,0,0,&sofa);
+            pass.Composite(Context.Get(),destination.Get(),nullptr,viewport); Readback(destination.Get());
+            Require(Pixels[((9+24)*DestinationWidth+7+7)*4]<10,"Sofa contour disappeared against an opaque room surface.");
+            pass.RemoveMaterialEffects(&sofa); destination=CreateDestination(samples);
+            pass.Begin(Context.Get(),viewport,samples); DrawRectangle(pass,-0.7f,0.5f,-0.1f,-0.5f,0.8f,0.6f,0.5f,0,0,&sofa);
+            pass.Composite(Context.Get(),destination.Get(),nullptr,viewport); Readback(destination.Get());
+            ExpectChannel(7+7,9+24,3,0,"Removed sofa identity retained contour eligibility.");
         }
         /// Proves selected reflection filtering, emissive glow exclusion, valid alpha and effect opt-out on real 1x/4x targets.
         void TestSelectedEffects(UINT samples) {
@@ -736,8 +1334,9 @@ namespace helengine::windows {
                 Context->Draw(6,0);
             }
         }
-        /// Rejects same-piece normal creases and requires a contour between separate coplanar pieces.
+        /// Isolates part-identity contours from optional sharp-normal creases and requires separate coplanar pieces to remain outlined.
         void TestPartIdentity(Win32CameraToonPass& pass, UINT samples) {
+            CameraToonEffectsConfiguration legacy;legacy.CreaseAngleDegrees=180;pass.ConfigureEffects(legacy);
             D3D11_VIEWPORT viewport {7,9,64,48,0,1};
             auto destination=CreateDestination(samples); PrepareMaterial(false,1);
             const float white[] = {1,1,1,1}; Context->UpdateSubresource(Emission.Get(),0,nullptr,white,0,0);
@@ -908,6 +1507,17 @@ namespace helengine::windows {
                 Require(failed,"Invalid pearl width was accepted."); pearl.PearlWidth=0;
             }
             CameraToonEffectsConfiguration effects;
+            effects.Exposure=17;
+            bool displayRejected=false;
+            try { pass.ConfigureEffects(effects); } catch(const std::invalid_argument&) {displayRejected=true;}
+            Require(displayRejected,"Unbounded HDR exposure was accepted.");
+            effects.Exposure=1; effects.AmbientOcclusionPixelRadius=65; displayRejected=false;
+            try { pass.ConfigureEffects(effects); } catch(const std::invalid_argument&) {displayRejected=true;}
+            Require(displayRejected,"Unbounded contact occlusion footprint was accepted.");
+            effects.AmbientOcclusionPixelRadius=24;
+            int materialIdentity=0; displayRejected=false;
+            try { pass.ConfigureMaterialEffects(&materialIdentity,0,0,false,true,5); } catch(const std::invalid_argument&) {displayRejected=true;}
+            Require(displayRejected,"Unbounded material contour width was accepted.");
             effects.BloomRadius=25;
             bool rejected=false;
             try { pass.ConfigureEffects(effects); } catch(const std::invalid_argument&) {rejected=true;}
@@ -925,6 +1535,20 @@ namespace helengine::windows {
 /// Runs only synthetic hardware geometry; no user window, desktop surface or application is captured.
 int main(int argc, char** argv) {
     try {
+        if(argc==2 && std::string(argv[1])=="--thin-surface") { helengine::windows::CameraToonTests tests;tests.RunThinSurface();return 0; }
+        if(argc==2 && std::string(argv[1])=="--normal-layer") { helengine::windows::CameraToonTests tests;tests.RunNormalLayer();return 0; }
+        if(argc==2 && (std::string(argv[1])=="--external-only" || std::string(argv[1])=="--depth-sobel")) { helengine::windows::CameraToonTests tests;tests.RunDepthSobel();return 0; }
+        if(argc==2 && std::string(argv[1])=="--depth-opening") { helengine::windows::CameraToonTests tests;tests.RunDepthOpening();return 0; }
+        if(argc>=2 && std::string(argv[1])=="--silhouette-bounds") { helengine::windows::CameraToonTests tests(argc>2 ? argv[2] : "");tests.RunSilhouetteBounds();return 0; }
+        if(argc==2 && std::string(argv[1])=="--gtao") {
+            helengine::windows::CameraToonTests tests;tests.RunGtao();return 0;
+        }
+        if(argc==2 && std::string(argv[1])=="--creases") {
+            helengine::windows::CameraToonTests tests;tests.RunCreases();return 0;
+        }
+        if(argc==2 && std::string(argv[1])=="--wall-ink") {
+            helengine::windows::CameraToonTests tests;tests.RunWallInk();return 0;
+        }
         if(argc==2 && std::string(argv[1])=="--shader-startup") {
             helengine::windows::CameraToonTests tests; tests.MeasureShaderStartup(); return 0;
         }

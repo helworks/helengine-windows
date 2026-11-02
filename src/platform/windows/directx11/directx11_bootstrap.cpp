@@ -1,10 +1,13 @@
 #include "platform/windows/directx11/directx11_bootstrap.hpp"
 #include "platform/windows/directx11/directx11_output_attachments.hpp"
+#include "platform/windows/directx11/directx11_debug_diagnostics.hpp"
 
 #include <sstream>
 #include <stdexcept>
+#include <iostream>
 
 #include "platform/windows/directx11/directx11_hresult_formatter.hpp"
+#include "platform/windows/runtime/runtime_render_diagnostics.hpp"
 
 namespace helengine::windows {
     /// Creates the DirectX11 bootstrap for one native window.
@@ -20,10 +23,12 @@ namespace helengine::windows {
         , UseComposition(useComposition)
         , UseDesktop(useDesktop), SampleCount(sampleCount) {
         if (SampleCount != 1 && SampleCount != 4) { throw std::invalid_argument("Output sample count must be 1 or 4."); }
-        if (UseDesktop && UseComposition) { throw std::invalid_argument("Desktop presentation cannot use overlay composition."); }
         CreateDevice();
+        OutputColor=DirectX11OutputColorState::Query(WindowHandle,Device.Get(),SampleCount);
         CreateSwapChain();
+        ConfigureOutputColorSpace();
         CreateOutputAttachments();
+        WriteOutputColorDiagnostics();
     }
 
     /// Creates window-owned presentation resources on the existing shared DirectX11 device.
@@ -31,12 +36,14 @@ namespace helengine::windows {
         : WindowHandle(windowHandle), Width(width), Height(height), UseComposition(useComposition), UseDesktop(useDesktop), SampleCount(sampleCount),
           Device(sharedDevice.GetDevice()), DeviceContext(sharedDevice.GetDeviceContext()) {
         if (SampleCount != 1 && SampleCount != 4) { throw std::invalid_argument("Output sample count must be 1 or 4."); }
-        if (UseDesktop && UseComposition) { throw std::invalid_argument("Desktop presentation cannot use overlay composition."); }
         if (windowHandle == nullptr || width <= 0 || height <= 0) {
             throw std::invalid_argument("A secondary swap chain requires a live window and positive client dimensions.");
         }
+        OutputColor=DirectX11OutputColorState::Query(WindowHandle,Device.Get(),SampleCount);
         CreateSwapChain();
+        ConfigureOutputColorSpace();
         CreateOutputAttachments();
+        WriteOutputColorDiagnostics();
     }
 
     /// Releases all DirectX11 resources.
@@ -116,7 +123,7 @@ namespace helengine::windows {
             nullptr,
             D3D_DRIVER_TYPE_HARDWARE,
             nullptr,
-            D3D11_CREATE_DEVICE_BGRA_SUPPORT,
+            DirectX11DebugDiagnostics::CreationFlags(),
             FeatureLevels,
             static_cast<UINT>(sizeof(FeatureLevels) / sizeof(FeatureLevels[0])),
             D3D11_SDK_VERSION,
@@ -125,12 +132,13 @@ namespace helengine::windows {
             DeviceContext.GetAddressOf());
 
         ThrowIfFailed(result, "D3D11CreateDevice failed for the HelEngine Windows host.");
+        DirectX11DebugDiagnostics::Configure(Device.Get());
     }
 
     /// Creates the DXGI swap chain for the current native window: the composition swap chain in overlay mode,
     /// otherwise the window swap chain with exactly the calls the player has always made.
     void DirectX11Bootstrap::CreateSwapChain() {
-        if (UseComposition) {
+        if (UseComposition || (UseDesktop && OutputColor.Hdr)) {
             CreateCompositionSwapChain();
             return;
         }
@@ -147,7 +155,7 @@ namespace helengine::windows {
         DXGI_SWAP_CHAIN_DESC1 swapChainDescription {};
         swapChainDescription.Width = static_cast<UINT>(Width);
         swapChainDescription.Height = static_cast<UINT>(Height);
-        swapChainDescription.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
+        swapChainDescription.Format = GetOutputFormat();
         swapChainDescription.SampleDesc.Count = 1;
         swapChainDescription.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
         swapChainDescription.BufferCount = 2;
@@ -160,20 +168,16 @@ namespace helengine::windows {
             swapChainDescription.SwapEffect = DXGI_SWAP_EFFECT_DISCARD;
         }
 
-        ThrowIfFailed(
-            factory->CreateSwapChainForHwnd(
-                Device.Get(),
-                WindowHandle,
-                &swapChainDescription,
-                nullptr,
-                nullptr,
-                SwapChain.GetAddressOf()),
-            "IDXGIFactory2::CreateSwapChainForHwnd failed.");
+        HRESULT createResult=factory->CreateSwapChainForHwnd(Device.Get(),WindowHandle,&swapChainDescription,nullptr,nullptr,SwapChain.GetAddressOf());
+        if(createResult==DXGI_ERROR_UNSUPPORTED && OutputColor.Hdr) {
+            OutputColor.Hdr=false;OutputColor.Reason="fp16_swapchain_unsupported";CreateSwapChain();return;
+        }
+        ThrowIfCompositionFailed(createResult,"IDXGIFactory2::CreateSwapChainForHwnd");
 
         ThrowIfFailed(factory->MakeWindowAssociation(WindowHandle, DXGI_MWA_NO_ALT_ENTER), "IDXGIFactory2::MakeWindowAssociation failed.");
     }
 
-    /// Creates the premultiplied composition swap chain (B8G8R8A8, 2 buffers, STRETCH, FLIP_DISCARD) and shows it
+    /// Creates a two-buffer flip-sequential composition swapchain, opaque for desktop and premultiplied for overlay, and shows it
     /// on the window through a DirectComposition device, a topmost target, one visual, SetContent, SetRoot and
     /// Commit. Throws std::runtime_error carrying the failing HRESULT in hexadecimal when any call fails.
     void DirectX11Bootstrap::CreateCompositionSwapChain() {
@@ -189,21 +193,19 @@ namespace helengine::windows {
         DXGI_SWAP_CHAIN_DESC1 swapChainDescription {};
         swapChainDescription.Width = static_cast<UINT>(Width);
         swapChainDescription.Height = static_cast<UINT>(Height);
-        swapChainDescription.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
+        swapChainDescription.Format = GetOutputFormat();
         swapChainDescription.SampleDesc.Count = 1;
         swapChainDescription.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
         swapChainDescription.BufferCount = 2;
         swapChainDescription.Scaling = DXGI_SCALING_STRETCH;
-        swapChainDescription.SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD;
-        swapChainDescription.AlphaMode = DXGI_ALPHA_MODE_PREMULTIPLIED;
+        swapChainDescription.SwapEffect = DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL;
+        swapChainDescription.AlphaMode = UseDesktop ? DXGI_ALPHA_MODE_IGNORE : DXGI_ALPHA_MODE_PREMULTIPLIED;
 
-        ThrowIfCompositionFailed(
-            factory->CreateSwapChainForComposition(
-                Device.Get(),
-                &swapChainDescription,
-                nullptr,
-                SwapChain.GetAddressOf()),
-            "IDXGIFactory2::CreateSwapChainForComposition");
+        HRESULT createResult=factory->CreateSwapChainForComposition(Device.Get(),&swapChainDescription,nullptr,SwapChain.GetAddressOf());
+        if(createResult==DXGI_ERROR_UNSUPPORTED && OutputColor.Hdr) {
+            OutputColor.Hdr=false;OutputColor.Reason="fp16_swapchain_unsupported";CreateSwapChain();return;
+        }
+        ThrowIfCompositionFailed(createResult,"IDXGIFactory2::CreateSwapChainForComposition");
 
         // DXGI watches the window for Alt+Enter per factory and HWND, independently of how the swap chain presents;
         // the association keeps the player's opt-out of the DXGI fullscreen toggle in overlay mode too.
@@ -234,12 +236,69 @@ namespace helengine::windows {
     }
     /// Gets the per-output engine sample count without changing presentation policy.
     UINT DirectX11Bootstrap::GetSampleCount() const { return SampleCount; }
+    /// Gets the actual format shared by swapchain, attachments and all format-dependent readback consumers.
+    DXGI_FORMAT DirectX11Bootstrap::GetOutputFormat() const {return OutputColor.Hdr ? DXGI_FORMAT_R16G16B16A16_FLOAT : DXGI_FORMAT_B8G8R8A8_UNORM;}
+    /// Reports actual native HDR presentation rather than the scene's internal floating-point storage.
+    bool DirectX11Bootstrap::IsHdrOutput() const {return OutputColor.Hdr;}
+    /// Keeps the UI's Windows reference white independent of exposure and scene highlight compression.
+    float DirectX11Bootstrap::GetSdrWhiteScale() const {return OutputColor.Hdr ? OutputColor.SdrWhiteScale : 1.f;}
+    /// Validates color-space presentation; unsupported capability falls back explicitly, unexpected failures remain fatal.
+    void DirectX11Bootstrap::ConfigureOutputColorSpace() {
+        if(!OutputColor.Hdr) return;
+        Microsoft::WRL::ComPtr<IDXGISwapChain3> advanced;
+        HRESULT result=SwapChain.As(&advanced);
+        UINT support=0;
+        if(result!=E_NOINTERFACE) {
+            ThrowIfCompositionFailed(result,"Query HDR swapchain interface");
+            ThrowIfCompositionFailed(advanced->CheckColorSpaceSupport(DXGI_COLOR_SPACE_RGB_FULL_G10_NONE_P709,&support),"Check scRGB presentation support");
+        }
+        if(result==E_NOINTERFACE || !(support&DXGI_SWAP_CHAIN_COLOR_SPACE_SUPPORT_FLAG_PRESENT)) {
+            OutputColor.Hdr=false;OutputColor.Reason="scrgb_presentation_unsupported";
+            ReleaseSwapChain();CreateSwapChain();return;
+        }
+        ThrowIfCompositionFailed(advanced->SetColorSpace1(DXGI_COLOR_SPACE_RGB_FULL_G10_NONE_P709),"Set linear scRGB presentation");
+    }
+    /// Detaches composition references before destroying or replacing a swapchain.
+    void DirectX11Bootstrap::ReleaseSwapChain() {
+        ReleaseOutputAttachments();
+        if(CompositionVisual) ThrowIfCompositionFailed(CompositionVisual->SetContent(nullptr),"Detach output composition content");
+        if(CompositionTarget) ThrowIfCompositionFailed(CompositionTarget->SetRoot(nullptr),"Detach output composition root");
+        if(CompositionDevice) ThrowIfCompositionFailed(CompositionDevice->Commit(),"Commit output composition detach");
+        CompositionVisual.Reset();CompositionTarget.Reset();CompositionDevice.Reset();SwapChain.Reset();
+        DeviceContext->Flush();
+    }
+    /// Applies HDR/display-mode changes before output views are borrowed for a frame.
+    void DirectX11Bootstrap::RefreshOutputColorState() {
+        ULONGLONG now=GetTickCount64();
+        HMONITOR monitor=MonitorFromWindow(WindowHandle,MONITOR_DEFAULTTONEAREST);
+        if(now<NextColorQueryTick && monitor==OutputColor.Monitor) return;
+        NextColorQueryTick=now+1000;
+        auto updated=DirectX11OutputColorState::Query(WindowHandle,Device.Get(),SampleCount);
+        if(updated.Hdr && updated.Monitor==OutputColor.Monitor && (OutputColor.Reason=="scrgb_presentation_unsupported" || OutputColor.Reason=="fp16_swapchain_unsupported")) {
+            updated.Hdr=false;updated.Reason=OutputColor.Reason;
+        }
+        bool replace=updated.Hdr!=OutputColor.Hdr;
+        bool changed=replace || updated.Monitor!=OutputColor.Monitor || updated.SdrWhiteScale!=OutputColor.SdrWhiteScale;
+        OutputColor=updated;
+        if(replace) {ReleaseSwapChain();CreateSwapChain();ConfigureOutputColorSpace();CreateOutputAttachments();}
+        if(changed) WriteOutputColorDiagnostics();
+    }
+    /// Emits the complete native output contract without reading any desktop pixels.
+    void DirectX11Bootstrap::WriteOutputColorDiagnostics() const {
+        std::ostringstream message;
+        message<<"native-output hwnd="<<WindowHandle<<" desktop="<<UseDesktop<<" overlay="<<UseComposition
+            <<" hdr="<<OutputColor.Hdr<<" format="<<GetOutputFormat()<<" transfer="<<(OutputColor.Hdr?"scRGB_linear":"sRGB_SDR")
+            <<" ui_white_nits="<<GetSdrWhiteScale()*80<<" scene_reference_nits=80 scene_limit_nits=400 reported_peak_nits="<<OutputColor.ReportedPeakNits
+            <<" reason="<<OutputColor.Reason<<'\n';
+        OutputDebugStringA(message.str().c_str());std::clog<<message.str();
+        RuntimeRenderDiagnostics::WriteHostEvent("native-output",message.str());
+    }
     /// Resolves color and alpha before any external consumer reads this output's single-sample destination.
     void DirectX11Bootstrap::ResolveOutput() { OutputAttachments->Resolve(DeviceContext.Get()); }
     /// Throws when one native DirectX call fails.
     void DirectX11Bootstrap::ThrowIfFailed(HRESULT result, const char* message) {
         if (FAILED(result)) {
-            throw std::runtime_error(message);
+            throw std::runtime_error(std::string(message)+" HRESULT "+DirectX11HResultFormatter::ToHex(result));
         }
     }
 

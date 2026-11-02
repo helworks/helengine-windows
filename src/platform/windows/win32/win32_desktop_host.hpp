@@ -23,6 +23,12 @@ namespace helengine::windows {
         /// Reads unvirtualized screen bounds for desktop diagnostics regardless of the caller\'s DPI policy.
         static RECT ReadPhysicalWindowRectangle(HWND child);
 
+        /// Moves/resizes only a current-process window in physical screen pixels, preserving activation and DPI context.
+        static void SetPhysicalWindowRectangle(HWND window, const RECT& bounds);
+
+        /// Maps a previously monitor-filling output to the updated monitor list; fixed-size windows remain untouched.
+        static bool RemapMonitorRectangle(const std::vector<RECT>& previous, const std::vector<RECT>& current, const RECT& window, RECT& result);
+
         /// Creates an opaque, disabled child directly in the shell parent's DPI context using physical screen bounds.
         /// No Explorer-owned window is reparented, hidden, resized, or destroyed.
         HWND CreateChild(const wchar_t* className, const wchar_t* title, HINSTANCE instance, void* state, const RECT& bounds) const;

@@ -16,6 +16,7 @@ namespace helengine::windows {
     /// nothing when the state is already applied, so a steady state costs no Win32 calls. Throws std::runtime_error
     /// carrying the Win32 error when either call fails.
     void Win32ClickThroughController::Apply(bool clickThrough) {
+        if (GetCapture() == WindowHandle) { clickThrough = false; }
         if (clickThrough == ClickThrough) {
             return;
         }

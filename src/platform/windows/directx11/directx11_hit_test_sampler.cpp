@@ -1,25 +1,37 @@
 #include "platform/windows/directx11/directx11_hit_test_sampler.hpp"
+#include "platform/windows/directx11/directx11_debug_diagnostics.hpp"
 
 #include <cstdint>
 #include <sstream>
 #include <stdexcept>
+#include <utility>
 
 #include "platform/windows/directx11/directx11_bootstrap.hpp"
 #include "platform/windows/directx11/directx11_hresult_formatter.hpp"
+#include "platform/windows/directx11/directx11_output_pixel_conversion.hpp"
 
 namespace helengine::windows {
-    /// Creates the three 1x1 B8G8R8A8 staging textures on the bootstrap's device. The format matches the swap chain's
-    /// back buffer, which both swap-chain paths create as DXGI_FORMAT_B8G8R8A8_UNORM. Throws std::runtime_error
+    /// Creates three single-pixel staging textures matching the current SDR or scRGB back buffer. Throws std::runtime_error
     /// carrying the HRESULT in hexadecimal when a texture cannot be created.
     DirectX11HitTestSampler::DirectX11HitTestSampler(DirectX11Bootstrap& bootstrap)
         : Bootstrap(bootstrap),
           StagingTextures(),
           NextSlot(0),
-          PendingCount(0) {
+          PendingCount(0),
+          OutputFormat(DXGI_FORMAT_UNKNOWN) {
+        UpdateOutputFormat();
+    }
+
+    /// Builds the replacement ring completely before publishing its format, discarding captures from a previous encoding.
+    void DirectX11HitTestSampler::UpdateOutputFormat() {
+        DXGI_FORMAT format = Bootstrap.GetOutputFormat();
+        DirectX11OutputPixelConversion::GetPixelByteCount(format);
+        if (format == OutputFormat) { return; }
+        std::array<Microsoft::WRL::ComPtr<ID3D11Texture2D>, RingSize> replacement;
         D3D11_TEXTURE2D_DESC stagingDesc = {};
         stagingDesc.Width = 1;
         stagingDesc.Height = 1;
-        stagingDesc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
+        stagingDesc.Format = format;
         stagingDesc.MipLevels = 1;
         stagingDesc.ArraySize = 1;
         stagingDesc.SampleDesc.Count = 1;
@@ -29,7 +41,7 @@ namespace helengine::windows {
         stagingDesc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
         stagingDesc.MiscFlags = 0;
         for (int slotIndex = 0; slotIndex < RingSize; slotIndex++) {
-            HRESULT createResult = Bootstrap.GetDevice()->CreateTexture2D(&stagingDesc, nullptr, StagingTextures[slotIndex].GetAddressOf());
+            HRESULT createResult = Bootstrap.GetDevice()->CreateTexture2D(&stagingDesc, nullptr, replacement[slotIndex].GetAddressOf());
             if (FAILED(createResult)) {
                 std::ostringstream messageBuilder;
                 messageBuilder << "Hit-test sampler: ID3D11Device::CreateTexture2D (staging) failed with HRESULT "
@@ -37,6 +49,10 @@ namespace helengine::windows {
                 throw std::runtime_error(messageBuilder.str());
             }
         }
+        StagingTextures = std::move(replacement);
+        OutputFormat = format;
+        NextSlot = 0;
+        PendingCount = 0;
     }
 
     /// Copies the back-buffer pixel at (x, y) into the next ring slot with CopySubresourceRegion. Does nothing when the
@@ -44,6 +60,7 @@ namespace helengine::windows {
     /// unchanged. When all three slots are still unread, the oldest one is overwritten. Must be called after the frame
     /// is drawn and before it is presented. Throws std::runtime_error when the back buffer cannot be obtained.
     void DirectX11HitTestSampler::Capture(int x, int y) {
+        UpdateOutputFormat();
         if (x < 0 || y < 0 || x >= Bootstrap.GetWidth() || y >= Bootstrap.GetHeight()) {
             return;
         }
@@ -55,6 +72,12 @@ namespace helengine::windows {
             messageBuilder << "Hit-test sampler: IDXGISwapChain1::GetBuffer failed with HRESULT "
                            << DirectX11HResultFormatter::ToHex(bufferResult) << ".";
             throw std::runtime_error(messageBuilder.str());
+        }
+
+        D3D11_TEXTURE2D_DESC description {};
+        backBuffer->GetDesc(&description);
+        if (description.Format != OutputFormat || description.SampleDesc.Count != 1) {
+            throw std::runtime_error("Hit-test sampler requires a single-sample back buffer matching the active output format.");
         }
 
         D3D11_BOX pixelBox = {};
@@ -79,6 +102,8 @@ namespace helengine::windows {
     /// without waiting when nothing completed. Any other failed Map throws std::runtime_error carrying the HRESULT in
     /// hexadecimal.
     bool DirectX11HitTestSampler::TryReadLatestAlpha(int& alpha) {
+        DirectX11DebugDiagnostics::Drain(Bootstrap.GetDevice());
+        UpdateOutputFormat();
         ID3D11DeviceContext* deviceContext = Bootstrap.GetDeviceContext();
         bool sampleRead = false;
         while (PendingCount > 0) {
@@ -89,15 +114,21 @@ namespace helengine::windows {
                 break;
             }
             if (FAILED(mapResult)) {
+                DirectX11DebugDiagnostics::Drain(Bootstrap.GetDevice());
                 std::ostringstream messageBuilder;
                 messageBuilder << "Hit-test sampler: ID3D11DeviceContext::Map failed with HRESULT "
-                               << DirectX11HResultFormatter::ToHex(mapResult) << ".";
+                               << DirectX11HResultFormatter::ToHex(mapResult) << ". Device removed reason: "
+                               << DirectX11HResultFormatter::ToHex(Bootstrap.GetDevice()->GetDeviceRemovedReason()) << ".";
                 throw std::runtime_error(messageBuilder.str());
             }
 
-            // The pixel is stored as B, G, R, A bytes, so the alpha is the fourth byte. A newer slot read later in
-            // this loop overwrites it, so the caller always receives the newest completed sample.
-            alpha = static_cast<int>(static_cast<const std::uint8_t*>(mapped.pData)[3]);
+            try {
+                alpha = DirectX11OutputPixelConversion::ReadAlpha(mapped.pData, OutputFormat);
+            }
+            catch (...) {
+                deviceContext->Unmap(StagingTextures[oldestSlot].Get(), 0);
+                throw;
+            }
             deviceContext->Unmap(StagingTextures[oldestSlot].Get(), 0);
             PendingCount--;
             sampleRead = true;

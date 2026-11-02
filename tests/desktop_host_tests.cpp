@@ -1,8 +1,11 @@
 #include <Windows.h>
+#include "platform/windows/win32/win32_activity_tracker.hpp"
 #include <iostream>
 #include <stdexcept>
 #include <string>
 #include "desktop_live_probe.hpp"
+#include "platform/windows/win32/win32_window.hpp"
+#include "platform/windows/win32/win32_window_mode_names.hpp"
 #include "platform/windows/win32/win32_desktop_host.hpp"
 #include "platform/windows/directx11/directx11_bootstrap.hpp"
 
@@ -18,6 +21,19 @@ namespace helengine::windows {
             Register(L"WorkerW");
             Register(L"SHELLDLL_DefView");
             Register(L"HelEngineDesktopTest");
+            RECT oldMonitor{0,0,3200,1800},current{0,0,3840,2160},result{};
+            Require(Win32DesktopHost::RemapMonitorRectangle({oldMonitor},{current},oldMonitor,result) && EqualRect(&result,&current),
+                "Monitor-sized output did not follow 1800p to 4K");
+            RECT fixed{120,120,1020,840};
+            Require(!Win32DesktopHost::RemapMonitorRectangle({oldMonitor},{current},fixed,result),
+                "Display resize changed an explicitly sized overlay");
+            Win32ActivityTracker activity;
+            Require(!activity.ConsumeDisplayChange(),"Display change was pending without an event");
+            activity.ObserveMessage(WM_DISPLAYCHANGE);activity.ObserveMessage(WM_DPICHANGED);
+            Require(activity.ConsumeDisplayChange() && !activity.ConsumeDisplayChange(),"Display messages were not coalesced exactly once");
+            activity.ObserveMessage(WM_SIZE);
+            Require(!activity.ConsumeDisplayChange(),"Resize recursively requested another display transition");
+            TestIndependentShell();
             TestRaisedDesktop();
             TestClassicDesktop();
             ExpectInvalidProgramManager();
@@ -91,8 +107,8 @@ namespace helengine::windows {
                 "The shared graphics device must support BGRA producer interoperability.");
             DXGI_SWAP_CHAIN_DESC1 description {};
             Require(SUCCEEDED(first.GetSwapChain()->GetDesc1(&description)), "Unable to read desktop swap-chain settings.");
-            Require(description.SwapEffect == DXGI_SWAP_EFFECT_DISCARD && description.BufferCount == 1
-                && description.AlphaMode == DXGI_ALPHA_MODE_IGNORE, "Desktop children require opaque blt presentation.");
+            Require(description.SwapEffect == (first.IsHdrOutput() ? DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL : DXGI_SWAP_EFFECT_DISCARD) && description.BufferCount == (first.IsHdrOutput() ? 2u : 1u)
+                && description.AlphaMode == DXGI_ALPHA_MODE_IGNORE, "Desktop children require opaque SDR blt or HDR composition presentation.");
             const float clear[4] { 0.2f, 0.3f, 0.4f, 1.0f };
             first.GetDeviceContext()->ClearRenderTargetView(first.GetRenderTargetView(), clear);
             Require(SUCCEEDED(first.GetSwapChain()->Present(0, 0)), "Desktop blt presentation failed.");
@@ -105,9 +121,41 @@ namespace helengine::windows {
                 second.Resize(320, 180);
                 Require(second.GetWidth() == 320 && second.GetHeight() == 180, "Desktop back-buffer resize failed.");
             }
+            // Exercise a real owned child through both remote-display sizes without changing any monitor.
+            for(const RECT resized : {RECT{-32000,-32000,-28800,-30200}, RECT{-32000,-32000,-28160,-29840}, bounds}) {
+                Win32DesktopHost::SetPhysicalWindowRectangle(child,resized);
+                RECT actual=Win32DesktopHost::ReadPhysicalWindowRectangle(child);
+                Require(EqualRect(&actual,&resized),"Desktop resolution transition retained stale physical bounds");
+                Require(GetForegroundWindow()==foreground,"Desktop resolution transition stole focus");
+                Require(AreDpiAwarenessContextsEqual(previous,GetThreadDpiAwarenessContext()),"Desktop resize leaked DPI context");
+            }
             DestroyWindow(secondChild);
             Require(SetThreadDpiAwarenessContext(shellContext) != nullptr, "Unable to restore test shell DPI context.");
             return child;
+        }
+
+        /// Verifies independent ownership and input policy using a hidden player-owned fixture without touching Explorer.
+        static void TestIndependentShell() {
+            Win32WindowMode mode = Win32WindowMode::Normal;
+            Require(Win32WindowModeNames::TryParseWindowMode("shell", mode) && mode == Win32WindowMode::Shell,
+                "Independent shell mode is not parsed");
+            Require(std::string(Win32WindowModeNames::ToText(mode)) == "shell", "Shell mode does not round trip");
+            const auto style = Win32WindowStyle::Shell();
+            Require((style.GetStyle() & (WS_CHILD | WS_DISABLED)) == 0 && (style.GetStyle() & WS_POPUP) != 0,
+                "Independent shell must not be an Explorer child or disabled");
+            Require((style.GetExStyle() & (WS_EX_TRANSPARENT | WS_EX_TOPMOST)) == 0,
+                "Independent shell must receive input behind applications");
+            Win32Window shell(L"Hidden Gevo shell fixture", 0, 0, 16, 16, style);
+            shell.SetSecondaryWindow(); shell.Create();
+            Require(GetParent(shell.GetHandle()) == nullptr && !IsWindowVisible(shell.GetHandle()),
+                "Shell fixture must be independent and hidden until explicitly shown");
+            Require(shell.UsesMessagePointer(), "Shell must use its own queued mouse messages");
+            Require(SendMessageW(shell.GetHandle(), WM_NCHITTEST, 0, 0) == HTCLIENT, "Shell must own client hit testing");
+            Require(SendMessageW(shell.GetHandle(), WM_MOUSEACTIVATE, 0, 0) == MA_NOACTIVATE, "Shell must not steal keyboard focus");
+            Require(SendMessageW(shell.GetHandle(), WM_CONTEXTMENU, 0, 0) == 0, "Shell must not delegate its context menu");
+            WINDOWPOS placement {shell.GetHandle(), HWND_TOP, 0, 0, 16, 16, 0};
+            SendMessageW(shell.GetHandle(), WM_WINDOWPOSCHANGING, 0, reinterpret_cast<LPARAM>(&placement));
+            Require(placement.hwndInsertAfter == HWND_BOTTOM, "Shell must remain below applications");
         }
 
         /// Verifies the raised Progman arrangement and explicit failure when its wallpaper worker disappears.

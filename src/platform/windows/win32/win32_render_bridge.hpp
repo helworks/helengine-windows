@@ -1,5 +1,7 @@
 #pragma once
 #include "platform/windows/win32/win32_frame_readiness.hpp"
+#include "platform/windows/win32/win32_material_rasterizer_state.hpp"
+#include "platform/windows/win32/win32_material_output_state.hpp"
 
 #ifdef DrawText
 #undef DrawText
@@ -13,15 +15,27 @@
 #include <cstddef>
 #include <memory>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
+#ifdef HELENGINE_VOXEL_GI
+#include "platform/windows/win32/win32_scene_gi.hpp"
+#endif
 
 #include "platform/windows/win32/win32_overlay_background.hpp"
 #include "platform/windows/win32/win32_render_alpha_mode.hpp"
 #include "platform/windows/win32/win32_camera_toon_pass.hpp"
+#include "platform/windows/win32/win32_scene_ssgi.hpp"
+#include "platform/windows/win32/win32_scene_ink.hpp"
+#include "platform/windows/win32/win32_shadow_cascade_fitter.hpp"
+#ifdef HELENGINE_LIGHTMAP
+#include "platform/windows/win32/win32_scene_lightmap.hpp"
+#endif
 
 #if __has_include("RenderManager2D.hpp")
 class LightComponent;
 class DirectionalLightComponent;
+class SpotLightComponent;
+class PointLightComponent;
 class RenderCommandListBuilder2D;
 class RenderCommandList2D;
 
@@ -60,6 +74,14 @@ namespace helengine::windows {
     /// Stores one uploaded mesh resource that can be drawn by the Windows DirectX11 bridge.
     class Win32RuntimeModel : public RuntimeModel {
     public:
+#ifdef HELENGINE_VOXEL_GI
+        /// <summary>Retains immutable upload geometry only when the optional transport module is compiled.</summary>
+        std::shared_ptr<Win32SceneGiMesh> GiMesh;
+#endif
+#ifdef HELENGINE_LIGHTMAP
+        /// <summary>Retains original positions, normals, UV0 and element order independently from voxel transport.</summary>
+        std::shared_ptr<hellm::Mesh> LightmapMesh;
+#endif
         /// Stores the GPU vertex buffer built from the packaged mesh.
         Microsoft::WRL::ComPtr<ID3D11Buffer> VertexBuffer;
 
@@ -104,6 +126,10 @@ namespace helengine::windows {
     /// Stores one uploaded texture resource that can be bound by a Windows material.
     class Win32TextureResource {
     public:
+#ifdef HELENGINE_LIGHTMAP
+        /// <summary>Retains exact linear UNORM diffuse samples for offline transport, including opacity validation.</summary>
+        std::vector<uint8_t> LightmapRgba;
+#endif
         /// Stores the GPU texture backing the uploaded asset.
         Microsoft::WRL::ComPtr<ID3D11Texture2D> Texture;
 
@@ -147,14 +173,51 @@ namespace helengine::windows {
         /// Configures independent effects on an already registered camera; legacy registration defaults remain unchanged.
         void ConfigureCameraToonEffects(ICamera* camera, const CameraToonEffectsConfiguration& configuration);
 
-        /// Registers exact draw-material identity with bounded reflection and selected-emission weights.
-        void ConfigureCameraToonMaterialEffects(ICamera* camera, RuntimeMaterial* material, float reflectivity, float bloomWeight, bool pearlSurface = false);
+        /// Configures the dedicated Glass selection camera without changing ordinary scene contours.
+        void ConfigureCameraSelection(ICamera* camera, int rgb, float radius, float left, float top, float right, float bottom);
+
+
+        /// Registers per-camera material styling; outlineOnly emits transparent contours without a visible surface.
+        void ConfigureCameraToonMaterialEffects(ICamera* camera, RuntimeMaterial* material, float reflectivity, float bloomWeight, bool pearlSurface = false, bool toonSurface = false, float outlineScale = 1.0f, float metallic = 0.0f, bool outlineOnly = false);
 
         /// Uploads explicit RGBA wallpaper pixels and generates filtered environment mips on the render thread.
         void SetCameraToonEnvironment(ICamera* camera, uint32_t width, uint32_t height, const uint8_t* rgbaBytes, std::size_t byteCount);
 
         /// Releases camera targets, owned environment and all borrowed material identities; repeated removal is harmless.
         void ClearCameraToon(ICamera* camera);
+
+        /// Shares directional shadow casters between two explicitly paired scene cameras.
+        void ConfigureCameraShadowPeer(ICamera* camera, ICamera* peer);
+
+#ifdef HELENGINE_VOXEL_GI
+        /// <summary>Configures one camera-independent volume and an explicitly borrowed scene and sunlight source.</summary>
+        void ConfigureSceneGi(Core* owner, DirectionalLightComponent* sun, const helgi::Config& config, std::uint32_t workItems);
+        /// <summary>Registers original output cameras and reads mutually exclusive sphere/indirect-only zero/one launch flags.</summary>
+        void ConfigureSceneGiDebugCameras(ICamera* mainCamera,ICamera* glassCamera);
+        /// <summary>Unbinds and releases the optional scene field before its borrowed scene or sun is destroyed.</summary>
+        void ClearSceneGi();
+#endif
+
+#ifdef HELENGINE_LIGHTMAP
+        /// <summary>Exports a frozen initialized scene or loads a matching saved lightmap for the two specified cameras.</summary>
+        void ConfigureSceneLightmap(Core* owner,DirectionalLightComponent* sun,ICamera* mainCamera,ICamera* glassCamera,const std::string& path,bool exportMode,const hellm::ProbeSettings& probe={});
+        /// <summary>Checks that both authored scene cameras assign the same immutable metallic transport weight.</summary>
+        float GetSceneLightmapMetallic(ICamera* mainCamera,ICamera* glassCamera,RuntimeMaterial* material) const;
+        /// <summary>Unbinds all lightmap resources before borrowed scene sources are destroyed.</summary>
+        void ClearSceneLightmap();
+#endif
+
+        /// <summary>Explicitly selects realtime ink, two authored directional sources and a camera-independent raster reflection volume.</summary>
+        void ConfigureSceneInk(Core* owner,DirectionalLightComponent* sun,DirectionalLightComponent* moon,ICamera* firstCamera,ICamera* secondCamera,const Win32SceneInkConfiguration& configuration);
+        /// <summary>Updates the live artistic palette and authored volume without switching rendering profiles.</summary>
+        void UpdateSceneInk(const Win32SceneInkConfiguration& configuration);
+        /// <summary>Unbinds realtime resources and releases borrowed scene identities before their lifetime ends.</summary>
+        void ClearSceneInk();
+
+        /// <summary>Registers one shared capture for the union of two synchronized 3D cameras and disables voxel transport.</summary>
+        void ConfigureSceneSsgi(Core* owner, DirectionalLightComponent* sun, ICamera* firstCamera, ICamera* secondCamera, bool indirectOnly);
+        /// <summary>Releases the shared field and borrowed scene identities before their scene or cameras are destroyed.</summary>
+        void ClearSceneSsgi();
 
         /// Returns the number of uploaded texture resources currently cached by the Windows bridge.
         std::size_t GetTextureResourceCount() const;
@@ -214,6 +277,112 @@ namespace helengine::windows {
         void Visit(IDrawable3D* drawable) override;
 
     private:
+        /// <summary>Owns explicit realtime ink resources independently of all legacy transport profiles.</summary>
+        std::unique_ptr<Win32SceneInk> SceneInk;
+        /// <summary>Borrows the authoritative scene and clock until explicit ink teardown.</summary>
+        Core* InkOwner=nullptr;
+        /// <summary>Borrows the live sunlight source without constructing or orienting scene entities.</summary>
+        DirectionalLightComponent* InkSun=nullptr;
+        /// <summary>Borrows the live moonlight source and respects its authored enabled and shadow flags.</summary>
+        DirectionalLightComponent* InkMoon=nullptr;
+        /// <summary>Borrows the primary room camera for shared shadow projection and capture material eligibility.</summary>
+        ICamera* InkFirstCamera=nullptr;
+        /// <summary>Borrows the second room layer camera without changing its queue or presentation state.</summary>
+        ICamera* InkSecondCamera=nullptr;
+        /// <summary>Suppresses baked resources and recursive reflections while scene capture visits actual drawables.</summary>
+        bool InkCaptureActive=false;
+        /// <summary>Reuses one directional depth capture per authoritative scene update across both windows.</summary>
+        double LastInkShadowSeconds=-1;
+        /// <summary>Invalidates shared shadow reuse when the dominant enabled source changes.</summary>
+        DirectionalLightComponent* LastInkShadowLight=nullptr;
+        /// <summary>Rate-limits explicit work-budget host events to once per second.</summary>
+        double LastInkBudgetSeconds=-1;
+        /// <summary>Counts actual directional depth submissions for live budget diagnostics.</summary>
+        uint64_t InkShadowDraws=0;
+        /// <summary>Uses the immutable engine numeric policy while fitting native ink geometry.</summary>
+        using InkShadowFitter = Win32ShadowCascadeFitter<Real, RealMath>;
+        /// <summary>Retains shared projection extents and depth slices across scene updates.</summary>
+        InkShadowFitter::Result InkShadowCascades{};
+        /// <summary>Retains the two Real-valued world-to-clip matrices used by the depth submissions.</summary>
+        std::array<::float4x4,2> InkShadowMatrices;
+        /// <summary>Retains eligible enabled drawables once for both depth submissions.</summary>
+        std::vector<IDrawable3D*> InkShadowCasters;
+        /// <summary>Reuses gathered Real-valued model boxes without allocating a scene-sized array each frame.</summary>
+        std::vector<InkShadowFitter::Geometry> InkShadowGeometry;
+        /// <summary>Tracks the allocated atlas width; ink uses two horizontal 1024-square tiles.</summary>
+        UINT ShadowMapEdge=2048;
+        /// <summary>Tracks atlas height independently from the legacy square shadow map width.</summary>
+        UINT ShadowMapHeight=2048;
+        /// <summary>Fits both original output-camera receiver unions before the shared scene depth capture.</summary>
+        void BuildInkShadowCascades(DirectionalLightComponent* light);
+        /// <summary>Captures no more than one due room cubemap face without changing any original camera queue.</summary>
+        bool UpdateSceneInkCapture();
+        /// <summary>Returns only the two explicit enabled directional lights, preserving their original scene identities.</summary>
+        std::vector<LightComponent*> SnapshotInkLights() const;
+        /// <summary>Atomically replaces directional depth resources when the selected profile changes its budget.</summary>
+        void ResizeDirectionalShadowMap(UINT edge,UINT height);
+        /// <summary>Builds a finite perspective shadow matrix from an authored spot cone.</summary>
+        ::float4x4 BuildSpotShadowViewProjection(SpotLightComponent* light) const;
+        /// <summary>Captures the lower atlas rows using explicit camera ownership and caster layers.</summary>
+        void RenderLocalShadows(ICamera* camera,const std::vector<LightComponent*>& lights,bool clearAtlas,uint16_t casterLayers);
+        /// <summary>Builds one of six point-light perspectives using the shared receiver face convention.</summary>
+        ::float4x4 BuildPointShadowViewProjection(PointLightComponent* light,unsigned face) const;
+
+
+        /// <summary>Owns one HDR capture and irradiance result shared across the paired presentation outputs.</summary>
+#ifdef HELENGINE_LIGHTMAP
+        /// <summary>Owns immutable snapshot and shared atlas state independently from dynamic GI.</summary>
+        std::unique_ptr<Win32SceneLightmap> SceneLightmap;
+        /// <summary>Borrows the camera whose current geometry queue consumes optional baked irradiance.</summary>
+        ICamera* CurrentLightmapCamera=nullptr;
+#endif
+        std::unique_ptr<Win32SceneSsgi> SceneSsgi;
+        /// <summary>Borrows the explicitly registered scene until ClearSceneSsgi.</summary>
+        Core* SsgiOwner=nullptr;
+        /// <summary>Borrows the existing authored sunlight without creating additional scene lighting.</summary>
+        DirectionalLightComponent* SsgiSun=nullptr;
+        /// <summary>Borrows the authoritative projection camera.</summary>
+        ICamera* SsgiFirstCamera=nullptr;
+        /// <summary>Borrows the second synchronized camera whose layer eligibility joins the shared source.</summary>
+        ICamera* SsgiSecondCamera=nullptr;
+        /// <summary>Enables raw indirect-only luminance on actual 3D receivers.</summary>
+        bool SsgiIndirectOnly=false;
+        /// <summary>Overrides geometry shading only while authoritative scene capture is being submitted.</summary>
+        bool SsgiCaptureActive=false;
+        /// <summary>Allows shared sampling only while either explicitly registered receiver camera is drawing.</summary>
+        bool SsgiReceiverActive=false;
+        /// <summary>Reuses exactly one completed source capture across output draws belonging to one scene update.</summary>
+        double LastSsgiUpdateSeconds=-1;
+        /// <summary>Tracks the source output extent to recapture correctly after resize.</summary>
+        UINT SsgiSourceWidth=0;
+        /// <summary>Tracks source height independently from the capped capture resolution.</summary>
+        UINT SsgiSourceHeight=0;
+        /// <summary>Captures eligible scene geometry once per update and reports asynchronous shader readiness.</summary>
+        bool UpdateSceneSsgi();
+        /// <summary>Resolves source camera viewport pixels using its actual named output layout, independent of current presentation.</summary>
+        D3D11_VIEWPORT ResolveSceneSsgiViewport(ICamera* camera);
+        /// <summary>Builds the existing camera projection without changing its pose, field of view or clipping planes.</summary>
+        ::float4x4 BuildSceneViewProjection(ICamera* camera, const D3D11_VIEWPORT& viewport);
+#ifdef HELENGINE_VOXEL_GI
+        /// <summary>Owns one published transport field shared by every configured output and camera.</summary>
+        std::unique_ptr<Win32SceneGi> SceneGi;
+        /// <summary>Borrows the original opaque scene camera while the voxel diagnostic is enabled.</summary>
+        ICamera* GiDebugMainCamera=nullptr;
+        /// <summary>Borrows the original shell camera, whose 2D controls stay active while diagnostic 3D is omitted.</summary>
+        ICamera* GiDebugGlassCamera=nullptr;
+        /// <summary>Overrides material shading only while original camera queues build receiver visibility and usage.</summary>
+        Win32SceneGiUsage* ActiveGiUsage=nullptr;
+        /// <summary>Shares one complete camera-union usage capture between output draws in the same authoritative update.</summary>
+        double LastGiUsageUpdateSeconds=-1;
+        /// <summary>Invalidates reader usage whenever the complete published field changes.</summary>
+        std::uint64_t LastGiUsageGeneration=0;
+        /// <summary>Invalidates same-update reuse on camera transforms, viewport, enablement or coverage changes.</summary>
+        std::array<float,44> LastGiUsageCameraState{};
+        /// <summary>Retains exact layer masks without lossy float conversion.</summary>
+        std::array<std::uint64_t,2> LastGiUsageLayers{};
+        /// <summary>Builds the accepted-tap union from both original visible camera queues before diagnostic presentation.</summary>
+        void UpdateSceneGiUsage();
+#endif
         /// Resets for each output draw and remains false when any required camera pipeline is pending.
         Win32FrameReadiness OutputReadiness;
 
@@ -222,6 +391,12 @@ namespace helengine::windows {
 
         /// Borrows the registered helper only while its camera's mesh queue is executing.
         Win32CameraToonPass* ActiveToonPass = nullptr;
+
+        /// Borrows paired cameras until their explicit effect registration is removed.
+        std::unordered_map<ICamera*, ICamera*> CameraShadowPeers;
+
+        /// Prevents a drawable visible in both paired queues from casting twice in one pass.
+        std::unordered_set<IDrawable3D*> ActiveShadowCasters;
 
         /// Polls generic shader loading and creates the 3D pipeline once bytecode is ready; never waits.
         bool EnsurePipelineState();
@@ -291,6 +466,12 @@ namespace helengine::windows {
 
         /// Resolves the shader-backed runtime material required by the native DirectX11 material binding path.
         ShaderRuntimeMaterial* RequireShaderRuntimeMaterial(RuntimeMaterial* material);
+
+        /// <summary>Applies authored culling to visible scene geometry while retaining two-sided shadows and UI.</summary>
+        void ApplyMaterialRasterizer(RuntimeMaterial* material);
+
+        /// <summary>Applies authored scene alpha/depth choices while preserving opaque toon geometry auxiliaries.</summary>
+        void ApplyMaterialOutput(RuntimeMaterial* material);
 
         /// Applies the shader and resource bindings for one runtime material.
         void ApplyMaterial(RuntimeMaterial* material);
@@ -397,17 +578,20 @@ namespace helengine::windows {
         /// Stores a tiny clip-space vertex buffer used for renderer diagnostics.
         Microsoft::WRL::ComPtr<ID3D11Buffer> DebugTriangleBuffer;
 
-        /// Stores the rasterizer state for solid back-face-culled drawing.
-        Microsoft::WRL::ComPtr<ID3D11RasterizerState> RasterizerState;
+        /// <summary>Caches material none/front/back culling for ordinary and multisample visible scene draws.</summary>
+        Win32MaterialRasterizerState MaterialRasterizers;
 
-        /// Enables multisample coverage when this renderer selects a 4x output on the shared device.
-        Microsoft::WRL::ComPtr<ID3D11RasterizerState> MultisampleRasterizerState;
+        /// <summary>Owns immutable material blending and depth states independently from UI and shadow passes.</summary>
+        Win32MaterialOutputState MaterialOutputs;
 
         /// Stores the depth-stencil state for normal opaque 3D drawing.
         Microsoft::WRL::ComPtr<ID3D11DepthStencilState> DepthStencilState;
 
         /// Stores the rasterizer state used by the directional shadow depth pass.
         Microsoft::WRL::ComPtr<ID3D11RasterizerState> ShadowRasterizerState;
+
+        /// <summary>Retains constant depth bias for hard ink while receiver-plane comparisons replace caster slope displacement.</summary>
+        Microsoft::WRL::ComPtr<ID3D11RasterizerState> InkShadowRasterizerState;
 
         /// Stores the depth-stencil state used by the directional shadow depth pass.
         Microsoft::WRL::ComPtr<ID3D11DepthStencilState> ShadowDepthStencilState;
@@ -481,6 +665,9 @@ namespace helengine::windows {
         /// <exception cref="std::logic_error">Thrown when the configured alpha mode is not Premultiplied.</exception>
         void BindPremultipliedDestinationBlendState();
 
+        /// Restores native UI/forward encoding at b13 after scene passes use their own ink parameters.
+        void BindOutputEncoding();
+
         /// Returns the number of uploaded texture resources currently cached by the Windows bridge.
         std::size_t GetTextureResourceCount() const;
 
@@ -491,6 +678,10 @@ namespace helengine::windows {
         RuntimeTexture* BuildTextureFromRaw(TextureAsset* data) override;
 
         /// Borrows the shared graphics device for native offscreen producers on the render thread.
+#ifdef HELENGINE_LIGHTMAP
+        /// <summary>Returns validated opaque linear diffuse pixels from an explicitly retained uploaded texture.</summary>
+        hellm::Texture GetLightmapTexture(RuntimeTexture* texture) const;
+#endif
         ID3D11Device* GetGraphicsDevice() const;
 
         /// Borrows the render-thread immediate context; producers must restore its pipeline state before returning.
@@ -685,6 +876,9 @@ namespace helengine::windows {
 
         /// Stores the rounded-rect constants consumed by the native SDF shader path.
         Microsoft::WRL::ComPtr<ID3D11Buffer> RoundedRectConstantBuffer;
+
+        /// Stores per-view scRGB selection and Windows UI white for native 2D and ordinary forward shaders.
+        Microsoft::WRL::ComPtr<ID3D11Buffer> OutputEncodingBuffer;
 
         /// Stores the currently active 2D camera viewport.
         D3D11_VIEWPORT CurrentViewport {};

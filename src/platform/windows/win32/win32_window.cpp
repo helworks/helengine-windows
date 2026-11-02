@@ -5,6 +5,7 @@
 
 #include "platform/windows/win32/win32_desktop_host.hpp"
 
+#include <windowsx.h>
 #include <sstream>
 #include <stdexcept>
 
@@ -54,6 +55,8 @@ namespace helengine::windows {
         int requestedClientHeight = Height;
         if (WindowStyle.GetWindowMode() == Win32WindowMode::Desktop) {
             CreateDesktopWindow();
+        } else if (WindowStyle.GetWindowMode() == Win32WindowMode::Shell) {
+            CreateShellWindow();
         } else if (WindowStyle.GetWindowMode() == Win32WindowMode::Overlay) {
             CreateOverlayWindow();
         } else {
@@ -77,6 +80,7 @@ namespace helengine::windows {
 
     /// Shows the native window through the normal or overlay path chosen by the window style.
     void Win32Window::Show() const {
+        if (WindowStyle.GetWindowMode() == Win32WindowMode::Shell) { ShowShellWindow(); return; }
         if (DesktopHost) {
             DesktopHost->ShowChild(Handle);
             return;
@@ -98,6 +102,7 @@ namespace helengine::windows {
 
     /// Places a secondary window and shows it without changing foreground keyboard focus.
     void Win32Window::ShowSecondary() const {
+        if (WindowStyle.GetWindowMode() == Win32WindowMode::Shell) { ShowShellWindow(); return; }
         if (DesktopHost) {
             DesktopHost->ShowChild(Handle);
             return;
@@ -162,6 +167,19 @@ namespace helengine::windows {
         DesktopHost = std::make_unique<Win32DesktopHost>(Win32DesktopHost::Resolve());
         RECT bounds { Left, Top, Left + Width, Top + Height };
         Handle = DesktopHost->CreateChild(L"HelEngineWindowClass", Title.c_str(), GetModuleHandleW(nullptr), this, bounds);
+    }
+
+    /// Creates the shell's background directly under the window manager, not as an Explorer child.
+    void Win32Window::CreateShellWindow() {
+        Handle = CreateWindowExW(WindowStyle.GetExStyle(), L"HelEngineWindowClass", Title.c_str(), WindowStyle.GetStyle(),
+            Left, Top, Width, Height, nullptr, nullptr, GetModuleHandleW(nullptr), this);
+    }
+
+    /// Keeps a visible, non-activating shell surface below every application window.
+    void Win32Window::ShowShellWindow() const {
+        if (!SetWindowPos(Handle, HWND_BOTTOM, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW)) {
+            throw std::runtime_error("Cannot show the independent shell surface at the bottom of Z order.");
+        }
     }
 
     /// Verifies a live desktop child's parent before rendering; destroyed secondary children retain normal close behavior.
@@ -279,6 +297,53 @@ namespace helengine::windows {
         }
     }
 
+    /// Selects event-driven mouse input only for overlays; normal application windows retain their existing backend.
+    bool Win32Window::UsesMessagePointer() const { return WindowStyle.GetWindowMode() == Win32WindowMode::Overlay || WindowStyle.GetWindowMode() == Win32WindowMode::Shell; }
+
+    /// Keeps releases routed to the overlay even after the cursor leaves its opaque pixels.
+    bool Win32Window::HasPendingPointerInput() const { return UsesMessagePointer() && PointerMessages.HasWork(); }
+
+    /// Returns one queued transition, or the current held state when there are no queued edges.
+    std::uint32_t Win32Window::CaptureMessagePointer(POINT& position) { return PointerMessages.Consume(position); }
+
+    /// Releases this window's capture and cancels UI authority without synthesizing an inside release.
+    void Win32Window::CancelPointerInput() {
+        PointerMessages.Cancel();
+        if (Handle != nullptr && GetCapture() == Handle && !ReleaseCapture()) { throw std::runtime_error("Unable to release cancelled overlay pointer capture."); }
+    }
+
+    /// Captures an overlay gesture on its own down message and releases capture after its last owned button is up.
+    bool Win32Window::HandlePointerMessage(UINT message, WPARAM wParam, LPARAM lParam) {
+        if (!UsesMessagePointer()) { return false; }
+        if (message == WM_CAPTURECHANGED) {
+            if (reinterpret_cast<HWND>(lParam) != Handle && PointerMessages.GetButtons() != 0) { PointerMessages.Cancel(); }
+            return true;
+        }
+        if (message == WM_CANCELMODE) { CancelPointerInput(); return true; }
+        if (message == WM_SHOWWINDOW && wParam == FALSE) { CancelPointerInput(); return false; }
+        std::uint32_t button = 0; bool down = false;
+        switch (message) {
+            case WM_LBUTTONDOWN: case WM_LBUTTONDBLCLK: button = 1; down = true; break;
+            case WM_LBUTTONUP: button = 1; break;
+            case WM_MBUTTONDOWN: case WM_MBUTTONDBLCLK: button = 2; down = true; break;
+            case WM_MBUTTONUP: button = 2; break;
+            case WM_RBUTTONDOWN: case WM_RBUTTONDBLCLK: button = 4; down = true; break;
+            case WM_RBUTTONUP: button = 4; break;
+            case WM_XBUTTONDOWN: case WM_XBUTTONDBLCLK: button = GET_XBUTTON_WPARAM(wParam) == XBUTTON1 ? 8 : 16; down = true; break;
+            case WM_XBUTTONUP: button = GET_XBUTTON_WPARAM(wParam) == XBUTTON1 ? 8 : 16; break;
+            default: return false;
+        }
+        if (down && GetCapture() != Handle) {
+            SetCapture(Handle);
+            if (GetCapture() != Handle) { throw std::runtime_error("Unable to acquire overlay pointer capture."); }
+        }
+        PointerMessages.Observe(button, down, POINT {GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam)});
+        if (PointerMessages.GetButtons() == 0 && GetCapture() == Handle && !ReleaseCapture()) {
+            throw std::runtime_error("Unable to release completed overlay pointer capture.");
+        }
+        return true;
+    }
+
     /// Handles window messages for this instance, first reporting each one to the attached activity tracker when
     /// there is one; the message handling and return values do not depend on the tracker. WM_DPICHANGED, which only a
     /// Per-Monitor v2 aware window receives, moves a normal window to the suggested top-left while keeping its client
@@ -291,6 +356,19 @@ namespace helengine::windows {
             ActivityTracker->ObserveMessage(message);
         }
 
+        if (HandlePointerMessage(message, wParam, lParam)) {
+            return message == WM_XBUTTONDOWN || message == WM_XBUTTONUP || message == WM_XBUTTONDBLCLK ? TRUE : 0;
+        }
+        if (WindowStyle.GetWindowMode() == Win32WindowMode::Shell) {
+            if (message == WM_MOUSEACTIVATE) { return MA_NOACTIVATE; }
+            if (message == WM_NCHITTEST) { return HTCLIENT; }
+            if (message == WM_CONTEXTMENU) { return 0; }
+            if (message == WM_SYSCOMMAND && (wParam & 0xfff0) == SC_MINIMIZE) { return 0; }
+            if (message == WM_WINDOWPOSCHANGING) {
+                auto* placement = reinterpret_cast<WINDOWPOS*>(lParam);
+                if ((placement->flags & SWP_NOZORDER) == 0) { placement->hwndInsertAfter = HWND_BOTTOM; }
+            }
+        }
         if (WindowStyle.GetWindowMode() == Win32WindowMode::Desktop) {
             if (message == WM_MOUSEACTIVATE) { return MA_NOACTIVATE; }
             if (message == WM_NCHITTEST) { return HTTRANSPARENT; }
@@ -372,6 +450,12 @@ namespace helengine::windows {
                 throw std::runtime_error("RegisterClassExW failed for the HelEngine Windows host.");
             }
         }
+    }
+
+    /// Repositions only this native output; WM_SIZE and the refreshed cache drive existing engine/swap-chain resize handling.
+    void Win32Window::SetPhysicalBounds(const RECT& bounds) {
+        Win32DesktopHost::SetPhysicalWindowRectangle(Handle,bounds);
+        RefreshClientSize();
     }
 
     /// Updates the cached client size from the current native window state.

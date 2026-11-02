@@ -35,6 +35,12 @@ namespace helengine::windows {
             WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW, SW_SHOWNOACTIVATE);
     }
 
+    /// Creates a standalone opaque desktop surface; its owner keeps it behind application windows.
+    Win32WindowStyle Win32WindowStyle::Shell() {
+        return Win32WindowStyle(Win32WindowMode::Shell, WS_POPUP | WS_CLIPSIBLINGS | WS_CLIPCHILDREN,
+            WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW, SW_SHOWNOACTIVATE);
+    }
+
     /// Gets the window mode this style set belongs to, which selects Win32Window's creation and show path.
     Win32WindowMode Win32WindowStyle::GetWindowMode() const {
         return WindowMode;

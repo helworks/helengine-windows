@@ -4,7 +4,7 @@
 
 namespace helengine::windows {
     /// Parses a windowMode string into its enum value. Returns false, leaving windowMode unchanged, when text is
-    /// not exactly "normal", "overlay" or "desktop".
+    /// not exactly "normal", "overlay", "desktop" or "shell".
     bool Win32WindowModeNames::TryParseWindowMode(const std::string& text, Win32WindowMode& windowMode) {
         if (text == "normal") {
             windowMode = Win32WindowMode::Normal;
@@ -13,6 +13,11 @@ namespace helengine::windows {
 
         if (text == "overlay") {
             windowMode = Win32WindowMode::Overlay;
+            return true;
+        }
+
+        if (text == "shell") {
+            windowMode = Win32WindowMode::Shell;
             return true;
         }
 
@@ -56,7 +61,7 @@ namespace helengine::windows {
         return false;
     }
 
-    /// Returns the exact accepted text for a window mode: "normal", "overlay" or "desktop".
+    /// Returns the exact accepted text for a window mode: "normal", "overlay", "desktop" or "shell".
     const char* Win32WindowModeNames::ToText(Win32WindowMode windowMode) {
         switch (windowMode) {
             case Win32WindowMode::Normal:
@@ -65,6 +70,8 @@ namespace helengine::windows {
                 return "overlay";
             case Win32WindowMode::Desktop:
                 return "desktop";
+            case Win32WindowMode::Shell:
+                return "shell";
         }
 
         throw std::invalid_argument("Unrecognized Win32WindowMode value.");

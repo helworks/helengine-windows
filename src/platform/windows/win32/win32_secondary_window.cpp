@@ -1,3 +1,4 @@
+#include "platform/windows/win32/win32_frame_stage_timings.hpp"
 #include "platform/windows/win32/win32_presentation_health.hpp"
 #include "platform/windows/runtime/runtime_render_diagnostics.hpp"
 #include "platform/windows/win32/win32_secondary_window.hpp"
@@ -14,6 +15,7 @@ namespace helengine::windows {
         std::wstring title(settings.GetTag().begin(), settings.GetTag().end());
         Window = std::make_unique<Win32Window>(title.c_str(), settings.GetLeft(), settings.GetTop(), settings.GetWidth(),
             settings.GetHeight(), settings.GetMode() == Win32WindowMode::Desktop ? Win32WindowStyle::Desktop()
+                : settings.GetMode() == Win32WindowMode::Shell ? Win32WindowStyle::Shell()
                 : settings.GetMode() == Win32WindowMode::Overlay ? Win32WindowStyle::Overlay() : Win32WindowStyle::Normal());
         Window->SetSecondaryWindow();
         Window->SetDpiAwareness(awareness);
@@ -83,6 +85,7 @@ namespace helengine::windows {
     }
     /// Records output-specific completion boundaries once, so a hang has a concrete last operation.
     void Win32SecondaryWindow::TraceFirstFrame(const char* stage) const {
+        Win32FrameStageTimings::Observe(stage, Settings.GetTag().c_str());
         if(HasCompletedFirstFrame) return;
         RuntimeRenderDiagnostics::WriteHostEvent("window.first-frame","window="+Settings.GetTag()+" stage="+stage
             +" tick="+std::to_string(GetTickCount64()));

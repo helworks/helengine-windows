@@ -25,6 +25,9 @@ namespace helengine::windows {
         /// Returns a disabled layered child for the shell wallpaper layer, without activation or mouse input.
         static Win32WindowStyle Desktop();
 
+        /// Returns an opaque top-level shell surface that receives input without activation or Explorer ancestry.
+        static Win32WindowStyle Shell();
+
         /// Gets the window mode this style set belongs to, which selects Win32Window's creation and show path.
         Win32WindowMode GetWindowMode() const;
 

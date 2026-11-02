@@ -221,6 +221,10 @@ public static class WindowsBuildWorkspace {
                 profilerArtifactEntries.Add(new WindowsBuildManifestEntry("native-pdb", nativeBuildResult.PdbPath, destinationPdbPath));
             } else {
                 File.Copy(nativeExecutablePath, destinationExecutablePath, true);
+                // Debug diagnostics resolve a deployed copy instead of holding the next build's PDB open.
+                if (profileResolution.Profile == WindowsNativeBuildProfile.Debug && !string.IsNullOrWhiteSpace(nativeBuildResult.PdbPath)) {
+                    File.Copy(nativeBuildResult.PdbPath, Path.ChangeExtension(destinationExecutablePath, ".pdb"), true);
+                }
             }
 
             nativeBuildSucceeded = true;

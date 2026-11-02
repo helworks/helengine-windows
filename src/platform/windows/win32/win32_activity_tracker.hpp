@@ -17,6 +17,9 @@ namespace helengine::windows {
         /// <param name="message">Win32 message identifier received by the window procedure.</param>
         void ObserveMessage(UINT message);
 
+        /// Consumes one coalesced display/DPI change delivered through any attached window callback.
+        bool ConsumeDisplayChange();
+
         /// Records activity now regardless of any message.
         void MarkActivity();
 
@@ -24,6 +27,9 @@ namespace helengine::windows {
         std::chrono::steady_clock::time_point GetLastActivity() const;
 
     private:
+        /// Defers display geometry updates until the application finishes dispatching window messages.
+        bool DisplayChangePending = false;
+
         /// Stores the time of the most recent recorded activity.
         std::chrono::steady_clock::time_point LastActivity;
     };

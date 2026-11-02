@@ -52,6 +52,24 @@ namespace helengine::windows {
                 "Owned shader macros did not produce distinct variants.");
             for(DWORD thread:general.WorkerThreads()) Require(thread!=0 && thread!=caller,"Compilation ran on the render thread.");
 
+            // Compile both actual surface variants that sample directional cascades and local spot tiles.
+            const std::string roomSource=std::string(PearlSurfaceShader)+CameraToonGeometryShader;
+            DirectX11ShaderCompilation room({
+                {roomSource,"RoomSpotShadows","GeometryPS","ps_5_0",D3DCOMPILE_ENABLE_STRICTNESS,{}},
+                {roomSource,"RoomSpotShadows","PearlGeometryPS","ps_5_0",D3DCOMPILE_ENABLE_STRICTNESS,{}}
+            });
+            Await(room,result);
+            Require(result.size()==2,"Room spot-shadow surface variants did not compile.");
+
+            // Selection uses the same blur pair for physical-width dilation and an exterior halo.
+            const std::string selectionSource=std::string(PearlSurfaceShader)+CameraToonGeometryShader+CameraToonCompositeShader;
+            DirectX11ShaderCompilation selection({
+                {selectionSource,"RadioSelection","BlurPS","ps_5_0",D3DCOMPILE_ENABLE_STRICTNESS,{{"TOON_SAMPLES","1"}}},
+                {selectionSource,"RadioSelection","CompositePS","ps_5_0",D3DCOMPILE_ENABLE_STRICTNESS,{{"TOON_SAMPLES","1"}}}
+            });
+            Await(selection,result);
+            Require(result.size()==2,"Radio selection dilation and glow shaders did not compile.");
+
             DirectX11ShaderCompilation slow({SlowRequest(),SlowRequest()});
             auto sentinel=result;
             if(!slow.TryGetBytecodes(result)) Require(result==sentinel,"A pending batch published partial results.");

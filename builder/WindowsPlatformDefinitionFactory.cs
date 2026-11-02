@@ -176,10 +176,33 @@ public static class WindowsPlatformDefinitionFactory {
                             true,
                             []),
                         new PlatformMaterialFieldDefinition(
+                            "alpha-mode", "Alpha Mode", PlatformMaterialFieldKind.Choice,
+                            "opaque", false, ["opaque", "alpha-blend"]),
+                        new PlatformMaterialFieldDefinition(
+                            "double-sided", "Double Sided", PlatformMaterialFieldKind.Boolean,
+                            "false", false, []),
+                        new PlatformMaterialFieldDefinition(
                             "base-color",
                             "Base Color",
                             PlatformMaterialFieldKind.Color,
                             "#ffffff",
+                            false,
+                            []),
+                        new PlatformMaterialFieldDefinition(
+                            "emissive-color",
+                            "Emissive Color",
+                            PlatformMaterialFieldKind.Color,
+                            "#00000000",
+                            false,
+                            []),
+                        new PlatformMaterialFieldDefinition(
+                            "emissive-intensity", "Emissive Intensity", PlatformMaterialFieldKind.Text,
+                            "1.0", false, []),
+                        new PlatformMaterialFieldDefinition(
+                            "emissive-texture-id",
+                            "Emissive Texture",
+                            PlatformMaterialFieldKind.AssetReference,
+                            string.Empty,
                             false,
                             []),
                         new PlatformMaterialFieldDefinition(

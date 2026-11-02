@@ -6,7 +6,7 @@
 namespace helengine::windows {
     /// Creates complete output attachments before exposing any views to the renderer.
     DirectX11OutputAttachments::DirectX11OutputAttachments(ID3D11Device* device, ID3D11Texture2D* destination, UINT sampleCount)
-        : Device(device), Destination(destination), SampleCount(sampleCount) {
+        : Device(device), Destination(destination), SampleCount(sampleCount), ColorFormat(DXGI_FORMAT_UNKNOWN) {
         if (!device || !destination) { throw std::invalid_argument("Output attachments require a device and a resolve destination."); }
         if (sampleCount != 1 && sampleCount != 4) { throw std::invalid_argument("Output sample count must be 1 or 4."); }
         Microsoft::WRL::ComPtr<ID3D11Device> owner;
@@ -15,10 +15,12 @@ namespace helengine::windows {
         D3D11_TEXTURE2D_DESC description {};
         destination->GetDesc(&description);
         if (description.Width == 0 || description.Height == 0 || description.MipLevels != 1 || description.ArraySize != 1
-            || description.Format != DXGI_FORMAT_B8G8R8A8_UNORM || description.SampleDesc.Count != 1
+            || (description.Format != DXGI_FORMAT_B8G8R8A8_UNORM && description.Format != DXGI_FORMAT_R16G16B16A16_FLOAT)
+            || description.SampleDesc.Count != 1
             || description.SampleDesc.Quality != 0 || !(description.BindFlags & D3D11_BIND_RENDER_TARGET)) {
-            throw std::invalid_argument("Output destination must be a single-sample BGRA8 render target with one mip and array slice.");
+            throw std::invalid_argument("Output destination must be a single-sample BGRA8 or RGBA16F render target with one mip and array slice.");
         }
+        ColorFormat = description.Format;
         ID3D11Texture2D* color = destination;
         if (SampleCount == 4) {
             RequireMultisampleSupport(description.Format);
@@ -53,7 +55,7 @@ namespace helengine::windows {
         if (owner.Get() != Device.Get()) { throw std::invalid_argument("Output resolve context belongs to another graphics device."); }
         if (SampleCount == 4) {
             context->OMSetRenderTargets(0,nullptr,nullptr);
-            context->ResolveSubresource(Destination.Get(),0,MultisampledColor.Get(),0,DXGI_FORMAT_B8G8R8A8_UNORM);
+            context->ResolveSubresource(Destination.Get(),0,MultisampledColor.Get(),0,ColorFormat);
         }
     }
     /// Requires quality index zero to exist for both multisampled render-target formats.

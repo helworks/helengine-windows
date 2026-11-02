@@ -8,6 +8,7 @@
 
 #include "platform/windows/win32/win32_dpi_awareness.hpp"
 #include "platform/windows/win32/win32_window_style.hpp"
+#include "platform/windows/win32/win32_pointer_message_state.hpp"
 
 namespace helengine::windows {
     class Win32ActivityTracker;
@@ -76,8 +77,20 @@ namespace helengine::windows {
         /// failed.
         void RethrowPendingException();
 
+        /// Applies new physical monitor bounds and refreshes the dimensions consumed by the existing renderer resize path.
+        void SetPhysicalBounds(const RECT& bounds);
+
         /// Rejects a lost Explorer attachment for a live desktop child; ordinary windows require no shell host.
         void ValidateDesktopAttachment() const;
+
+        /// Uses window-delivered mouse messages for passive composition overlays, independently of keyboard focus.
+        bool UsesMessagePointer() const;
+        /// Retains routing while an overlay has an owned gesture or queued transition awaiting delivery.
+        bool HasPendingPointerInput() const;
+        /// Consumes the next ordered overlay button sample, preserving its original client coordinates.
+        std::uint32_t CaptureMessagePointer(POINT& position);
+        /// Cancels queued clicks and releases only this window's capture when input becomes unavailable.
+        void CancelPointerInput();
 
     private:
         /// Handles window messages for this instance, first reporting each one to the attached activity tracker when
@@ -88,6 +101,8 @@ namespace helengine::windows {
         /// client-preserving outer size and returns TRUE for a non-maximized, non-minimized Per-Monitor v2 normal
         /// window, and returns FALSE (linear scaling) otherwise.
         LRESULT HandleMessage(UINT message, WPARAM wParam, LPARAM lParam);
+        /// Processes only overlay-owned button messages and native capture cancellation; never activates another window.
+        bool HandlePointerMessage(UINT message, WPARAM wParam, LPARAM lParam);
 
         /// Registers the native window class used by the player host.
         void RegisterWindowClass();
@@ -102,6 +117,10 @@ namespace helengine::windows {
 
         /// Creates an opaque child in the resolved Explorer wallpaper layer using the requested physical bounds.
         void CreateDesktopWindow();
+        /// Creates the independent, player-owned shell surface without resolving Explorer windows.
+        void CreateShellWindow();
+        /// Presents the shell surface at the bottom of Z order without changing foreground focus.
+        void ShowShellWindow() const;
 
         /// Resizes a freshly created Per-Monitor v2 normal window so its client area is exactly the requested size in
         /// physical pixels at the window's own DPI: the creation path sizes the frame with AdjustWindowRect, which does
@@ -161,6 +180,8 @@ namespace helengine::windows {
 
         /// Accumulates mouse-wheel delta until the input backend consumes it.
         int MouseWheelDelta;
+        /// Owns overlay button transitions across frames and capture changes.
+        Win32PointerMessageState PointerMessages;
 
         /// Stores the optional, non-owned activity tracker notified about each message; null unless the idle
         /// throttle is enabled.

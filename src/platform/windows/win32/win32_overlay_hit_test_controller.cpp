@@ -4,6 +4,7 @@
 #include <sstream>
 #include <stdexcept>
 #include "platform/windows/runtime/runtime_render_diagnostics.hpp"
+#include "platform/windows/win32/win32_pointer_window_routing.hpp"
 
 namespace helengine::windows {
     /// Creates the sampler on the bootstrap's device and the click-through controller for the overlay window. Throws
@@ -36,6 +37,7 @@ namespace helengine::windows {
             samplePoint.y = CommandLineOptions.GetHitTestProbeY();
             hasSamplePoint = true;
         } else if (GetCursorPos(&samplePoint)) {
+            samplePoint = Win32PointerWindowRouting::ResolveScreenPoint(WindowHandle, samplePoint);
             screenPoint = samplePoint;
             if (!ScreenToClient(WindowHandle, &samplePoint)) {
                 throw std::runtime_error("ScreenToClient failed for the overlay hit test with error " + std::to_string(GetLastError()) + ".");
